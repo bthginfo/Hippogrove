@@ -10,16 +10,29 @@ extern void hippogrove_safe_insets(float left, float top, float right, float bot
 
 static GCController *active;
 
-static void update_safe_insets(void) {
-    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+static UIWindow *key_window(void) {
+    UIApplication *application = UIApplication.sharedApplication;
+    for (UIScene *scene in application.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *window in [(UIWindowScene *)scene windows]) {
-            if (!window.isKeyWindow) continue;
-            UIEdgeInsets edge = window.safeAreaInsets;
-            hippogrove_safe_insets(edge.left, edge.top, edge.right, edge.bottom);
-            return;
+            if (window.isKeyWindow) return window;
         }
     }
+    // Winit 0.30 also creates windows through UIKit's application delegate.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    for (UIWindow *window in application.windows) {
+        if (window.isKeyWindow) return window;
+    }
+#pragma clang diagnostic pop
+    return nil;
+}
+
+static void update_safe_insets(void) {
+    UIWindow *window = key_window();
+    if (!window) return;
+    UIEdgeInsets edge = window.safeAreaInsets;
+    hippogrove_safe_insets(edge.left, edge.top, edge.right, edge.bottom);
 }
 
 static void publish(GCExtendedGamepad *pad) {

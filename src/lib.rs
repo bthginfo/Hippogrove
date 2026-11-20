@@ -52,7 +52,14 @@ pub fn main() {
         .set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Hippogrove".into(),
+                #[cfg(not(target_os = "ios"))]
                 resolution: (1360_f32, 765_f32).into(),
+                #[cfg(target_os = "ios")]
+                mode: bevy::window::WindowMode::BorderlessFullscreen(
+                    bevy::window::MonitorSelection::Primary,
+                ),
+                #[cfg(target_os = "ios")]
+                prefers_status_bar_hidden: true,
                 present_mode: PresentMode::AutoVsync,
                 ..default()
             }),
