@@ -8,7 +8,7 @@ Hippogrove spielt sich im Querformat per Touch oder mit angeschlossenem Controll
 
 ## Spielen
 
-Auf Android öffnest du die signierte Test-APK aus deinen Downloads. Benötigt werden Android 8 oder neuer, ein 64-Bit-Gerät und Vulkan. [Hippogrove 1.1.0 für Android](https://github.com/bthginfo/Hippogrove/releases/tag/v1.1.0)
+Auf Android öffnest du die signierte Test-APK aus deinen Downloads. Benötigt werden Android 8 oder neuer, ein 64-Bit-Gerät und Vulkan. [Hippogrove 1.1.1 für Android](https://github.com/bthginfo/Hippogrove/releases/tag/v1.1.1)
 
 Wähle eine Kampagne. Eine Kamerafahrt mit Untertiteln führt dich zur ersten Quest. Tippe auf einen Holzstoß und bestätige **Greifen**. Wähle dann den Sammelplatz und **Ablegen**. Mit **Gläubige** und **Nilpferd** erteilst du Sammelaufträge. **Zum Ziel** zeigt einen passenden Zielpunkt für das aktive Werkzeug. In **Fortschritt** setzt du Talentpunkte ein. Das Nilpferd lernt durch Lob nach einer Lieferung, Wache oder Ernte.
 

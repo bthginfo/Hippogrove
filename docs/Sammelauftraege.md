@@ -9,3 +9,7 @@ Nach der Brückenreparatur kostet ein Sammellager fünf Holz und sechs Glauben. 
 Das Nilpferd holt am Anfang eine Ladung. Lob nach der Lieferung lässt es den Auftrag wiederholen. **Beenden** gibt die Gläubigen und das Nilpferd für andere Aufgaben frei. Getragene Bündel werden noch abgeliefert. Die Aufträge gehören zum jeweiligen Spielstand und laufen nach dem Laden weiter.
 
 Die Bildvorlage entstand vor der Umsetzung. Die drei Materialkarten, der Fokusrahmen und die Aktionen wurden im laufenden Spiel in 568 × 320, 844 × 390 und 1024 × 768 Pixeln geprüft. Der Rust-Test für Sammelaufträge prüft Quellenwechsel und einmalige Ablieferung nach Laden und Beenden eines Auftrags. [Bildvorlage](sammelauftraege-referenz.jpg)
+
+## Landkarte im kleinen Querformat
+
+Seit 1.1.1 stehen Karte und Ortsziele nebeneinander. Die Karte zeigt Gelände, Übergang und Lager in den Proportionen des Weltgitters. Darunter stehen die drei Rohstoffgebiete. Beim Schließen eines Gebiets kehrt die Steuerkreuz-Auswahl zu seiner Schaltfläche zurück. Bei aktivem Sammellager stehen die vier Aktionen auch in der schmalen Gebietsansicht in einer Zeile. Meldungen zu Aufträgen erscheinen im selben Bereich wie ihre Statuszeile. [Bildvorlage für die Landkarte](landkarte-kompakt-referenz.jpg) · [Landkarte im Spiel](landkarte-kompakt-spiel.jpg)
