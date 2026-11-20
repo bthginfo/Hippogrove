@@ -17,9 +17,31 @@ llvm="$ndk/toolchains/llvm/prebuilt/$host/bin"
 tools="$sdk/build-tools/36.0.0"
 platform="$sdk/platforms/android-36/android.jar"
 out="$PWD/build/android"
-version=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' packaging/AndroidManifest.xml)
+manifest=packaging/AndroidManifest.xml
+standalone=${HIPPOGROVE_STANDALONE:-0}
+if [[ "$standalone" == 1 ]]; then
+    : "${HIPPOGROVE_KEYSTORE:?Dateipfad zum Standalone-Signaturschlüssel fehlt}"
+    : "${HIPPOGROVE_KEY_PASSWORD_FILE:?Dateipfad zum Keystore-Passwort fehlt}"
+    key="$HIPPOGROVE_KEYSTORE"
+    alias=${HIPPOGROVE_KEY_ALIAS:-hippogrove}
+    password="file:$HIPPOGROVE_KEY_PASSWORD_FILE"
+    if [[ ! -r "$key" || ! -r "$HIPPOGROVE_KEY_PASSWORD_FILE" ]]; then
+        printf 'Signaturschlüssel und Passwortdatei müssen lesbar sein.\n' >&2
+        exit 1
+    fi
+    out="$out/standalone"
+    mkdir -p "$out"
+    sed -e 's/package="game\.hippogrove"/package="game.hippogrove.standalone"/' \
+        -e 's/android:name="\.GameActivity"/android:name="game.hippogrove.GameActivity"/' \
+        "$manifest" > "$out/AndroidManifest.xml"
+    manifest="$out/AndroidManifest.xml"
+else
+    key=${HIPPOGROVE_KEYSTORE:-"$out/hippogrove-test.jks"}
+    alias=hippogrove-test
+    password=pass:android
+fi
+version=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "$manifest")
 apk="$out/Hippogrove-$version.apk"
-key=${HIPPOGROVE_KEYSTORE:-"$out/hippogrove-test.jks"}
 read -r -a architectures <<< "${HIPPOGROVE_ABIS:-arm64-v8a x86_64}"
 mkdir -p "$out/classes" "$out/native"
 
@@ -40,7 +62,7 @@ for abi in "${architectures[@]}"; do
 done
 
 "$tools/aapt2" compile --dir packaging/res -o "$out/resources.zip"
-"$tools/aapt2" link --manifest packaging/AndroidManifest.xml -I "$platform" -A assets \
+"$tools/aapt2" link --manifest "$manifest" -I "$platform" -A assets \
     -o "$out/linked.apk" "$out/resources.zip"
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -bootclasspath "$platform" \
     -d "$out/classes" packaging/java/game/hippogrove/GameActivity.java
@@ -60,12 +82,12 @@ with ZipFile(root / "linked.apk", "a") as apk:
 PY
 
 "$tools/zipalign" -f -P 16 4 "$out/linked.apk" "$out/aligned.apk"
-if [[ ! -f "$key" ]]; then
+if [[ "$standalone" != 1 && ! -f "$key" ]]; then
     keytool -genkeypair -keystore "$key" -storetype PKCS12 -alias hippogrove-test \
         -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
         -dname 'CN=Hippogrove Test, O=Hippogrove'
 fi
-"$tools/apksigner" sign --ks "$key" --ks-key-alias hippogrove-test --ks-pass pass:android \
+"$tools/apksigner" sign --ks "$key" --ks-key-alias "$alias" --ks-pass "$password" \
     --v4-signing-enabled false --out "$apk" "$out/aligned.apk"
 "$tools/apksigner" verify --verbose "$apk"
 "$tools/zipalign" -c -P 16 4 "$apk"

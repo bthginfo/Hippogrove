@@ -8,7 +8,7 @@ Hippogrove spielt sich im Querformat per Touch oder mit angeschlossenem Controll
 
 ## Spielen
 
-Auf Android öffnest du die signierte Test-APK aus deinen Downloads. Benötigt werden Android 8 oder neuer, ein 64-Bit-Gerät und Vulkan. [Ältere Android-Testversion 1.1.1](https://github.com/bthginfo/Hippogrove/releases/tag/v1.1.1)
+Für Android gibt es Hippogrove als signierte Standalone-APK. Sie benötigt Android 8 oder neuer, ein 64-Bit-Gerät und Vulkan. Die Standalone-App nutzt die Paket-ID `game.hippogrove.standalone` und hat ihren eigenen Spielstand. [Aktuelles GitHub-Release](https://github.com/bthginfo/Hippogrove/releases/latest)
 
 Das Spiel startet im **Hauptmenü**. Über **Tutorial** erreichst du die Übungsinsel und kannst sie später erneut spielen. Der Marker zeigt dir Holz, Sammelplatz, Bauplatz, Feld und Nilpferd. Tippe auf **Greifen**, um bis zu sechs Einheiten aufzuheben, oder halte den Knopf für bis zu 18. Lass los, wenn die gewünschte Menge angezeigt wird. **Zum Ziel** führt zum nächsten offenen Auftrag und wählt das passende Werkzeug. Nach der Übung öffnet sich die Kampagnenauswahl. Aus einer Partie führt **Menü → Hauptmenü** zurück zur Auswahl. **Spiel fortsetzen** lädt deine laufende Partie.
 
@@ -60,7 +60,7 @@ rustup target add aarch64-linux-android x86_64-linux-android
 tools/build-android.sh
 ```
 
-Die signierte Testdatei liegt unter `build/android/`. Für spätere Updates der Testversion wird derselbe Schlüssel aus `build/android/hippogrove-test.jks` verwendet.
+Ein Entwicklungsbuild liegt unter `build/android/`. Für die Standalone-APK setze `HIPPOGROVE_STANDALONE=1`, `HIPPOGROVE_KEYSTORE` und `HIPPOGROVE_KEY_PASSWORD_FILE`. Der Schlüsselalias ist standardmäßig `hippogrove` und lässt sich mit `HIPPOGROVE_KEY_ALIAS` setzen. Die signierte APK landet unter `build/android/standalone/`. Updates der Standalone-App verwenden dieselbe Signatur.
 
 ### iOS und iPadOS
 
