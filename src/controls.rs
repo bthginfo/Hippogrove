@@ -38,6 +38,7 @@ struct Pad {
     right: Vec2,
     zoom: f32,
     buttons: u32,
+    pressed: u32,
     connected: bool,
 }
 
@@ -47,6 +48,7 @@ static MOBILE_PAD: std::sync::Mutex<Pad> = std::sync::Mutex::new(Pad {
     right: Vec2::ZERO,
     zoom: 0.,
     buttons: 0,
+    pressed: 0,
     connected: false,
 });
 
@@ -69,6 +71,7 @@ fn native_pad(
             right: Vec2::new(right_x, right_y),
             zoom,
             buttons,
+            pressed: state.pressed | (buttons & !state.buttons),
             connected,
         }
     } else {
@@ -126,9 +129,12 @@ fn read_pad(gamepads: &Query<&Gamepad>) -> Pad {
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
         let _ = gamepads;
-        *MOBILE_PAD
+        let mut state = MOBILE_PAD
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let snapshot = *state;
+        state.pressed = 0;
+        snapshot
     }
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
@@ -156,6 +162,7 @@ fn read_pad(gamepads: &Query<&Gamepad>) -> Pad {
                 | pressed(GamepadButton::RightTrigger, GUIDE)
                 | pressed(GamepadButton::LeftTrigger, PROGRESS),
             connected: true,
+            pressed: 0,
         }
     }
 }
@@ -227,6 +234,9 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
         if play.tool == Tool::Hand {
             consider(region.depot, region.depot.world() + Vec3::Y * 0.21);
             consider(region.bridge(), region.bridge().world() + Vec3::Y * 0.23);
+            for district in &region.districts {
+                consider(district.center, district.center.world() + Vec3::Y * 0.55);
+            }
             for site in &city.buildings {
                 if matches!(
                     site.kind,
@@ -242,15 +252,42 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
                 }
             }
         }
-        if play.tool == Tool::Miracles && play.miracle() == Miracle::Wind {
+        if (play.tool == Tool::Plan && play.option == 1)
+            || (play.tool == Tool::Hippo && play.option == 2)
+        {
+            for site in &city.buildings {
+                if play.tool == Tool::Plan || site.kind == Building::Field {
+                    consider(
+                        site.tile,
+                        site.kind.center(site.tile)
+                            + Vec3::Y
+                                * if site.kind == Building::Field {
+                                    0.2
+                                } else {
+                                    0.88
+                                },
+                    );
+                }
+            }
+        }
+        if play.tool == Tool::Miracles && play.miracle().offensive() {
             for (&tile, &spirit) in region.guards.iter().zip(&city.guards) {
                 if spirit > 0 {
                     consider(tile, tile.world() + Vec3::Y * 0.65);
                 }
             }
+            for (district, state) in region.districts.iter().zip(&city.districts) {
+                if state.outcome.is_none() && state.resolve > 0 {
+                    consider(district.center, district.center.world() + Vec3::Y * 0.55);
+                }
+            }
+        }
+        if play.tool == Tool::Miracles && play.miracle() == Miracle::Mend {
+            let hippo = &city.walkers[0];
+            consider(hippo.tile(), hippo.world() + Vec3::Y);
         }
     }
-    if tile.inside_map() {
+    if region.bounds.contains(tile) {
         play.aim = tile;
     }
 }
@@ -375,16 +412,22 @@ pub fn collect(
                 }
             }
             TouchPhase::Moved => {
-                let span = |points: &BTreeMap<u64, Vec2>| {
+                let gesture_in_world = |points: &BTreeMap<u64, Vec2>| {
                     let mut pair = points.values();
-                    Some(pair.next()?.distance(*pair.next()?).max(12.))
+                    let (first, second) = (*pair.next()?, *pair.next()?);
+                    Some((first.distance(second).max(12.), (first + second) * 0.5))
                 };
-                let before = span(&controls.fingers);
+                let before = gesture_in_world(&controls.fingers);
                 if let Some(pos) = controls.fingers.get_mut(&event.id) {
                     *pos = event.position;
                 }
-                if let (Some(before), Some(after)) = (before, span(&controls.fingers)) {
+                if let (Some((before, previous)), Some((after, current))) =
+                    (before, gesture_in_world(&controls.fingers))
+                {
                     if play.panel == Panel::Closed {
+                        let scale = view.height / size.y.max(120.);
+                        let delta = current - previous;
+                        view.pan(-delta.x * scale, delta.y * scale);
                         view.zoom((after / before).ln());
                     }
                 } else if let Some((finger, gesture)) = &mut controls.touch {
@@ -481,6 +524,7 @@ pub fn collect(
         KeyCode::Digit3,
         KeyCode::Digit4,
         KeyCode::Digit5,
+        KeyCode::Digit6,
     ]
     .into_iter()
     .zip(Tool::ALL)
@@ -495,6 +539,7 @@ pub fn collect(
         (KeyCode::KeyG, UiAction::Guide),
         (KeyCode::Escape, UiAction::Cancel),
         (KeyCode::Tab, UiAction::Panel(Panel::Journey)),
+        (KeyCode::KeyM, UiAction::Panel(Panel::Map)),
         (KeyCode::KeyP, UiAction::Panel(Panel::Progress)),
         (KeyCode::KeyQ, UiAction::Panel(Panel::Quests)),
     ] {
@@ -507,7 +552,7 @@ pub fn collect(
     let pressed = if controls.resume_pad {
         0
     } else {
-        pad.buttons & !controls.pad_buttons
+        (pad.buttons & !controls.pad_buttons) | pad.pressed
     };
     controls.resume_pad = false;
     controls.pad_buttons = pad.buttons;
@@ -546,8 +591,8 @@ pub fn collect(
             play.tool(Tool::ALL[i as usize]);
         }
         if vertical != 0 {
-            play.option =
-                (play.option as i32 + vertical).rem_euclid(play.tool.choices() as i32) as usize;
+            let choice = (play.option as i32 + vertical).rem_euclid(play.tool.choices() as i32);
+            play.choose(choice as usize);
         }
     } else if horizontal != 0 || vertical != 0 {
         let mut buttons: Vec<_> = areas
@@ -583,7 +628,7 @@ pub fn collect(
     }
     for (bit, action) in [
         (EAST, UiAction::Cancel),
-        (MENU, UiAction::Panel(Panel::Journey)),
+        (MENU, UiAction::Panel(Panel::Map)),
         (ROTATE, UiAction::Rotate),
         (GUIDE, UiAction::Guide),
         (PROGRESS, UiAction::Panel(Panel::Progress)),

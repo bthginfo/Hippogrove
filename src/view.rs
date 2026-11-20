@@ -7,9 +7,9 @@ use bevy::{
 
 use crate::{
     art::{self, Art, block, mound, part},
-    game::{Building, Crop, Game, Miracle, Quest},
+    game::{Building, Crop, Game, MAX_ROAD_RUN, MAX_WALKERS, Miracle, Quest},
     play::{CameraRig, Panel, Play, Target, Tool},
-    region::{Biome, CELL, Material},
+    region::{Biome, CELL, Material, Weather},
 };
 
 #[derive(Component)]
@@ -20,7 +20,9 @@ pub struct Board {
     active: Option<usize>,
     root: Option<Entity>,
     bridge: Option<(bool, Entity)>,
-    boundary: Option<((bool, bool), Entity)>,
+    boundary: Option<([bool; 5], Entity)>,
+    boundary_anchors: usize,
+    roads: Option<(usize, Entity)>,
     buildings: usize,
     walkers: usize,
     seen_magic: u64,
@@ -33,7 +35,10 @@ pub struct SourceView(usize);
 pub struct GuardView(usize);
 
 #[derive(Component)]
-pub struct RivalFlag;
+pub struct RivalFlag(Option<usize>);
+
+#[derive(Component)]
+pub struct UpgradeView(usize);
 
 #[derive(Component)]
 pub struct PlotMarker;
@@ -74,6 +79,7 @@ pub enum Blueprint {
     Roof,
     Corners,
     Obstruction,
+    Road(usize),
 }
 
 #[derive(Component)]
@@ -107,7 +113,7 @@ pub fn setup(
                 viewport_height: view.height,
             },
             near: 0.01,
-            far: 130.,
+            far: 330.,
             ..OrthographicProjection::default_3d()
         }),
         Transform::from_translation(view.target + Vec3::new(13., 22., 26.))
@@ -117,15 +123,15 @@ pub fn setup(
         Tonemapping::None,
     ));
     commands.insert_resource(AmbientLight {
-        color: art::rgb(0xffebca),
-        brightness: 850.,
+        color: art::rgb(0xffefd9),
+        brightness: 900.,
         ..default()
     });
     commands.spawn((
         Name::new("Weiches Sonnenlicht"),
         DirectionalLight {
             color: art::rgb(0xffefd8),
-            illuminance: 2350.,
+            illuminance: 2770.,
             shadows_enabled: true,
             ..default()
         },
@@ -215,6 +221,16 @@ pub fn setup(
             bevy::pbr::NotShadowCaster,
         ));
     }
+    for index in 0..usize::from(MAX_ROAD_RUN) + 2 {
+        commands.spawn((
+            Blueprint::Road(index),
+            Mesh3d(art.plan_corners.clone()),
+            MeshMaterial3d(art.valid.clone()),
+            Transform::default(),
+            Visibility::Hidden,
+            bevy::pbr::NotShadowCaster,
+        ));
+    }
     commands.insert_resource(art);
 }
 
@@ -225,7 +241,7 @@ pub fn move_camera(
 ) {
     let (pose, projection) = &mut *camera;
     let follow = 1. - (-13. * time.delta_secs()).exp();
-    let desired = view.target + Vec3::new(13., 22., 26.);
+    let desired = view.target + Vec3::new(13., 22., 26.) * (view.height / 22.).max(1.);
     pose.translation = pose.translation.lerp(desired, follow);
     pose.look_to(Vec3::new(-13., -22., -26.), Vec3::Y);
     if let Projection::Orthographic(ortho) = &mut **projection {
@@ -444,6 +460,9 @@ pub fn sync_board(
             commands.entity(root).despawn();
         }
         let ground = meshes.add(art::landscape(region));
+        let extents = region.bounds.padded(7);
+        let min = extents.0.world();
+        let max = extents.1.world();
         let root = commands
             .spawn((
                 Name::new(region.name.clone()),
@@ -460,8 +479,8 @@ pub fn sync_board(
                     parent,
                     &art,
                     &art.clay,
-                    Vec3::new(0., -0.64, 0.),
-                    Vec3::new(78., 0.57, 67.),
+                    (min + max) * 0.5 - Vec3::Y * 0.64,
+                    max - min + Vec3::new(CELL, 0.57, CELL),
                 );
                 art::scenery(parent, &art, region);
                 for (i, source) in region.sources.iter().enumerate() {
@@ -476,10 +495,34 @@ pub fn sync_board(
                             art::resources(p, &art, source.material);
                         });
                 }
-                for p in [region.start, region.rival_shrine] {
+                for p in [region.start, region.rival_shrine]
+                    .into_iter()
+                    .chain(region.districts.iter().map(|district| district.center))
+                {
                     parent
                         .spawn((Transform::from_translation(p.world()), Visibility::Visible))
                         .with_children(|p| art::shrine(p, &art, false));
+                }
+                for (index, district) in region.districts.iter().enumerate() {
+                    for tile in region.district_houses(index) {
+                        parent
+                            .spawn((
+                                Transform::from_translation(tile.world())
+                                    .with_scale(Vec3::splat(0.92)),
+                                Visibility::Visible,
+                            ))
+                            .with_children(|p| {
+                                art::building(p, &art, region.kind, Building::House)
+                            });
+                    }
+                    let p = district.center.world();
+                    parent.spawn((
+                        RivalFlag(Some(index)),
+                        Mesh3d(art.ring.clone()),
+                        MeshMaterial3d(art.blue.clone()),
+                        Transform::from_translation(p + Vec3::Y * 0.055)
+                            .with_scale(Vec3::splat(1.55)),
+                    ));
                 }
                 parent
                     .spawn((
@@ -527,7 +570,7 @@ pub fn sync_board(
                                 Vec3::new(1.75, 1.73, 0.99),
                                 Vec3::new(0.68, 0.54, 0.056),
                             );
-                            p.commands().entity(flag).insert(RivalFlag);
+                            p.commands().entity(flag).insert(RivalFlag(None));
                         });
                 }
                 for (i, tile) in region.guards.iter().enumerate() {
@@ -550,21 +593,26 @@ pub fn sync_board(
                         .with_scale(Vec3::splat(0.68)),
                     Visibility::Hidden,
                 ));
-                if region.kind == Biome::Fjord {
+                if matches!(region.kind, Biome::Fjord | Biome::Valley | Biome::Terraces) {
+                    let material = match region.kind {
+                        Biome::Fjord => &art.white,
+                        Biome::Valley => &art.ripple,
+                        _ => &art.plaster,
+                    };
                     for i in 0..44 {
-                        let p = region.start.world()
-                            + Vec3::new(
-                                (i * 17 % 62) as f32 * 0.51 - 15.,
-                                0.,
-                                (i * 23 % 58) as f32 * 0.54 - 16.,
-                            );
-                        let flake = mound(parent, &art, &art.white, p, Vec3::splat(0.078));
+                        let p = Vec3::new(
+                            (i * 17 % 62) as f32 * 0.51 - 15.,
+                            0.,
+                            (i * 23 % 58) as f32 * 0.54 - 16.,
+                        );
+                        let flake = mound(parent, &art, material, p, Vec3::splat(0.078));
                         parent.commands().entity(flake).insert((
                             WeatherParticle {
                                 origin: p,
                                 drift: (i % 9) as f32,
                             },
                             bevy::pbr::NotShadowCaster,
+                            Visibility::Hidden,
                         ));
                     }
                 }
@@ -578,12 +626,16 @@ pub fn sync_board(
     }
 
     let root = board.root.unwrap();
-    let flags = (city.count(Building::Shrine) > 0, city.outcome.is_some());
-    if board
-        .boundary
-        .as_ref()
-        .is_none_or(|(previous, _)| *previous != flags)
-    {
+    let flags = [
+        city.count(Building::Shrine) > 0,
+        city.outcome.is_some(),
+        city.city_rank() == 4,
+        city.districts[0].outcome.is_some(),
+        city.districts[1].outcome.is_some(),
+    ];
+    if board.boundary.as_ref().is_none_or(|(previous, _)| {
+        *previous != flags || board.boundary_anchors != city.count(Building::Waystone)
+    }) {
         if let Some((_, entity)) = board.boundary.take() {
             commands.entity(entity).despawn();
         }
@@ -598,6 +650,7 @@ pub fn sync_board(
             ))
             .id();
         board.boundary = Some((flags, entity));
+        board.boundary_anchors = city.count(Building::Waystone);
     }
     if board
         .bridge
@@ -609,9 +662,33 @@ pub fn sync_board(
         }
         let entity = commands
             .spawn((ChildOf(root), Transform::default(), Visibility::Visible))
-            .with_children(|parent| art::bridge(parent, &art, region, city.bridge_fixed))
+            .with_children(|parent| {
+                art::bridge(parent, &art, region, region.cross_x, city.bridge_fixed);
+                for column in region.crossings {
+                    art::bridge(parent, &art, region, column, city.bridge_fixed);
+                }
+            })
             .id();
         board.bridge = Some((city.bridge_fixed, entity));
+    }
+    if !city.roads.is_empty()
+        && board
+            .roads
+            .is_none_or(|(count, _)| count != city.roads.len())
+    {
+        if let Some((_, previous)) = board.roads {
+            commands.entity(previous).despawn();
+        }
+        let entity = commands
+            .spawn((
+                ChildOf(root),
+                Mesh3d(meshes.add(art::paved_roads(city, region))),
+                MeshMaterial3d(art.ground.clone()),
+                Transform::default(),
+                bevy::pbr::NotShadowCaster,
+            ))
+            .id();
+        board.roads = Some((city.roads.len(), entity));
     }
     for (index, site) in city.buildings.iter().enumerate().skip(board.buildings) {
         commands
@@ -624,6 +701,13 @@ pub fn sync_board(
             ))
             .with_children(|parent| {
                 art::building(parent, &art, region.kind, site.kind);
+                if site.kind.upgrade_price().is_some() {
+                    parent
+                        .spawn((UpgradeView(index), Transform::default(), Visibility::Hidden))
+                        .with_children(|detail| {
+                            art::upgrade_detail(detail, &art, site.kind);
+                        });
+                }
                 if site.kind == Building::Field {
                     parent
                         .spawn((CropView(index), Transform::default(), Visibility::Hidden))
@@ -671,6 +755,7 @@ pub fn props(
             Option<&CropView>,
             Option<&PlotMarker>,
             Option<&CarryView>,
+            Option<&UpgradeView>,
             Option<&mut Transform>,
         ),
         Or<(
@@ -679,13 +764,14 @@ pub fn props(
             With<CropView>,
             With<PlotMarker>,
             With<CarryView>,
+            With<UpgradeView>,
         )>,
     >,
-    mut flags: Query<&mut MeshMaterial3d<StandardMaterial>, With<RivalFlag>>,
+    mut flags: Query<(&RivalFlag, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
     let region = game.region();
     let city = game.city();
-    for (mut visible, source, guard, crop, marker, carry, pose) in &mut visuals {
+    for (mut visible, source, guard, crop, marker, carry, upgraded, pose) in &mut visuals {
         let show = if let Some(source) = source {
             city.nodes.get(source.0).is_some_and(|&amount| amount > 0)
         } else if let Some(guard) = guard {
@@ -711,6 +797,8 @@ pub fn props(
                 ),
             };
             bundle.is_some_and(|bundle| region.sources[bundle.source].material == material)
+        } else if let Some(view) = upgraded {
+            city.buildings.get(view.0).is_some_and(|site| site.upgraded)
         } else {
             false
         };
@@ -720,12 +808,13 @@ pub fn props(
             Visibility::Hidden
         };
     }
-    for mut flag in &mut flags {
-        flag.0 = if city.outcome.is_some() {
-            art.door.clone()
-        } else {
-            art.blue.clone()
-        };
+    for (flag, mut surface) in &mut flags {
+        let outcome = flag.0.map_or(city.outcome, |i| city.districts[i].outcome);
+        surface.0 = match outcome {
+            Some(crate::game::Outcome::Alliance) => art.valid.clone(),
+            Some(crate::game::Outcome::Victory) => art.amber.clone(),
+            None => art.blue.clone(),
+        }
     }
 }
 
@@ -736,7 +825,7 @@ pub fn animate(
     mut limbs: Query<(&Limb, &mut Transform), Without<WalkerView>>,
 ) {
     let delta = time.delta_secs().max(0.0001);
-    let mut motion = [(0., 0.); 7];
+    let mut motion = [(0., 0.); MAX_WALKERS];
     for (mut meta, mut pose) in &mut actors {
         let Some(walker) = game.city().walkers.get(meta.index) else {
             continue;
@@ -808,7 +897,7 @@ pub fn aim(
         (Without<Cloud>, Without<GroundRing>),
     >,
 ) {
-    let open = play.panel == Panel::Closed && play.aim.inside_map();
+    let open = play.panel == Panel::Closed && game.region().bounds.contains(play.aim);
     let p = play.aim.world();
     let (cloud_pose, cloud_visible) = &mut *cloud;
     cloud_pose.translation = p + Vec3::new(0.18, 1.56 + time.elapsed_secs().sin() * 0.065, -0.23);
@@ -837,9 +926,31 @@ pub fn aim(
         Visibility::Hidden
     };
     for (layer, mut pose, mut visible, mut mesh, mut surface) in &mut previews {
+        if let Blueprint::Road(index) = *layer {
+            let tile = if index == 0 {
+                play.road_anchor
+            } else {
+                target.road_preview.get(index - 1).copied()
+            };
+            *visible = if let Some(tile) =
+                tile.filter(|_| open && play.tool == Tool::Plan && play.option == 0)
+            {
+                pose.translation = tile.world() + Vec3::Y * 0.082;
+                pose.scale = Vec3::splat(CELL * 0.87);
+                surface.0 = if index == 0 {
+                    art.gold.clone()
+                } else {
+                    art.valid.clone()
+                };
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+            continue;
+        }
         let kind = play.building();
         let enabled = match layer {
-            Blueprint::Roof => !matches!(kind, Building::Field | Building::Shrine),
+            Blueprint::Roof => kind.size() == 2 && kind != Building::Field,
             Blueprint::Obstruction => !target.legal,
             _ => true,
         };
@@ -861,7 +972,9 @@ pub fn aim(
         };
         match layer {
             Blueprint::Base => {
-                let size = if kind == Building::Shrine {
+                let size = if kind == Building::Tower {
+                    Vec3::new(1.47, 2.86, 1.47)
+                } else if kind.size() == 1 {
                     Vec3::new(1.35, 1.54, 1.32)
                 } else if kind == Building::Field {
                     Vec3::new(3.25, 0.18, 3.21)
@@ -889,6 +1002,7 @@ pub fn aim(
                     art.invalid.clone()
                 };
             }
+            Blueprint::Road(_) => unreachable!(),
         }
     }
 }
@@ -897,20 +1011,50 @@ pub fn weather(
     time: Res<Time>,
     mut ambient: ResMut<AmbientLight>,
     game: Res<Game>,
-    mut flakes: Query<(&WeatherParticle, &mut Transform)>,
+    view: Res<CameraRig>,
+    mut flakes: Query<(&WeatherParticle, &mut Transform, &mut Visibility)>,
 ) {
-    ambient.brightness = if game.city().rainfall > 0. {
-        740.
-    } else {
-        850.
+    let city = game.city();
+    let weather = game.region().weather(city.weather_time);
+    let ambient_goal = match weather {
+        Weather::Snow | Weather::Mist => 745.,
+        Weather::Drought => 940.,
+        _ if city.rainfall > 0. || weather == Weather::Showers => 760.,
+        _ => 900.,
     };
-    for (flake, mut pose) in &mut flakes {
-        let t = game.city().weather_time;
-        let h = 6.5 - (t * 0.77 + flake.drift * 0.73).rem_euclid(6.5);
-        pose.translation = flake.origin
+    ambient.brightness += (ambient_goal - ambient.brightness) * time.delta_secs().min(1.);
+    let visible =
+        matches!(weather, Weather::Snow | Weather::Showers | Weather::Mist) && view.height <= 38.;
+    for (flake, mut pose, mut visibility) in &mut flakes {
+        *visibility = if visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+        if !visible {
+            continue;
+        }
+        let t = city.weather_time;
+        let speed = if weather == Weather::Showers {
+            5.
+        } else {
+            0.77
+        };
+        let h = 6.5 - (t * speed + flake.drift * 0.73).rem_euclid(6.5);
+        pose.scale = match weather {
+            Weather::Showers => Vec3::new(0.045, 0.31, 0.045),
+            Weather::Mist => Vec3::new(0.68, 0.084, 0.23),
+            _ => Vec3::splat(0.082),
+        };
+        pose.translation = view.target
+            + flake.origin
             + Vec3::new(
                 (t * 0.60 + flake.drift).sin() * 0.7,
-                h,
+                if weather == Weather::Mist {
+                    0.45 + h * 0.11
+                } else {
+                    h
+                },
                 (t * 0.3).cos() * 0.61,
             );
         pose.rotate_y(time.delta_secs() * 0.26);
@@ -933,9 +1077,35 @@ pub fn magic(
                 Miracle::Rain => &art.ripple,
                 Miracle::Wind => &art.white,
                 Miracle::Ward => &art.valid,
+                Miracle::Bloom => &art.berry,
+                Miracle::Mend => &art.gold,
+                Miracle::Thunder => &art.amber,
             };
             let radius = f32::from(spell.radius(game.campaign.gifts)) * CELL;
             if let Some(root) = board.root {
+                if spell == Miracle::Thunder {
+                    for (x, z, h, angle) in [
+                        (0.18, 0., 5.8, 0.28),
+                        (-0.31, 0.05, 4.1, -0.44),
+                        (0.25, -0.11, 2.1, 0.38),
+                    ] {
+                        commands.spawn((
+                            ChildOf(root),
+                            Effect {
+                                age: 0.,
+                                length: 0.26,
+                                drift: Vec3::ZERO,
+                                scale: 0.17,
+                            },
+                            Mesh3d(art.cube.clone()),
+                            MeshMaterial3d(art.gold.clone()),
+                            Transform::from_translation(tile.world() + Vec3::new(x, h, z))
+                                .with_scale(Vec3::new(0.17, 2.35, 0.17))
+                                .with_rotation(Quat::from_rotation_z(angle)),
+                            bevy::pbr::NotShadowCaster,
+                        ));
+                    }
+                }
                 for i in 0..if spell == Miracle::Rain { 34 } else { 20 } {
                     let angle = i as f32 * 2.39996;
                     let outward = Vec3::new(angle.cos(), 0., angle.sin());
@@ -948,10 +1118,12 @@ pub fn magic(
                             } else {
                                 0.25 + frac
                             };
-                    let drift = if spell == Miracle::Rain {
-                        Vec3::new(0.1, -1.9, 0.05)
-                    } else {
-                        outward * (1.4 + frac) + Vec3::Y * 0.33
+                    let drift = match spell {
+                        Miracle::Rain => Vec3::new(0.1, -1.9, 0.05),
+                        Miracle::Mend => -outward * 0.5 + Vec3::Y * 1.45,
+                        Miracle::Bloom => outward * 0.41 + Vec3::Y * 0.84,
+                        Miracle::Thunder => outward * 2.2 + Vec3::Y * 0.55,
+                        _ => outward * (1.4 + frac) + Vec3::Y * 0.33,
                     };
                     let length = if spell == Miracle::Rain {
                         0.67 + frac * 1.2
@@ -983,10 +1155,12 @@ pub fn magic(
         }
         pose.translation += effect.drift * time.delta_secs();
         let scale = effect.scale * (1. - effect.age / effect.length).sqrt();
-        pose.scale = Vec3::new(
-            scale,
-            scale * if effect.drift.y < 0. { 3.8 } else { 0.41 },
-            scale,
-        );
+        if effect.drift != Vec3::ZERO {
+            pose.scale = Vec3::new(
+                scale,
+                scale * if effect.drift.y < 0. { 3.8 } else { 0.41 },
+                scale,
+            );
+        }
     }
 }

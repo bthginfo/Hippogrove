@@ -35,11 +35,8 @@ pub fn main() {
     }
     let file = SaveFile::for_device();
     let regions = Region::campaign();
-    let saved = file.load();
-    if saved
-        .as_ref()
-        .is_none_or(|campaign| !campaign.valid(&regions))
-    {
+    let saved = file.load().and_then(|campaign| campaign.restore(&regions));
+    if saved.is_none() {
         file.preserve_unreadable();
     }
     let game = Game::new(regions, saved);

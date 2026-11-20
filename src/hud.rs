@@ -3,8 +3,9 @@ use bevy::window::PrimaryWindow;
 
 use crate::{
     art::rgb,
-    game::{Action, Game, Outcome, Quest, Talent, stock_text},
+    game::{Action, Game, Outcome, Quest, Settlement, Talent, stock_text},
     play::{Panel, Play, Target, Tool, UiAction},
+    region::{Biome, Tile},
 };
 
 const CREAM: u32 = 0xf9eed0;
@@ -47,6 +48,9 @@ pub(crate) enum Label {
     Detail,
     Progress,
     Rival,
+    District(usize),
+    LocalQuest,
+    Climate,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -56,7 +60,9 @@ struct Layout {
     option: usize,
     panel: Panel,
     unlocked: usize,
-    complete: bool,
+    quest: Quest,
+    campaign_complete: bool,
+    talents: [u8; Talent::ALL.len()],
     paused: bool,
 }
 
@@ -193,6 +199,7 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game) {
             text(panel, hud, &game.region().name, 28., INK);
             label(panel, hud, Label::Stock, 17., INK);
             label(panel, hud, Label::Faith, 15., MUTED);
+            label(panel, hud, Label::Climate, 15., MUTED);
         });
     parent
         .spawn((
@@ -253,11 +260,15 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, complete: b
                 button(
                     tabs,
                     hud,
-                    if complete {
-                        "Nächstes Kapitel"
-                    } else {
-                        "Karte"
-                    },
+                    "Landkarte",
+                    UiAction::Panel(Panel::Map),
+                    false,
+                    false,
+                );
+                button(
+                    tabs,
+                    hud,
+                    if complete { "Weiterreisen" } else { "Kapitel" },
                     UiAction::Panel(Panel::Journey),
                     complete,
                     false,
@@ -273,7 +284,9 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, complete: b
             });
             if play.tool.choices() > 1 {
                 toolbar.spawn(row()).with_children(|options| {
-                    (0..play.tool.choices()).for_each(|index| {
+                    let page_size = 4;
+                    let page = (play.option / page_size) * page_size;
+                    (page..play.tool.choices().min(page + page_size)).for_each(|index| {
                         button(
                             options,
                             hud,
@@ -283,6 +296,21 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, complete: b
                             false,
                         );
                     });
+                    if play.tool.choices() > page_size {
+                        let next = if page + page_size < play.tool.choices() {
+                            page + page_size
+                        } else {
+                            0
+                        };
+                        button(
+                            options,
+                            hud,
+                            "Weitere",
+                            UiAction::Choice(next),
+                            false,
+                            false,
+                        );
+                    }
                     if play.tool == Tool::Build {
                         button(options, hud, "Drehen", UiAction::Rotate, false, false);
                     }
@@ -292,6 +320,22 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, complete: b
                             hud,
                             "Loben",
                             UiAction::Do(Action::Praise),
+                            false,
+                            false,
+                        );
+                        button(
+                            options,
+                            hud,
+                            "Snack",
+                            UiAction::Do(Action::Feed),
+                            false,
+                            false,
+                        );
+                        button(
+                            options,
+                            hud,
+                            "Pause",
+                            UiAction::Do(Action::Rest),
                             false,
                             false,
                         );
@@ -335,6 +379,124 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, complete: b
         });
 }
 
+fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game) {
+    let region = game.region();
+    let (land, water) = match region.kind {
+        Biome::Valley => (0xb7bf80, 0x6daaae),
+        Biome::Fjord => (0xb8c2aa, 0x7ba6b2),
+        Biome::Terraces => (0xaebb76, 0x75b5a3),
+        Biome::Lake => (0xdcc395, 0x65b5af),
+    };
+    let position = |tile: Tile| {
+        let min = region.bounds.0;
+        let max = region.bounds.1;
+        Vec2::new(
+            100. * f32::from(tile.0 - min.0) / f32::from(max.0 - min.0),
+            100. * f32::from(tile.1 - min.1) / f32::from(max.1 - min.1),
+        )
+    };
+    parent
+        .spawn((
+            Node {
+                width: Val::Percent(100.),
+                height: Val::Px(142.),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(rgb(land)),
+            BorderRadius::all(Val::Px(12.)),
+        ))
+        .with_children(|map| {
+            for column in region.bounds.0.0..=region.bounds.1.0 {
+                let p = position(Tile(column, region.river_at(column)));
+                map.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent(p.x),
+                        top: Val::Percent(p.y),
+                        width: Val::Percent(103. / region.bounds.width() as f32),
+                        height: Val::Percent(
+                            100. * f32::from(region.river_span(column))
+                                / (region.bounds.len() / region.bounds.width()) as f32,
+                        ),
+                        ..default()
+                    },
+                    BackgroundColor(rgb(water)),
+                ));
+            }
+            for (tile, color) in [
+                (region.start, DARK),
+                (region.rival_shrine, 0x8b5b3f),
+                (region.districts[0].center, PAPER),
+                (region.districts[1].center, PAPER),
+            ] {
+                let p = position(tile);
+                map.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent(p.x),
+                        top: Val::Percent(p.y),
+                        width: Val::Px(12.),
+                        height: Val::Px(12.),
+                        ..default()
+                    },
+                    BackgroundColor(rgb(color)),
+                    BorderRadius::all(Val::Px(6.)),
+                ));
+            }
+        });
+    parent.spawn(row()).with_children(|links| {
+        button(
+            links,
+            hud,
+            "Startdorf",
+            UiAction::Focus(region.start),
+            false,
+            false,
+        );
+        button(
+            links,
+            hud,
+            "Hauptübergang",
+            UiAction::Focus(region.bridge()),
+            false,
+            false,
+        );
+        button(
+            links,
+            hud,
+            "Landschaft ansehen",
+            UiAction::Landscape,
+            false,
+            false,
+        );
+    });
+    parent.spawn(row()).with_children(|districts| {
+        for (index, district) in region.districts.iter().enumerate() {
+            districts
+                .spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Start,
+                    width: Val::Percent(48.),
+                    row_gap: Val::Px(3.),
+                    ..default()
+                })
+                .with_children(|card| {
+                    button(
+                        card,
+                        hud,
+                        &district.name,
+                        UiAction::Focus(district.center),
+                        game.city().districts[index].outcome.is_some(),
+                        false,
+                    );
+                    label(card, hud, Label::District(index), 15., INK);
+                    text(card, hud, &district.story, 15., MUTED);
+                });
+        }
+    });
+}
+
 fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play) {
     let region = game.region();
     let city = game.city();
@@ -353,15 +515,16 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play)
         )).with_children(|box_node| {
             box_node.spawn(row()).with_children(|nav| {
                 button(nav,hud,"Kapitel",UiAction::Panel(Panel::Journey),play.panel==Panel::Journey,false);
+                button(nav,hud,"Landkarte",UiAction::Panel(Panel::Map),play.panel==Panel::Map,false);
                 button(nav,hud,"Fortschritt",UiAction::Panel(Panel::Progress),play.panel==Panel::Progress,false);
                 button(nav,hud,"Aufträge",UiAction::Panel(Panel::Quests),play.panel==Panel::Quests,false);
                 button(nav,hud,"Zurück",UiAction::Cancel,false,true);
             });
             match play.panel {
                 Panel::Journey => {
-                    text(box_node,hud,"Die Schreine am Wasser",31.,INK);
+                    text(box_node,hud,if game.campaign_complete() { "Die Schreine sind vereint" } else { "Die Schreine am Wasser" },31.,INK);
                     for (index,candidate) in game.regions.iter().enumerate() {
-                        let result=game.campaign.settlements[index].as_ref().and_then(|place|place.outcome);
+                        let result=game.campaign.settlements[index].as_ref().filter(|place| place.quest == Quest::Complete).and_then(|place|place.outcome);
                         let suffix=if index>game.campaign.unlocked {" · verschlossen"}
                             else if let Some(outcome)=result { if outcome==Outcome::Alliance {" · Bündnis"} else {" · befreit"} }
                             else {""};
@@ -369,25 +532,27 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play)
                             UiAction::Do(Action::Travel(index)),index==game.campaign.active,false);
                     }
                 }
+                Panel::Map => map_panel(box_node,hud,game),
                 Panel::Progress => {
                     text(box_node,hud,"Gott, Siedlung und Kreatur",31.,INK);
                     label(box_node,hud,Label::Progress,17.,MUTED);
                     box_node.spawn(row()).with_children(|talents| {
                         for talent in Talent::ALL {
-                            button(talents,hud,talent.name(),UiAction::Do(Action::Learn(talent)),false,false);
+                            button(talents,hud,&format!("{} {}/2",talent.name(),game.campaign.gifts.rank(talent)),UiAction::Do(Action::Learn(talent)),false,false);
                         }
                         button(talents,hud,"Nilpferd loben",UiAction::Do(Action::Praise),false,false);
                     });
-                    text(box_node,hud,"Aufträge geben Talentpunkte. Gebäude heben die Dorfstufe. Nach dem Tragen lernt das Nilpferd durch Lob.",17.,INK);
+                    text(box_node,hud,"Aufträge geben Talentpunkte. Das Nilpferd lernt mit Lob nach erledigter Arbeit. Wache auf Rang 2, Feldpflege auf Rang 3.",17.,INK);
                 }
                 Panel::Quests => {
                     text(box_node,hud,&region.subtitle,31.,INK);
                     text(box_node,hud,&region.lore,17.,MUTED);
-                    for quest in [Quest::Shelter,Quest::Fields,Quest::Bridge] {
+                    for quest in [Quest::Shelter,Quest::Fields,Quest::Bridge,Quest::Districts] {
                         let mark=if quest.index()<city.quest.index() {"Erfüllt"} else if quest==city.quest {"Aktiv"} else {"Offen"};
                         text(box_node,hud,&format!("{mark} · {}",quest.name()),18.,INK);
                     }
                     label(box_node,hud,Label::Rival,16.,MUTED);
+                    label(box_node,hud,Label::LocalQuest,16.,DARK);
                 }
                 Panel::Closed=>{}
             }
@@ -416,7 +581,13 @@ pub fn layout(
         option: play.option,
         panel: play.panel,
         unlocked: game.campaign.unlocked,
-        complete: game.city().outcome.is_some(),
+        quest: game.city().quest,
+        campaign_complete: game.campaign_complete(),
+        talents: if play.panel == Panel::Progress {
+            Talent::ALL.map(|talent| game.campaign.gifts.rank(talent))
+        } else {
+            [0; Talent::ALL.len()]
+        },
         paused: play.paused,
     };
     if hud.layout == Some(key) {
@@ -437,7 +608,7 @@ pub fn layout(
         .with_children(|root| {
             if play.panel == Panel::Closed {
                 top(root, &hud, &game);
-                bottom(root, &hud, &play, key.complete);
+                bottom(root, &hud, &play, key.quest == Quest::Complete);
             } else {
                 modal(root, &hud, &game, &play);
             }
@@ -478,6 +649,7 @@ pub fn update(
                 gifts.mana_cap()
             ),
             Label::Objective => city.objective(region),
+            Label::Climate => region.weather(city.weather_time).name().into(),
             Label::Quest => city.quest.name().into(),
             Label::Notice => {
                 if time.elapsed_secs() < play.notice_until {
@@ -487,20 +659,26 @@ pub fn update(
                 }
             }
             Label::Confirm => target.label.clone(),
+            Label::Detail if play.tool == Tool::Hippo => format!(
+                "{} · {:.0}% Kraft\n{}",
+                city.creature_status(),
+                city.energy,
+                target.detail
+            ),
             Label::Detail => target.detail.clone(),
             Label::Progress => format!(
-                "{} Talentpunkte · Regen {} · Wunderquelle {}\nDorfstufe {} · Ansehen {} · Lager {}/{} Nahrung\nNilpferd-Rang {} · {} Lieferungen",
+                "{} Talentpunkte · Dorfstufe {} · Ansehen {}\n{} Gläubige · {} Wegfelder · Platz für {} je Vorrat\nNilpferd-Rang {} · {} · {:.0}% Kraft",
                 gifts.points,
-                gifts.rank(Talent::Rain),
-                gifts.rank(Talent::Spring),
                 city.city_rank(),
                 city.renown(),
-                city.stock[2],
+                city.walkers.len().saturating_sub(1),
+                city.roads.len(),
                 city.storage_cap(),
                 gifts.training,
-                city.hippo_deliveries
+                city.creature_status(),
+                city.energy
             ),
-            Label::Rival => format!(
+            Label::Rival if city.outcome.is_none() => format!(
                 "{} · {} · {} {} · Ansehen {}/{}\n{} für den Übergang",
                 region.rival,
                 region.request,
@@ -510,6 +688,29 @@ pub fn update(
                 region.renown,
                 stock_text(region.rebuild)
             ),
+            Label::Rival => format!("{} · {}", region.rival, city.outcome.unwrap().name()),
+            Label::District(index) => {
+                let state = city.districts[*index];
+                let district = &region.districts[*index];
+                state.outcome.map_or_else(
+                    || {
+                        format!(
+                            "{} · Widerstand {}",
+                            Settlement::district_need(district.need),
+                            state.resolve
+                        )
+                    },
+                    |outcome| format!("{} · Sammelplatz", outcome.name()),
+                )
+            }
+            Label::LocalQuest => {
+                let (title, goal, _) = city.local_quest(region);
+                if city.local_finished {
+                    format!("{title} · erfüllt")
+                } else {
+                    format!("{title}\n{goal}")
+                }
+            }
         };
         if text.0 != value {
             text.0 = value;

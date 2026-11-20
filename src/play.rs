@@ -13,15 +13,17 @@ pub enum Tool {
     Helpers,
     Hippo,
     Miracles,
+    Plan,
 }
 
 impl Tool {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Hand,
         Self::Build,
         Self::Helpers,
         Self::Hippo,
         Self::Miracles,
+        Self::Plan,
     ];
 
     pub fn name(self) -> &'static str {
@@ -31,18 +33,20 @@ impl Tool {
             Self::Helpers => "Gläubige",
             Self::Hippo => "Nilpferd",
             Self::Miracles => "Wunder",
+            Self::Plan => "Planen",
         }
     }
 
     pub fn aims_with_drag(self) -> bool {
-        matches!(self, Self::Build | Self::Miracles)
+        matches!(self, Self::Build | Self::Miracles | Self::Plan)
     }
 
     pub fn choices(self) -> usize {
         match self {
             Self::Build => Building::ALL.len(),
             Self::Miracles => Miracle::ALL.len(),
-            Self::Hippo => 2,
+            Self::Hippo => 3,
+            Self::Plan => 2,
             _ => 1,
         }
     }
@@ -51,7 +55,8 @@ impl Tool {
         match self {
             Self::Build => Building::ALL[index].name(),
             Self::Miracles => Miracle::ALL[index].name(),
-            Self::Hippo => ["Sammeln", "Wache"][index],
+            Self::Hippo => ["Sammeln", "Wache", "Feldpflege"][index],
+            Self::Plan => ["Wege", "Ausbau"][index],
             _ => self.name(),
         }
     }
@@ -62,6 +67,7 @@ pub enum Panel {
     #[default]
     Closed,
     Journey,
+    Map,
     Progress,
     Quests,
 }
@@ -75,6 +81,8 @@ pub enum UiAction {
     Rotate,
     Guide,
     Panel(Panel),
+    Focus(Tile),
+    Landscape,
     Do(Action),
 }
 
@@ -85,6 +93,7 @@ pub struct Play {
     pub panel: Panel,
     pub option: usize,
     pub rotation: u8,
+    pub road_anchor: Option<Tile>,
     pub notice: String,
     pub notice_until: f32,
     pub last_magic: Option<(Miracle, Tile, u64)>,
@@ -102,6 +111,7 @@ impl Play {
             panel: Panel::Closed,
             option: 0,
             rotation: 0,
+            road_anchor: None,
             notice: game.region().lore.clone(),
             notice_until: 8.,
             last_magic: None,
@@ -124,7 +134,13 @@ impl Play {
         if self.tool != tool {
             self.tool = tool;
             self.option = 0;
+            self.road_anchor = None;
         }
+    }
+
+    pub fn choose(&mut self, index: usize) {
+        self.option = index.min(self.tool.choices() - 1);
+        self.road_anchor = None;
     }
 
     pub fn target(&self, game: &Game) -> Action {
@@ -143,12 +159,18 @@ impl Play {
                     Action::Repair
                 }
             }
+            Tool::Hand if city.held.is_none() && region.district_at(self.aim).is_some() => {
+                Action::Settle(region.district_at(self.aim).unwrap())
+            }
             Tool::Hand => Action::Hand(self.aim),
             Tool::Build => Action::Build(self.building(), self.aim, self.rotation),
             Tool::Helpers => Action::Assign(self.aim, false),
             Tool::Hippo if self.option == 1 => Action::Watch(self.aim),
+            Tool::Hippo if self.option == 2 => Action::Tend(self.aim),
             Tool::Hippo => Action::Assign(self.aim, true),
             Tool::Miracles => Action::Cast(self.miracle(), self.aim),
+            Tool::Plan if self.option == 1 => Action::Upgrade(self.aim),
+            Tool::Plan => Action::Road(self.road_anchor.unwrap_or(self.aim), self.aim),
         }
     }
 
@@ -158,13 +180,22 @@ impl Play {
         match self.tool {
             Tool::Build if self.building() == Building::Shrine => region.frontier,
             Tool::Hand if city.held.is_some() => region.depot,
-            Tool::Miracles if self.miracle() == Miracle::Wind => region
+            Tool::Miracles if self.miracle() == Miracle::Mend => city.walkers[0].tile(),
+            Tool::Miracles if self.miracle().offensive() && city.quest == Quest::Bridge => region
                 .guards
                 .iter()
                 .zip(&city.guards)
                 .find(|(_, remaining)| **remaining > 0)
                 .map(|(&tile, _)| tile)
                 .unwrap_or(region.bridge()),
+            Tool::Hand | Tool::Miracles if city.quest == Quest::Districts => region
+                .districts
+                .iter()
+                .zip(&city.districts)
+                .filter(|(_, state)| state.outcome.is_none())
+                .min_by_key(|(district, _)| self.aim.distance(district.center))
+                .map(|(district, _)| district.center)
+                .unwrap_or(region.start),
             Tool::Miracles | Tool::Hand if city.quest == Quest::Fields => city
                 .buildings
                 .iter()
@@ -191,7 +222,22 @@ impl Play {
     ) -> bool {
         match action {
             UiAction::Tool(tool) => self.tool(tool),
-            UiAction::Choice(i) => self.option = i.min(self.tool.choices() - 1),
+            UiAction::Choice(i) => self.choose(i),
+            UiAction::Confirm
+                if self.panel == Panel::Closed
+                    && self.tool == Tool::Plan
+                    && self.option == 0
+                    && self.road_anchor.is_none() =>
+            {
+                if game.city().influence(game.region(), self.aim)
+                    && game.city().walkable(game.region(), self.aim)
+                {
+                    self.road_anchor = Some(self.aim);
+                } else {
+                    self.notice = "Beginne auf freiem Boden im Einflussgebiet.".into();
+                    self.notice_until = now + 4.;
+                }
+            }
             UiAction::Confirm if self.panel == Panel::Closed => {
                 return self.execute(self.target(game), game, view, now);
             }
@@ -199,6 +245,8 @@ impl Play {
             UiAction::Cancel => {
                 if self.panel != Panel::Closed {
                     self.panel = Panel::Closed;
+                } else if self.road_anchor.is_some() {
+                    self.road_anchor = None;
                 } else {
                     self.tool(Tool::Hand);
                 }
@@ -206,7 +254,20 @@ impl Play {
             UiAction::Rotate => self.rotation = (self.rotation + 1) % 4,
             UiAction::Guide => {
                 self.aim = self.guide_tile(game);
-                view.target = (game.region().start.world() + self.aim.world() * 2.) / 3.;
+                view.focus(self.aim);
+                self.pointer = None;
+            }
+            UiAction::Focus(tile) => {
+                self.aim = tile;
+                self.tool(Tool::Hand);
+                self.panel = Panel::Closed;
+                self.pointer = None;
+                view.focus(tile);
+            }
+            UiAction::Landscape => {
+                self.panel = Panel::Closed;
+                view.landscape();
+                self.pointer = None;
             }
             UiAction::Panel(panel) => {
                 self.panel = if self.panel == panel {
@@ -228,6 +289,9 @@ impl Play {
         self.notice_until = now + 5.;
         if success {
             self.revision = self.revision.wrapping_add(1);
+            if matches!(action, Action::Road(..)) {
+                self.road_anchor = None;
+            }
             if let Action::Cast(spell, tile) = action {
                 self.last_magic = Some((spell, tile, self.revision));
             }
@@ -235,6 +299,7 @@ impl Play {
                 self.tool = Tool::Hand;
                 self.panel = Panel::Closed;
                 self.option = 0;
+                self.road_anchor = None;
                 self.last_magic = None;
                 self.aim = game.region().sources[0].tile;
                 self.notice = game.region().lore.clone();
@@ -252,26 +317,40 @@ impl Play {
 pub struct CameraRig {
     pub target: Vec3,
     pub height: f32,
+    min: Vec3,
+    max: Vec3,
 }
 
 impl CameraRig {
     pub fn new(game: &Game) -> Self {
+        let region = game.region();
         Self {
-            target: game.region().start.world() + Vec3::new(-0.95, 0., -4.55),
+            target: region.start.world() + Vec3::new(-0.95, 0., -4.55),
             height: 22.,
+            min: region.bounds.0.world(),
+            max: region.bounds.1.world(),
         }
     }
 
     pub fn zoom(&mut self, change: f32) {
-        self.height = (self.height * (-change).exp()).clamp(11., 42.);
+        self.height = (self.height * (-change).exp()).clamp(11., 106.);
+    }
+
+    pub fn focus(&mut self, tile: Tile) {
+        self.target = (tile.world() - Vec3::Z).clamp(self.min, self.max);
+        self.height = self.height.clamp(22., 29.);
+    }
+
+    pub fn landscape(&mut self) {
+        self.target = (self.min + self.max) * 0.5;
+        self.height = 106.;
     }
 
     pub fn pan(&mut self, dx: f32, dy: f32) {
         let right = Vec3::new(0.89, 0., -0.45);
         let forward = Vec3::new(-0.45, 0., -0.89);
         self.target += right * dx + forward * dy;
-        self.target.x = self.target.x.clamp(-26., 25.);
-        self.target.z = self.target.z.clamp(-18., 19.);
+        self.target = self.target.clamp(self.min, self.max);
     }
 }
 
@@ -280,6 +359,7 @@ pub struct Target {
     pub label: String,
     pub detail: String,
     pub legal: bool,
+    pub road_preview: Vec<Tile>,
     placement: Option<(PlacementKey, Result<(), String>)>,
 }
 
@@ -304,6 +384,7 @@ impl Target {
         let tile = play.aim;
         self.legal = true;
         self.detail.clear();
+        self.road_preview.clear();
         self.label = match play.target(game) {
             Action::Build(kind, tile, _) => {
                 let key = PlacementKey {
@@ -337,10 +418,67 @@ impl Target {
             Action::Cast(spell, tile) => {
                 let error = city.ritual_error(region, spell, tile, game.campaign.gifts);
                 self.legal = error.is_none();
-                self.detail = error
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("{:.0} Wunderkraft", spell.cost()));
+                self.detail = error.map(str::to_owned).unwrap_or_else(|| {
+                    format!(
+                        "{:.0} Wunderkraft · Radius {}",
+                        spell.cost(),
+                        spell.radius(game.campaign.gifts)
+                    )
+                });
                 format!("{} wirken", spell.name())
+            }
+            Action::Road(_, end) if play.road_anchor.is_none() => {
+                self.legal = city.influence(region, end) && city.walkable(region, end);
+                self.detail = "Wähle den Anfang. Verbinde den Weg mit einem Dorfweg.".into();
+                "Weg beginnen".into()
+            }
+            Action::Road(start, end) => {
+                match city.road_plan(region, start, end) {
+                    Ok((cells, price)) => {
+                        self.detail = format!("{} Felder · {}", cells.len(), stock_text(price));
+                        self.road_preview = cells;
+                    }
+                    Err(error) => {
+                        self.legal = false;
+                        self.detail = error;
+                    }
+                }
+                "Weg bauen".into()
+            }
+            Action::Upgrade(tile) => {
+                self.detail = match city.upgrade_plan(region, tile) {
+                    Ok((index, price)) => format!(
+                        "{} · {}",
+                        stock_text(price),
+                        city.buildings[index].kind.use_text()
+                    ),
+                    Err(error) => {
+                        self.legal = false;
+                        error
+                    }
+                };
+                city.building_at(tile).map_or_else(
+                    || "Ausbauen".into(),
+                    |site| format!("{} ausbauen", site.kind.name()),
+                )
+            }
+            Action::Settle(index) => {
+                let district = &region.districts[index];
+                let mut label = "Beitreten lassen";
+                self.detail = match city.district_plan(region, index) {
+                    Ok(crate::game::Outcome::Victory) => {
+                        label = "Siedlung übernehmen";
+                        format!("{} · Wachen vertrieben", district.name)
+                    }
+                    Ok(crate::game::Outcome::Alliance) => {
+                        format!("{} · Gabe {}", district.name, stock_text(district.gift))
+                    }
+                    Err(error) => {
+                        self.legal = false;
+                        error
+                    }
+                };
+                label.into()
             }
             Action::Assign(_, hippo) => {
                 self.legal = region.source_at(tile).is_some();
@@ -357,9 +495,28 @@ impl Target {
                 }
             }
             Action::Watch(_) => {
-                self.legal = game.campaign.gifts.training >= 2 && city.walkable(region, tile);
-                self.detail = "Die Kreatur lernt das Bewachen auf Rang 2.".into();
+                self.legal = game.campaign.gifts.training >= 2
+                    && city.walkable(region, tile)
+                    && city.influence(region, tile);
+                self.detail = if game.campaign.gifts.training < 2 {
+                    "Die Kreatur lernt das Bewachen auf Rang 2.".into()
+                } else {
+                    "Wache schützt Vorräte und senkt den Widerstand naher Siedlungen.".into()
+                };
                 "Wache halten".into()
+            }
+            Action::Tend(tile) => {
+                self.legal = game.campaign.gifts.training >= 3
+                    && city
+                        .building_at(tile)
+                        .is_some_and(|site| site.kind == Building::Field);
+                self.detail = if game.campaign.gifts.training < 3 {
+                    "Feldpflege lernt die Kreatur auf Rang 3."
+                } else {
+                    "Wähle ein Feld zum Pflegen und Ernten."
+                }
+                .into();
+                "Feld pflegen".into()
             }
             Action::Repair => {
                 self.detail = stock_text(region.rebuild);

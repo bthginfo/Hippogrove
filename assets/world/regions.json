@@ -6,6 +6,8 @@
     "rival": "Weiler am Mühlbach", "crossing": "Holzbrücke",
     "request": "Die ersten Körbe für den Weiler",
     "gift": ["Food", 7], "rebuild": [7, 4, 0], "renown": 18, "faith": 13,
+    "bounds": [[-22,-21],[57,38]], "crossings": [-7,41],
+    "highlands": [[[-14,23],5],[[6,-12],6],[[37,-7],6],[[51,33],5]],
     "start": [17, 18], "depot": [15, 19], "frontier": [18, 14],
     "rival_shrine": [17, 6], "cross_x": 16, "river": 10, "water_width": 3,
     "initial": [12, 6, 4], "guards": [[16, 9], [18, 9], [20, 8]],
@@ -14,7 +16,14 @@
       {"tile":[19,21],"material":"Stone","stock":42}, {"tile":[13,22],"material":"Stone","stock":40},
       {"tile":[22,20],"material":"Food","stock":28}, {"tile":[11,20],"material":"Food","stock":27},
       {"tile":[11,15],"material":"Wood","stock":48}, {"tile":[23,15],"material":"Stone","stock":36},
-      {"tile":[14,7],"material":"Wood","stock":64}, {"tile":[22,6],"material":"Stone","stock":66}
+      {"tile":[14,7],"material":"Wood","stock":64}, {"tile":[22,6],"material":"Stone","stock":66},
+      {"tile":[-6,2],"material":"Wood","stock":84}, {"tile":[-12,1],"material":"Stone","stock":94},
+      {"tile":[-9,-5],"material":"Food","stock":68}, {"tile":[41,24],"material":"Wood","stock":80},
+      {"tile":[48,19],"material":"Stone","stock":86}, {"tile":[44,26],"material":"Food","stock":92}
+    ],
+    "districts": [
+      {"name":"Weidenhain","center":[-8,-1],"need":"Water","gift":[4,6,0],"story":"Die Obstbäume am alten Mühlrad brauchen einen Brunnen. Ein Weg zur Quelle hält die Körbe in Bewegung."},
+      {"name":"Sonnenried","center":[44,21],"need":"Trade","gift":[4,0,9],"story":"Am Reetdachplatz treffen sich die Höfe. Die Händler bitten um einen Markt mit Zugang zum Dorfweg."}
     ]
   },
   {
@@ -24,15 +33,25 @@
     "rival": "Anleger vom Frostkamm", "crossing": "Fjordanleger",
     "request": "Brennholz für den Frost",
     "gift": ["Wood", 16], "rebuild": [8, 6, 0], "renown": 22, "faith": 15,
+    "bounds": [[-30,-21],[57,42]], "crossings": [-11,40],
+    "highlands": [[[-23,3],5],[[8,-11],7],[[30,24],5],[[49,33],6]],
     "start": [12, 19], "depot": [10, 19], "frontier": [13, 15],
     "rival_shrine": [13, 7], "cross_x": 12, "river": 10, "water_width": 4,
     "initial": [12, 8, 5], "guards": [[12, 9], [14, 9], [16, 9]],
+    "starter_plots": [[13,19],[9,16]],
     "sources": [
       {"tile":[7,18],"material":"Wood","stock":44}, {"tile":[17,18],"material":"Wood","stock":58},
       {"tile":[16,21],"material":"Stone","stock":52}, {"tile":[8,22],"material":"Stone","stock":59},
       {"tile":[13,23],"material":"Food","stock":24}, {"tile":[18,22],"material":"Food","stock":26},
       {"tile":[8,15],"material":"Wood","stock":64}, {"tile":[17,15],"material":"Stone","stock":51},
-      {"tile":[8,7],"material":"Wood","stock":64}, {"tile":[16,6],"material":"Stone","stock":66}
+      {"tile":[8,7],"material":"Wood","stock":64}, {"tile":[16,6],"material":"Stone","stock":66},
+      {"tile":[-17,1],"material":"Wood","stock":104}, {"tile":[-10,-4],"material":"Stone","stock":95},
+      {"tile":[-13,-9],"material":"Food","stock":58}, {"tile":[43,1],"material":"Wood","stock":105},
+      {"tile":[47,-5],"material":"Stone","stock":91}, {"tile":[41,-11],"material":"Food","stock":62}
+    ],
+    "districts": [
+      {"name":"Wachfeuer","center":[-13,-3],"need":"Patrol","gift":[8,5,0],"story":"Über dem kalten Fjord haben die Lotsen ein Wachfeuer entzündet. Ein Wachturm schützt den Pass."},
+      {"name":"Nordlichtbogen","center":[43,-6],"need":"Shelter","gift":[10,0,7],"story":"Die Fischer brauchen ein ausgebautes Haus am Dorfweg als Winterquartier."}
     ]
   },
   {
@@ -42,15 +61,25 @@
     "rival": "Hof am oberen Wehr", "crossing": "Wehrsteg",
     "request": "Stein für die gemeinsame Rinne",
     "gift": ["Stone", 13], "rebuild": [6, 9, 0], "renown": 22, "faith": 17,
+    "bounds": [[-26,-25],[65,42]], "crossings": [-9,46],
+    "highlands": [[[-19,1],5],[[14,-14],7],[[39,32],6],[[59,14],4]],
     "start": [21, 18], "depot": [20, 20], "frontier": [23, 14],
     "rival_shrine": [22, 6], "cross_x": 21, "river": 10, "water_width": 3,
     "initial": [14, 5, 5], "guards": [[21, 9], [23, 9], [25, 8], [19, 8]],
+    "starter_plots": [[22,18],[18,18],[24,19]],
     "sources": [
       {"tile":[16,18],"material":"Wood","stock":48}, {"tile":[25,17],"material":"Wood","stock":52},
       {"tile":[19,23],"material":"Stone","stock":54}, {"tile":[26,20],"material":"Stone","stock":46},
       {"tile":[23,22],"material":"Food","stock":39}, {"tile":[17,21],"material":"Food","stock":33},
       {"tile":[17,15],"material":"Wood","stock":44}, {"tile":[27,16],"material":"Stone","stock":41},
-      {"tile":[18,7],"material":"Wood","stock":55}, {"tile":[24,6],"material":"Stone","stock":66}
+      {"tile":[18,7],"material":"Wood","stock":55}, {"tile":[24,6],"material":"Stone","stock":66},
+      {"tile":[-12,-4],"material":"Wood","stock":79}, {"tile":[-6,-10],"material":"Stone","stock":98},
+      {"tile":[-7,-14],"material":"Food","stock":90}, {"tile":[51,20],"material":"Wood","stock":82},
+      {"tile":[54,27],"material":"Stone","stock":91}, {"tile":[47,25],"material":"Food","stock":102}
+    ],
+    "districts": [
+      {"name":"Kranichwehr","center":[-9,-9],"need":"Water","gift":[2,10,0],"story":"Die oberen Terrassen teilen ihr Saatgut, wenn das gemeinsame Wehr einen Brunnenanschluss erhält."},
+      {"name":"Lotussteg","center":[50,25],"need":"Trade","gift":[4,0,12],"story":"Die Töpfer am Lotusbecken suchen einen Marktplatz für den Tausch von Reis und Ton."}
     ]
   },
   {
@@ -60,15 +89,25 @@
     "rival": "Dorf der Schirmbäume", "crossing": "Schilfsteg",
     "request": "Nahrungsreserve für die Trockenzeit",
     "gift": ["Food", 15], "rebuild": [11, 6, 0], "renown": 24, "faith": 18,
+    "bounds": [[-33,-24],[66,47]], "crossings": [-13,48],
+    "highlands": [[[-25,26],6],[[0,-12],7],[[32,30],6],[[61,-11],5]],
     "start": [16, 19], "depot": [14, 20], "frontier": [17, 15],
     "rival_shrine": [16, 7], "cross_x": 15, "river": 11, "water_width": 3,
     "initial": [14, 7, 5], "guards": [[15, 10], [17, 10], [19, 9], [13, 9]],
+    "starter_plots": [[17,18],[12,18],[17,20]],
     "sources": [
       {"tile":[10,19],"material":"Wood","stock":45}, {"tile":[21,18],"material":"Wood","stock":55},
       {"tile":[12,23],"material":"Stone","stock":54}, {"tile":[20,22],"material":"Stone","stock":46},
       {"tile":[18,23],"material":"Food","stock":42}, {"tile":[10,21],"material":"Food","stock":29},
       {"tile":[11,16],"material":"Wood","stock":50}, {"tile":[22,16],"material":"Stone","stock":44},
-      {"tile":[12,8],"material":"Wood","stock":60}, {"tile":[19,7],"material":"Stone","stock":62}
+      {"tile":[12,8],"material":"Wood","stock":60}, {"tile":[19,7],"material":"Stone","stock":62},
+      {"tile":[-16,27],"material":"Wood","stock":77}, {"tile":[-19,34],"material":"Stone","stock":102},
+      {"tile":[-13,39],"material":"Food","stock":84}, {"tile":[48,-2],"material":"Wood","stock":80},
+      {"tile":[53,-7],"material":"Stone","stock":105}, {"tile":[45,-11],"material":"Food","stock":101}
+    ],
+    "districts": [
+      {"name":"Akazienrast","center":[-15,34],"need":"Shelter","gift":[8,0,11],"story":"Am Ende des trockenen Ufers suchen die Reisenden ein geräumiges, ausgebautes Haus mit Schatten."},
+      {"name":"Schilfkrone","center":[49,-7],"need":"Water","gift":[2,9,3],"story":"Die Hüter am offenen See wollen Wasser für die nächste Trockenzeit sichern."}
     ]
   }
 ]
