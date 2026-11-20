@@ -8,13 +8,19 @@ Hippogrove spielt sich im Querformat per Touch oder mit angeschlossenem Controll
 
 ## Spielen
 
-Auf Android öffnest du die signierte Test-APK aus deinen Downloads. Benötigt werden Android 8 oder neuer, ein 64-Bit-Gerät und Vulkan. [Hippogrove 1.1.1 für Android](https://github.com/bthginfo/Hippogrove/releases/tag/v1.1.1)
+Auf Android öffnest du die signierte Test-APK aus deinen Downloads. Benötigt werden Android 8 oder neuer, ein 64-Bit-Gerät und Vulkan. [Ältere Android-Testversion 1.1.1](https://github.com/bthginfo/Hippogrove/releases/tag/v1.1.1)
 
-Beim ersten Start landest du auf der **Übungsinsel**. Der Marker zeigt dir Holz, Sammelplatz, Bauplatz, Feld und Nilpferd. Tippe auf **Greifen**, um bis zu sechs Einheiten aufzuheben, oder halte den Knopf für bis zu 18. Lass los, wenn die gewünschte Menge angezeigt wird. **Zum Ziel** führt zum nächsten offenen Auftrag und wählt das passende Werkzeug. Nach der Übung öffnet sich die Kampagnenauswahl. Du kannst die Insel später über die Spielmodi wieder besuchen.
+Das Spiel startet im **Hauptmenü**. Über **Tutorial** erreichst du die Übungsinsel und kannst sie später erneut spielen. Der Marker zeigt dir Holz, Sammelplatz, Bauplatz, Feld und Nilpferd. Tippe auf **Greifen**, um bis zu sechs Einheiten aufzuheben, oder halte den Knopf für bis zu 18. Lass los, wenn die gewünschte Menge angezeigt wird. **Zum Ziel** führt zum nächsten offenen Auftrag und wählt das passende Werkzeug. Nach der Übung öffnet sich die Kampagnenauswahl. Aus einer Partie führt **Menü → Hauptmenü** zurück zur Auswahl. **Spiel fortsetzen** lädt deine laufende Partie.
+
+Im Hauptmenü erreichst du unter **Ton** den **Testton** und kannst Musik, Umgebung und Effekte einzeln schalten oder gemeinsam einschalten. Der Testton nutzt die Medienlautstärke deines Geräts.
 
 In einem neuen Weidental entscheidet die erste Holzladung, wem du zuerst hilfst. Mira nutzt sechs Holz für das erste Dach im Dorf. Jora repariert damit ihren Hof am anderen Ufer und schickt Stein und Nahrung zurück. Mit einem Bündel in der Pfote leuchten die Ablageplätze, an denen du es abgeben kannst.
 
-Unter **Wege** zeichnest du Wege mit Anfang und Ende. Ausbauten brauchen eine Werkstatt und einen Anschluss an den Dorfweg. Das **Baubuch** zeigt 33 Gebäudearten pro Landschaft, darunter das automatisch öffnende Palisadentor und einen regionalen Bau. Insgesamt gibt es 37 Gebäudearten. Im **Forschungsmenü** erschließt du 12 Technologien über vier Zweige. Am Wegenetz können Familien wachsen, Betriebe Vorprodukte und Werkzeug herstellen, Treffpunkte die Stimmung heben und Wachhäuser Wachen ausbilden. Auf der **Landkarte** springst du zu Dörfern und Rohstoffgebieten. Dort baust du Sammellager, die Wege verkürzen und deiner Pfote den Abbau vor Ort erlauben. Unter **Vorräte** siehst du die Rohstoffe, Vorprodukte und das getragene Bündel als bebilderte Gegenstände.
+Das **Baubuch** zeigt zu jedem Bauplan das Gebäude in seinem Landschaftsstil, seinen Zweck und die benötigten Rohstoffe. Es gibt 33 Gebäudearten pro Landschaft und 37 insgesamt. Wähle einen Bauplan, um den Grundriss in der Welt zu sehen. Die Vorschau zeigt, ob der Bauplatz frei ist oder was noch fehlt. **Freier Platz** sucht eine Fläche in der Nähe. Erst **Bauen** verbraucht Material.
+
+Wähle ein errichtetes Gebäude oder öffne **Wege → Ausbau**, um Stufe 2 anzusehen. Das Fenster zeigt den Nutzen, den Materialpreis und die nötigen Gläubigen und den Glauben. In Kampagnen brauchst du zusätzlich eine Werkstatt und einen Dorfweg zum Gebäude. Glauben wächst unter anderem mit neuen Gebäuden, Ernten und erfüllten Aufträgen. Wunder verbrauchen Wunderkraft, die sich wieder auflädt. Beide Werte stehen auch unter **Vorräte**.
+
+Unter **Wege** zeichnest du Wege mit Anfang und Ende. Im **Forschungsmenü** erschließt du zwölf Technologien über vier Zweige. Am Wegenetz können Familien wachsen, Betriebe Vorprodukte und Werkzeug herstellen, Treffpunkte die Stimmung heben und Wachhäuser Wachen ausbilden. Auf der **Landkarte** springst du zu Dörfern und Rohstoffgebieten und baust Sammellager.
 
 Wähle auf der **Landkarte** ein Rohstoffgebiet, um seine drei Vorkommen zu vergleichen. Mit einem Sammellager kannst du dort Gläubige und das Nilpferd beauftragen. Sie wechseln zu einer anderen erreichbaren Quelle, wenn die erste leer ist. **Zur Quelle** richtet die Kamera für den Abbau von Hand aus. Mit einer Ladung in der Pfote führt **Zum Ziel** zum nächsten Lagerplatz. [Sammelaufträge und Bildvorlage](docs/Sammelauftraege.md)
 
@@ -31,8 +37,10 @@ Im Entwicklungsstand 1.2 führt dich der nächste Auftragsschritt oben rechts zu
 | Steuerung | Kamera und Ziel | Aktionen |
 | --- | --- | --- |
 | Touch | Boden ziehen, mit zwei Fingern schwenken, mit der Geste oder **+** und **−** zoomen, Ziel antippen | Werkzeugleiste und Bestätigung |
-| Controller | Linker Stick bewegt den Zielpunkt, rechter Stick schwenkt, Trigger zoomen | Links und rechts wechseln das Werkzeug, oben zeigt den Auftrag. R1 zeigt das Ziel des gewählten Werkzeugs, unten und L1 öffnen die Werkzeugoptionen. In Menüs wählst du mit Stick oder Steuerkreuz, bestätigst mit A/Kreuz und gehst mit B/Kreis zurück. Start öffnet das Menü, Select oder Options die Landkarte. |
-| Rechner | Maus zum Antippen und Ziehen, Mausrad oder **+** und **−** zum Zoomen, WASD zum Schwenken | 1–6 für Werkzeuge, E für die Aktion oder zum Halten beim Greifen, R zum Drehen, G für das Auftragsziel, H für das Werkzeugziel, M für die Landkarte, Tab für Kapitel, Q für Aufträge, P für Fortschritt, B fürs Baubuch und T für Forschung, I für Vorräte und F für Spielmodi. Pfeiltasten und Enter bedienen Menüs. F12 speichert ein Spielbild. |
+| Controller | Linker Stick bewegt den Zielpunkt, rechter Stick schwenkt, Trigger zoomen | **LB/L1** öffnet das Auswahlrad, **X/Quadrat** das Baurad, **Y/Dreieck** das Wunderrad und **RB/R1** mit der Hand das Nilpferdrad. Stick oder Steuerkreuz wählen, **A/Kreuz** bestätigt, **B/Kreis** geht zurück. Beim Platzieren versetzt das Steuerkreuz den Plan feldweise, **X/Quadrat** dreht und **RB/R1** sucht einen freien Platz. **↑** zeigt außerhalb der Platzierung den Auftrag und **Start** öffnet das Spielmenü. **Select/Options** öffnet die Landkarte. |
+| Rechner | Maus zum Antippen und Ziehen, Mausrad oder **+** und **−** zum Zoomen, WASD zum Schwenken | Leertaste fürs Auswahlrad, 1–6 für Werkzeuge, E für die Aktion oder zum Halten beim Greifen, R zum Drehen, G für das Auftragsziel, H für das Werkzeugziel, M für die Landkarte, Tab für Kapitel, Q für Aufträge, P für Fortschritt, B fürs Baubuch und T für Forschung, I für Vorräte und F fürs Hauptmenü. Pfeiltasten und Enter bedienen Menüs. F12 speichert ein Spielbild. |
+
+Das Spiel blendet die passenden Tasten an den Werkzeugen und bei der Bauvorschau ein. Die Übersicht steht im Spielmenü unter **Steuerung**.
 
 ## Projekt bauen
 

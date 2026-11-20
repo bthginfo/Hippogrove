@@ -17,9 +17,11 @@ mod sound;
 mod story;
 mod terrain;
 mod view;
+mod wheel;
 
 use bevy::{
     asset::{AssetMetaCheck, io::embedded::EmbeddedAssetRegistry},
+    audio::{AudioLoader, AudioPlugin, AudioSource},
     prelude::*,
     render::{
         ExtractSchedule, RenderApp,
@@ -54,13 +56,13 @@ pub fn main() {
     }
     let game = saved.unwrap_or_else(|| Game::start(Mode::Tutorial));
     let mut play = Play::new(&game);
+    play.show_main_menu(&game);
     play.mix = file.load_mix();
-    let mut view = CameraRig::new(&game);
-    if let Some(story) = play.story {
-        story.frame(game.region(), &mut view);
-    }
+    let view = CameraRig::new(&game);
     let mut app = App::new();
     let plugins = DefaultPlugins
+        .build()
+        .disable::<AudioPlugin>()
         .set(AssetPlugin {
             meta_check: AssetMetaCheck::Never,
             ..default()
@@ -86,6 +88,9 @@ pub fn main() {
         .set(android_renderer())
         .add_after::<bevy::render::RenderPlugin>(AndroidMeshPreparation);
     app.add_plugins(plugins)
+        .init_asset::<AudioSource>()
+        .init_asset_loader::<AudioLoader>()
+        .init_non_send_resource::<sound::Playback>()
         .insert_resource(ClearColor(art::rgb(0xc9d1a7)))
         .insert_resource(Time::<Fixed>::from_hz(24.))
         .insert_resource(play)
@@ -203,6 +208,11 @@ fn embed_assets(app: &App) {
         embed!("models/villages/aegean.glb"),
         embed!("ui/atlas.png"),
         embed!("ui/welten.png"),
+        embed!("ui/buildings/valley.png"),
+        embed!("ui/buildings/fjord.png"),
+        embed!("ui/buildings/terraces.png"),
+        embed!("ui/buildings/lake.png"),
+        embed!("ui/buildings/aegean.png"),
         embed!("models/waldwinkel/wood_tree.glb"),
         embed!("models/waldwinkel/resource_rock.glb"),
         embed!("models/waldwinkel/find_mushroom.glb"),
@@ -225,6 +235,11 @@ fn embed_assets(app: &App) {
         embed!("audio/hippo_care.wav"),
         embed!("audio/chapter_chime.wav"),
         embed!("audio/rival_omen.wav"),
+        embed!("audio/ui_focus.wav"),
+        embed!("audio/ui_choose.wav"),
+        embed!("audio/ui_back.wav"),
+        embed!("audio/ui_blocked.wav"),
+        embed!("audio/quest_accepted.wav"),
     ];
     for (name, data) in files {
         assets.insert_asset(Path::new("assets").join(name), Path::new(name), data);

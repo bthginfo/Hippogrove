@@ -4,7 +4,7 @@ use crate::{
     civic::{Branch, Civic, Goods, Tech},
     game::{
         Action, Building, Crop, FARM_REWARD, FirstDelivery, Game, Miracle, PAW_BUNDLE, PAW_LIMIT,
-        Quest, stock_text,
+        Quest, SideQuest, stock_text,
     },
     modes::Mode,
     practice::Step as PracticeStep,
@@ -13,7 +13,10 @@ use crate::{
     sound::{Bus, Cue, Mix},
     story::{Sequence, Story},
     terrain,
+    wheel::Wheel,
 };
+
+pub const CATALOG_PAGE_SIZE: usize = 3;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Tool {
@@ -82,7 +85,9 @@ impl Tool {
 pub enum Panel {
     #[default]
     Closed,
+    MainMenu,
     Menu,
+    Controls,
     Orders(Tool),
     Spells,
     Journey,
@@ -99,6 +104,7 @@ pub enum Panel {
     FirstDelivery,
     Story,
     Modes,
+    Wheel(Wheel),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,6 +113,10 @@ pub enum UiAction {
     Order(Tool, usize),
     Confirm,
     Cancel,
+    MainMenu,
+    Resume,
+    ToggleWheel,
+    QuickWheel(Wheel),
     Rotate,
     Zoom(bool),
     Guide,
@@ -119,7 +129,10 @@ pub enum UiAction {
     ToggleObjective,
     Catalog(Option<Branch>),
     CatalogPage(usize),
+    PreviewBuilding(Building),
+    CatalogBuild,
     SelectBuilding(Building),
+    Inspect,
     ResearchBranch(Branch),
     SelectTech(Tech),
     Do(Action),
@@ -128,6 +141,8 @@ pub enum UiAction {
     ModeTab(bool),
     SelectMode(Mode),
     Sound(Bus),
+    TestSound,
+    EnableSound,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -157,6 +172,15 @@ impl GrabHold {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Feedback {
+    #[default]
+    Action,
+    Selection,
+    Quest,
+    Blocked,
+}
+
 #[derive(Resource)]
 pub struct Play {
     pub aim: Tile,
@@ -165,6 +189,8 @@ pub struct Play {
     panel_history: Vec<(Panel, Option<UiAction>)>,
     pub story: Option<Story>,
     previous_quest: Quest,
+    previous_side_quest: SideQuest,
+    quest_check_at: f32,
     pub free_build_tab: bool,
     pub area_material: Material,
     pub option: usize,
@@ -172,13 +198,15 @@ pub struct Play {
     pub road_anchor: Option<Tile>,
     pub catalog_branch: Option<Branch>,
     pub catalog_page: usize,
+    pub catalog_preview: Building,
     pub tech: Tech,
     pub focus: Option<UiAction>,
     pub notice: String,
     pub notice_until: f32,
-    pub notice_ok: bool,
+    pub notice_kind: Feedback,
+    pub notice_panel: Panel,
     pub last_magic: Option<(Miracle, Tile, u64)>,
-    pub last_sound: Option<(Cue, u64)>,
+    pub sound_cues: Vec<Cue>,
     pub mix: Mix,
     pub paw_gesture: Option<(PawGesture, f32)>,
     pub gamepad: bool,
@@ -211,6 +239,8 @@ impl Play {
             panel_history: Vec::new(),
             story,
             previous_quest: game.city().quest,
+            previous_side_quest: game.city().side_quest(game.region()),
+            quest_check_at: 0.,
             free_build_tab: game.mode.sandbox(),
             area_material: Material::Wood,
             option: 0,
@@ -218,13 +248,15 @@ impl Play {
             road_anchor: None,
             catalog_branch: None,
             catalog_page: 0,
+            catalog_preview: Building::House,
             tech: Tech::Foundations,
             focus: delivery.then_some(UiAction::Focus(game.region().depot)),
             notice: String::new(),
             notice_until: 0.,
-            notice_ok: true,
+            notice_kind: Feedback::Action,
+            notice_panel: Panel::Closed,
             last_magic: None,
-            last_sound: None,
+            sound_cues: Vec::new(),
             mix: Mix::default(),
             paw_gesture: None,
             gamepad: false,
@@ -255,6 +287,51 @@ impl Play {
 
     pub fn building(&self) -> Building {
         Building::from_index(self.option.min(Building::CATALOG_SIZE - 1))
+    }
+
+    pub fn catalog_entries(&self, game: &Game) -> Vec<Building> {
+        match self.catalog_branch {
+            None => Building::ALL.to_vec(),
+            Some(branch) => Civic::ALL
+                .into_iter()
+                .filter(|kind| {
+                    kind.spec().branch == branch && kind.available_in(game.region().kind)
+                })
+                .map(Building::Civic)
+                .collect(),
+        }
+    }
+
+    pub fn set_focus(&mut self, action: Option<UiAction>) {
+        if self.panel != Panel::Closed && action.is_some() && self.focus != action {
+            self.sound_cues.push(Cue::Focus);
+        }
+        if let Some(UiAction::PreviewBuilding(kind)) = action {
+            self.catalog_preview = kind;
+        }
+        self.focus = action;
+    }
+
+    fn notify(&mut self, message: impl Into<String>, kind: Feedback, expires: f32) {
+        self.notice = message.into();
+        self.notice_kind = kind;
+        self.notice_panel = self.panel;
+        self.notice_until = expires;
+        if kind == Feedback::Blocked {
+            self.sound_cues.push(Cue::Blocked);
+        }
+    }
+
+    fn set_catalog_page(&mut self, game: &Game, index: usize) {
+        let entries = self.catalog_entries(game);
+        let pages = entries.len().div_ceil(CATALOG_PAGE_SIZE);
+        self.catalog_page = index.min(pages.saturating_sub(1));
+        self.set_focus(
+            entries
+                .get(self.catalog_page * CATALOG_PAGE_SIZE)
+                .copied()
+                .map(UiAction::PreviewBuilding),
+        );
     }
 
     pub fn miracle(&self) -> Miracle {
@@ -362,6 +439,12 @@ impl Play {
                 };
                 Self::building_tile(game, self.building(), origin, false)
             }
+            Tool::Plan if self.option == 1 => city
+                .buildings
+                .iter()
+                .filter(|site| site.kind.upgrade().is_some() && !site.upgraded)
+                .min_by_key(|site| (!city.connected(region, site), self.aim.distance(site.tile)))
+                .map_or(self.aim, |site| site.tile),
             Tool::Helpers if self.option == 1 => city
                 .buildings
                 .iter()
@@ -462,11 +545,23 @@ impl Play {
     }
 
     fn building_tile(game: &Game, kind: Building, origin: Tile, roadside: bool) -> Tile {
+        Self::nearby_building_tile(game, kind, origin, roadside, None).unwrap_or(origin)
+    }
+
+    fn nearby_building_tile(
+        game: &Game,
+        kind: Building,
+        origin: Tile,
+        roadside: bool,
+        skip: Option<Tile>,
+    ) -> Option<Tile> {
         let region = game.region();
         let city = game.city();
         let mut nearby: Vec<_> = Bounds(origin.offset(-8, -8), origin.offset(8, 8))
             .tiles()
-            .filter(|tile| region.bounds.contains(*tile) && tile.within(origin, 8))
+            .filter(|tile| {
+                Some(*tile) != skip && region.bounds.contains(*tile) && tile.within(origin, 8)
+            })
             .map(|tile| {
                 let disconnected = roadside
                     && !kind
@@ -481,7 +576,6 @@ impl Play {
             .into_iter()
             .map(|(_, tile)| tile)
             .find(|&tile| city.placement_site(region, kind, tile))
-            .unwrap_or(origin)
     }
 
     fn guide_quest(&mut self, game: &Game) -> Option<Tile> {
@@ -702,7 +796,9 @@ impl Play {
         }
         if step == PracticeStep::Complete {
             self.revision = self.revision.wrapping_add(1);
-            self.last_sound = Some((Cue::Reward, self.revision));
+            self.sound_cues.push(Cue::Reward);
+            self.show_main_menu(game);
+            self.free_build_tab = false;
             self.open_panel(Panel::Modes);
             self.focus = Some(UiAction::SelectMode(Mode::Campaign(Biome::Valley)));
         } else if !matches!(step, PracticeStep::Grow | PracticeStep::Delivery) {
@@ -721,7 +817,34 @@ impl Play {
         now: f32,
     ) -> bool {
         self.grab = None;
-        if self.story.is_some() {
+        let before = self.panel;
+        let at_title = self.panel == Panel::MainMenu
+            || self
+                .panel_history
+                .iter()
+                .any(|(panel, _)| *panel == Panel::MainMenu);
+        let action = if action == UiAction::Panel(Panel::Menu) && (at_title || self.story.is_some())
+        {
+            UiAction::MainMenu
+        } else {
+            action
+        };
+        if at_title
+            && !matches!(
+                action,
+                UiAction::MainMenu
+                    | UiAction::Cancel
+                    | UiAction::ModeTab(_)
+                    | UiAction::SelectMode(_)
+                    | UiAction::Panel(Panel::Sound | Panel::Modes)
+                    | UiAction::Sound(_)
+                    | UiAction::TestSound
+                    | UiAction::EnableSound
+            )
+        {
+            return false;
+        }
+        if self.story.is_some() && action != UiAction::MainMenu {
             if matches!(
                 action,
                 UiAction::FinishStory | UiAction::Cancel | UiAction::Confirm
@@ -731,12 +854,29 @@ impl Play {
             return false;
         }
         match action {
+            UiAction::ToggleWheel => match self.panel {
+                Panel::Closed => self.open_panel(Panel::Wheel(Wheel::Tools)),
+                Panel::Wheel(_) => self.close_panels(),
+                _ => {}
+            },
+            UiAction::QuickWheel(wheel) => {
+                if matches!(self.panel, Panel::Closed | Panel::Wheel(_)) {
+                    let same = self.panel == Panel::Wheel(wheel);
+                    self.close_panels();
+                    if !same {
+                        self.open_panel(Panel::Wheel(wheel));
+                    }
+                }
+            }
             UiAction::Tool(Tool::Hand) => {
                 self.tool(Tool::Hand);
                 self.close_panels();
             }
             UiAction::Tool(tool) => {
                 self.open_tool(tool);
+                if self.panel == Panel::Catalog {
+                    self.set_catalog_page(game, self.catalog_page);
+                }
                 if self.panel == Panel::Orders(Tool::Hippo)
                     && !game.campaign.gifts.gathers_low_wood
                     && game.city().practiced_wood(game.region())
@@ -761,43 +901,51 @@ impl Play {
                 };
                 if let Some(reason) = requirement {
                     self.focus = Some(action);
-                    self.notice = reason.into();
-                    self.notice_ok = false;
-                    self.notice_until = now + 4.;
+                    self.notify(reason, Feedback::Blocked, now + 4.);
                     return false;
                 }
+                let assist = matches!(self.panel, Panel::Wheel(_))
+                    && match (tool, index) {
+                        (Tool::Hippo | Tool::Helpers, 0) => {
+                            game.region().source_at(self.aim).is_none()
+                        }
+                        (Tool::Miracles, index) if Miracle::ALL[index] == Miracle::Rain => {
+                            !game.city().building_at(self.aim).is_some_and(|site| {
+                                site.kind == Building::Field && matches!(site.crop, Crop::Dry)
+                            })
+                        }
+                        (Tool::Plan, 1) => game
+                            .city()
+                            .building_at(self.aim)
+                            .is_none_or(|site| site.upgraded || site.kind.upgrade().is_none()),
+                        _ => false,
+                    };
                 self.tool(tool);
                 self.choose(index);
                 self.close_panels();
+                if assist {
+                    self.focus_tool_target(game, view, now);
+                }
             }
             UiAction::Catalog(branch) => {
                 if self.panel != Panel::Catalog {
                     self.open_panel(Panel::Catalog);
                 }
                 self.catalog_branch = branch;
-                self.catalog_page = 0;
-                self.focus = branch.and_then(|branch| {
-                    Civic::ALL
-                        .into_iter()
-                        .find(|&kind| {
-                            kind.spec().branch == branch && kind.available_in(game.region().kind)
-                        })
-                        .map(|kind| UiAction::SelectBuilding(Building::Civic(kind)))
-                });
+                self.set_catalog_page(game, 0);
             }
-            UiAction::CatalogPage(index) => self.catalog_page = index,
-            UiAction::SelectBuilding(kind) => {
-                if let Some(civic) = kind.civic() {
-                    let tech = civic.spec().unlock;
-                    if !game.campaign.research.knows(tech) {
-                        self.tech = tech;
-                        self.open_panel(Panel::Research);
-                        return false;
-                    }
+            UiAction::CatalogPage(index) => self.set_catalog_page(game, index),
+            UiAction::PreviewBuilding(kind) if !self.gamepad => {
+                self.set_focus(Some(UiAction::PreviewBuilding(kind)));
+            }
+            UiAction::PreviewBuilding(kind) | UiAction::SelectBuilding(kind) => {
+                self.select_blueprint(kind, game, view, now);
+            }
+            UiAction::CatalogBuild => self.select_blueprint(self.catalog_preview, game, view, now),
+            UiAction::Inspect => {
+                if self.panel == Panel::Closed {
+                    self.inspect(game);
                 }
-                self.tool(Tool::Build);
-                self.choose(kind.index());
-                self.close_panels();
             }
             UiAction::SelectTech(tech) => {
                 self.tech = tech;
@@ -831,13 +979,20 @@ impl Play {
                     && game.city().walkable(game.region(), self.aim)
                 {
                     self.road_anchor = Some(self.aim);
+                    self.sound_cues.push(Cue::Choose);
                 } else {
-                    self.notice = "Beginne auf freiem Boden im Einflussgebiet.".into();
-                    self.notice_until = now + 4.;
-                    self.notice_ok = false;
+                    self.notify(
+                        "Beginne auf freiem Boden im Einflussgebiet.",
+                        Feedback::Blocked,
+                        now + 4.,
+                    );
                 }
             }
             UiAction::Confirm if self.panel == Panel::Closed => {
+                if self.tool == Tool::Plan && self.option == 1 && self.inspect(game) {
+                    self.sound_cues.push(Cue::Choose);
+                    return false;
+                }
                 if self.target(game) == Action::Hand(self.aim)
                     && game.city().held.is_none()
                     && game
@@ -845,15 +1000,16 @@ impl Play {
                         .building_at(self.aim)
                         .is_some_and(|site| site.kind != Building::Field)
                 {
-                    self.open_panel(Panel::Inspection);
+                    self.inspect(game);
+                    self.sound_cues.push(Cue::Choose);
                     return false;
                 }
                 return self.execute(self.target(game), game, view, now);
             }
             UiAction::Confirm => {}
             UiAction::Cancel => {
-                if self.panel == Panel::Modes && !game.campaign.intro_seen {
-                    self.choose_mode(game.mode, game, view, now);
+                if self.panel == Panel::MainMenu {
+                    return false;
                 } else if let Panel::Area(index) = self.panel {
                     self.back_panel();
                     if self.panel != Panel::Map {
@@ -864,13 +1020,29 @@ impl Play {
                     self.back_panel();
                 } else if self.road_anchor.is_some() {
                     self.road_anchor = None;
-                } else {
+                } else if self.tool != Tool::Hand {
                     self.tool(Tool::Hand);
+                } else {
+                    self.open_panel(Panel::Menu);
                 }
             }
-            UiAction::Rotate => self.rotation = (self.rotation + 1) % 4,
+            UiAction::MainMenu => self.show_main_menu(game),
+            UiAction::Resume => {
+                self.close_panels();
+                if game.city().first_delivery_ready(game.region()) {
+                    self.open_delivery(game);
+                }
+            }
+            UiAction::Rotate if self.tool == Tool::Build && self.panel == Panel::Closed => {
+                self.rotation = (self.rotation + 1) % 4;
+                self.sound_cues.push(Cue::Focus);
+            }
+            UiAction::Rotate => {}
             UiAction::Zoom(closer) => {
                 view.zoom_toward(if closer { 0.24 } else { -0.24 }, Some(self.aim.world()))
+            }
+            UiAction::ToolTarget if self.panel == Panel::Closed && self.tool == Tool::Build => {
+                self.suggest_plot(game, view, now);
             }
             UiAction::Guide | UiAction::ToolTarget => {
                 let tool_target = action == UiAction::ToolTarget
@@ -899,6 +1071,7 @@ impl Play {
                 view.focus_action(self.aim);
                 self.pointer = None;
                 self.guide_marker = Some((self.aim, now + 6.));
+                self.sound_cues.push(Cue::Choose);
             }
             UiAction::Focus(tile) => {
                 if self.panel == Panel::FirstDelivery {
@@ -935,18 +1108,64 @@ impl Play {
                     self.focus = Some(UiAction::AreaMaterial(area.material));
                 }
             }
-            UiAction::Panel(panel) => self.open_panel(panel),
+            UiAction::Panel(panel) => {
+                self.open_panel(panel);
+                if self.panel == Panel::Catalog && panel == Panel::Catalog {
+                    self.set_catalog_page(game, self.catalog_page);
+                }
+                if self.panel == Panel::SideQuest && panel == Panel::SideQuest {
+                    self.focus = Some(match game.city().side_quest(game.region()) {
+                        SideQuest::Available => UiAction::Do(Action::AcceptLocal),
+                        SideQuest::Ready => UiAction::Do(Action::FinishLocal),
+                        SideQuest::Active if game.region().quests.is_some() => UiAction::Guide,
+                        _ => UiAction::Cancel,
+                    });
+                }
+            }
             UiAction::ToggleObjective => self.open_panel(Panel::Quests),
             UiAction::ReplayArrival if game.campaign.active == 0 => {
                 self.start_story(Self::arrival(game), game, view);
             }
             UiAction::ReplayArrival | UiAction::FinishStory => {}
-            UiAction::ModeTab(sandbox) => self.free_build_tab = sandbox,
+            UiAction::ModeTab(sandbox) => {
+                self.free_build_tab = sandbox;
+                if self.panel != Panel::Modes {
+                    self.open_panel(Panel::Modes);
+                    self.focus = Some(UiAction::SelectMode(if sandbox {
+                        Mode::Sandbox(Biome::Valley)
+                    } else {
+                        Mode::Campaign(Biome::Valley)
+                    }));
+                }
+            }
             UiAction::SelectMode(mode) => {
                 self.choose_mode(mode, game, view, now);
             }
             UiAction::Sound(bus) => self.mix.toggle(bus),
+            UiAction::TestSound => {
+                self.sound_cues.push(Cue::Test);
+            }
+            UiAction::EnableSound => self.mix = Mix::default(),
             UiAction::Do(action) => return self.execute(action, game, view, now),
+        }
+        if action == UiAction::Cancel
+            || (matches!(before, Panel::Wheel(_))
+                && self.panel == Panel::Closed
+                && matches!(action, UiAction::ToggleWheel | UiAction::QuickWheel(_)))
+        {
+            self.sound_cues.push(Cue::Back);
+        } else if self.panel != before
+            || matches!(
+                action,
+                UiAction::Catalog(_)
+                    | UiAction::CatalogPage(_)
+                    | UiAction::ResearchBranch(_)
+                    | UiAction::SelectTech(_)
+                    | UiAction::Sound(_)
+                    | UiAction::EnableSound
+            )
+        {
+            self.sound_cues.push(Cue::Choose);
         }
         false
     }
@@ -957,6 +1176,93 @@ impl Play {
             Tool::Miracles => Panel::Spells,
             _ => Panel::Orders(tool),
         });
+    }
+
+    fn select_blueprint(&mut self, kind: Building, game: &Game, view: &mut CameraRig, now: f32) {
+        if let Some(civic) = kind.civic() {
+            let tech = civic.spec().unlock;
+            if !game.campaign.research.knows(tech) {
+                self.tech = tech;
+                self.open_panel(Panel::Research);
+                return;
+            }
+        }
+        let assist = matches!(self.panel, Panel::Catalog | Panel::Wheel(_))
+            && !game.city().placement_site(game.region(), kind, self.aim);
+        if self.tool != Tool::Build || self.building() != kind {
+            self.rotation = 0;
+        }
+        self.tool(Tool::Build);
+        self.choose(kind.index());
+        self.close_panels();
+        self.pointer = None;
+        if assist {
+            self.focus_tool_target(game, view, now);
+        }
+    }
+
+    fn suggest_plot(&mut self, game: &Game, view: &mut CameraRig, now: f32) {
+        let kind = self.building();
+        let region = game.region();
+        let tile = if kind == Building::Shrine {
+            Some(region.frontier)
+        } else {
+            let origin = if game.city().influence(region, self.aim) {
+                self.aim
+            } else {
+                region.start
+            };
+            Self::nearby_building_tile(game, kind, origin, false, Some(self.aim))
+        };
+        if let Some(tile) = tile {
+            self.aim = tile;
+            self.pointer = None;
+            self.guide_marker = Some((tile, now + 6.));
+            view.focus_action(tile);
+            self.sound_cues.push(Cue::Choose);
+        } else {
+            let reason = game.blueprint_readiness(kind).err().unwrap_or_else(|| {
+                "Kein freier Bauplatz in der Nähe. Suche in einem anderen Bereich.".into()
+            });
+            self.notify(reason, Feedback::Blocked, now + 4.);
+        }
+    }
+
+    fn inspect(&mut self, game: &Game) -> bool {
+        let Some(site) = game.city().building_at(self.aim) else {
+            return false;
+        };
+        self.open_panel(Panel::Inspection);
+        self.focus = Some(if site.kind.upgrade().is_some() && !site.upgraded {
+            UiAction::Do(Action::Upgrade(site.tile))
+        } else if site.kind == Building::Civic(Civic::Barracks) {
+            UiAction::Do(Action::Muster(site.tile))
+        } else {
+            UiAction::Cancel
+        });
+        true
+    }
+
+    fn focus_tool_target(&mut self, game: &Game, view: &mut CameraRig, now: f32) {
+        self.aim = self.guide_tile(game);
+        self.pointer = None;
+        self.guide_marker = Some((self.aim, now + 6.));
+        view.focus_action(self.aim);
+    }
+
+    pub fn show_main_menu(&mut self, game: &Game) {
+        self.story = None;
+        self.panel_history.clear();
+        self.panel = Panel::MainMenu;
+        self.pointer = None;
+        self.focus = Some(if let Some(mode) = game.continue_mode() {
+            UiAction::SelectMode(mode)
+        } else if game.practice_required() {
+            UiAction::SelectMode(Mode::Tutorial)
+        } else {
+            UiAction::ModeTab(false)
+        });
+        self.revision = self.revision.wrapping_add(1);
     }
 
     fn open_panel(&mut self, panel: Panel) {
@@ -978,7 +1284,10 @@ impl Play {
         }
         self.panel = panel;
         self.focus = match panel {
-            Panel::Menu => Some(UiAction::Panel(Panel::Map)),
+            Panel::Menu => Some(UiAction::MainMenu),
+            Panel::Sound => Some(UiAction::TestSound),
+            Panel::Wheel(wheel) => Some(wheel.initial(self.tool, self.option)),
+            Panel::Controls => Some(UiAction::Cancel),
             Panel::Map => Some(UiAction::Landscape),
             Panel::Orders(tool) => Some(UiAction::Order(
                 tool,
@@ -995,15 +1304,14 @@ impl Play {
             Panel::Quests => Some(UiAction::Guide),
             Panel::Research => Some(UiAction::SelectTech(self.tech)),
             Panel::Progress => Some(UiAction::Do(Action::Learn(crate::game::Talent::Rain))),
-            Panel::Catalog if self.catalog_branch.is_none() => {
-                Some(UiAction::SelectBuilding(Building::House))
-            }
             _ => None,
         };
     }
 
     fn back_panel(&mut self) {
-        (self.panel, self.focus) = self.panel_history.pop().unwrap_or((Panel::Closed, None));
+        let (panel, focus) = self.panel_history.pop().unwrap_or((Panel::Closed, None));
+        self.panel = panel;
+        self.set_focus(focus);
     }
 
     fn close_panels(&mut self) {
@@ -1037,6 +1345,7 @@ impl Play {
     fn choose_mode(&mut self, mode: Mode, game: &mut Game, view: &mut CameraRig, now: f32) {
         match game.switch_mode(mode) {
             Ok(name) => {
+                game.replay_finished_practice();
                 let revision = self.revision.wrapping_add(1);
                 let gamepad = self.gamepad;
                 let mix = self.mix;
@@ -1050,21 +1359,18 @@ impl Play {
                     story.frame(game.region(), view);
                     self.focus = Some(UiAction::FinishStory);
                 } else {
-                    self.notice = name;
-                    self.notice_until = now + 3.;
-                    self.notice_ok = true;
+                    self.notify(name, Feedback::Selection, now + 3.);
                 }
             }
             Err(reason) => {
-                self.notice = reason;
-                self.notice_until = now + 5.;
-                self.notice_ok = false;
+                self.notify(reason, Feedback::Blocked, now + 5.);
             }
         }
     }
 
     fn execute(&mut self, action: Action, game: &mut Game, view: &mut CameraRig, now: f32) -> bool {
         let previous = game.campaign.active;
+        let quest = game.city().quest;
         let carried = game.city().held.is_some();
         let opening_choice = game.city().opening_choice();
         let first_island_landing = matches!(action, Action::Travel(4))
@@ -1076,9 +1382,20 @@ impl Play {
                 .is_some_and(Option::is_none);
         let result = game.act(action);
         let success = result.is_ok();
-        self.notice = result.unwrap_or_else(|error| error);
-        self.notice_until = now + 5.;
-        self.notice_ok = success;
+        let advanced = success && previous == game.campaign.active && quest != game.city().quest;
+        let kind = if !success {
+            Feedback::Blocked
+        } else if advanced
+            || matches!(
+                action,
+                Action::AcceptLocal | Action::FinishLocal | Action::Give
+            )
+        {
+            Feedback::Quest
+        } else {
+            Feedback::Action
+        };
+        self.notify(result.unwrap_or_else(|message| message), kind, now + 5.);
         if success {
             let took = !carried && game.city().held.is_some();
             let chose_delivery = opening_choice.is_none()
@@ -1086,24 +1403,27 @@ impl Play {
                 && matches!(action, Action::Hand(_));
             self.revision = self.revision.wrapping_add(1);
             let cue = match action {
-                Action::Hand(_) if chose_delivery => Some(Cue::Reward),
-                Action::Hand(_) if carried => Some(Cue::Drop),
-                Action::Grab(..) | Action::Hand(_) if game.city().held.is_some() => Some(Cue::Lift),
-                Action::Pet | Action::Praise => Some(Cue::Pet),
-                Action::Hand(tile) if game.region().source_at(tile).is_none() => Some(Cue::Gather),
-                Action::Cast(spell, _) => Some(Cue::Cast(spell)),
+                Action::Hand(_) if chose_delivery => Cue::Reward,
+                Action::Hand(_) if carried => Cue::Drop,
+                Action::Grab(..) | Action::Hand(_) if game.city().held.is_some() => Cue::Lift,
+                Action::Pet | Action::Praise => Cue::Pet,
+                Action::Hand(tile) if game.region().source_at(tile).is_none() => Cue::Gather,
+                Action::Cast(spell, _) => Cue::Cast(spell),
                 Action::Build(..) | Action::Upgrade(_) | Action::Road(..) | Action::Repair => {
-                    Some(Cue::Build)
+                    Cue::Build
                 }
                 Action::MoveHippo(_)
                 | Action::Assign(..)
                 | Action::AssignArea(..)
-                | Action::RecallHelpers => Some(Cue::Order),
-                Action::FinishLocal | Action::Research(_) | Action::Learn(_) => Some(Cue::Reward),
-                _ => None,
+                | Action::RecallHelpers => Cue::Order,
+                Action::AcceptLocal => Cue::Quest,
+                Action::FinishLocal | Action::Research(_) | Action::Learn(_) => Cue::Reward,
+                Action::Give => Cue::Drop,
+                _ => Cue::Choose,
             };
-            if let Some(cue) = cue {
-                self.last_sound = Some((cue, self.revision));
+            self.sound_cues.push(cue);
+            if advanced && !game.region().tutorial {
+                self.sound_cues.push(Cue::Reward);
             }
             let gesture = match action {
                 Action::Hand(_) if carried => Some(PawGesture::Release),
@@ -1141,6 +1461,18 @@ impl Play {
             if matches!(action, Action::Road(..)) {
                 self.road_anchor = None;
             }
+            if matches!(action, Action::Upgrade(_)) {
+                self.focus = Some(UiAction::Cancel);
+            }
+            if action == Action::AcceptLocal {
+                self.focus = Some(match game.city().side_quest(game.region()) {
+                    SideQuest::Ready => UiAction::Do(Action::FinishLocal),
+                    SideQuest::Active if game.region().quests.is_some() => UiAction::Guide,
+                    _ => UiAction::Cancel,
+                });
+            } else if action == Action::FinishLocal {
+                self.focus = Some(UiAction::Cancel);
+            }
             if let Action::Cast(spell, tile) = action {
                 self.last_magic = Some((spell, tile, self.revision));
             }
@@ -1151,11 +1483,11 @@ impl Play {
                 self.road_anchor = None;
                 self.last_magic = None;
                 self.aim = game.region().sources[0].tile;
-                self.notice = game.region().subtitle.clone();
-                self.notice_until = now + 8.;
+                self.notify(&game.region().subtitle, Feedback::Selection, now + 8.);
                 *view = CameraRig::new(game);
                 view.jump = true;
                 self.previous_quest = game.city().quest;
+                self.previous_side_quest = game.city().side_quest(game.region());
                 self.hippo_happy_at = None;
                 self.hippo_deliveries = game.city().hippo_deliveries;
                 self.wood_help = game
@@ -1188,7 +1520,7 @@ impl Play {
         let notice = if finished {
             self.hippo_happy_at = Some(now);
             self.revision = self.revision.wrapping_add(1);
-            self.last_sound = Some((Cue::Pet, self.revision));
+            self.sound_cues.push(Cue::Pet);
             Some("Dein Nilpferd hat das Holz selbst ins Lager gebracht.")
         } else if active.is_some() && self.wood_help.is_none() {
             Some("Das Holz wird knapp. Dein Nilpferd holt jetzt selbst Nachschub.")
@@ -1203,14 +1535,40 @@ impl Play {
         self.wood_help = active;
         self.hippo_deliveries = delivered;
         if let Some(notice) = notice {
-            self.notice = notice.into();
-            self.notice_ok = true;
-            self.notice_until = now + 5.5;
+            self.notify(notice, Feedback::Action, now + 5.5);
         }
     }
 
-    pub fn observe_shelter(&mut self, game: &Game, view: &mut CameraRig) {
-        let quest = game.city().quest;
+    pub fn observe_quests(&mut self, game: &Game, view: &mut CameraRig, now: f32) {
+        let city = game.city();
+        let region = game.region();
+        let quest = city.quest;
+        if quest != self.previous_quest
+            && !region.tutorial
+            && (self.notice_kind != Feedback::Quest || now >= self.notice_until)
+        {
+            let message = if quest == Quest::Complete {
+                "Hauptauftrag abgeschlossen".into()
+            } else {
+                format!("Nächster Hauptauftrag · {}", city.quest_title(region))
+            };
+            self.notify(message, Feedback::Quest, now + 6.);
+            self.sound_cues.push(Cue::Reward);
+        }
+        if city.local_accepted && now >= self.quest_check_at {
+            self.quest_check_at = now + 0.35;
+            let side = city.side_quest(region);
+            if self.previous_side_quest == SideQuest::Active && side == SideQuest::Ready {
+                let (title, _, _) = city.local_quest(region);
+                self.notify(
+                    format!("{title} · Belohnung abholbereit"),
+                    Feedback::Quest,
+                    now + 6.,
+                );
+                self.sound_cues.push(Cue::Quest);
+            }
+            self.previous_side_quest = side;
+        }
         if self.story.is_none()
             && game.campaign.active == 0
             && game.city().opening_choice().is_none()
@@ -1443,20 +1801,11 @@ impl Target {
             }
             Action::Upgrade(tile) => {
                 self.detail = match city.upgrade_plan(region, tile) {
-                    Ok((index, price)) => format!(
-                        "{} · {}",
-                        stock_text(price),
-                        city.buildings[index].kind.use_text()
-                    ),
-                    Err(error) => {
-                        self.legal = false;
-                        error
-                    }
+                    Ok((index, _)) => city.buildings[index].kind.upgrade().unwrap().benefit.into(),
+                    Err(error) => error,
                 };
-                city.building_at(tile).map_or_else(
-                    || "Ausbauen".into(),
-                    |site| format!("{} ausbauen", site.kind.name()),
-                )
+                self.legal = city.building_at(tile).is_some();
+                "Ausbau ansehen".into()
             }
             Action::Settle(index) => {
                 let district = &region.districts[index];

@@ -20,10 +20,11 @@ use crate::{
     civic::Civic,
     game::{Building, Game, Miracle},
     hud::{self, HitTest},
-    play::{CameraRig, Panel, Play, Tool, UiAction},
+    play::{CATALOG_PAGE_SIZE, CameraRig, Panel, Play, Tool, UiAction},
     region::{CELL, Material, Tile},
     terrain,
     view::{Board, WorldCamera},
+    wheel::Wheel,
 };
 
 const SOUTH: u32 = 1;
@@ -35,8 +36,9 @@ const DOWN: u32 = 32;
 const MENU: u32 = 64;
 const ROTATE: u32 = 128;
 const GUIDE: u32 = 256;
-const PROGRESS: u32 = 512;
+const WHEEL: u32 = 512;
 const MAP: u32 = 1024;
+const MIRACLES: u32 = 2048;
 
 #[derive(Clone, Copy, Default)]
 struct Pad {
@@ -186,8 +188,9 @@ fn read_pad(gamepads: &Query<&Gamepad>) -> Pad {
             (GamepadButton::Start, MENU),
             (GamepadButton::West, ROTATE),
             (GamepadButton::RightTrigger, GUIDE),
-            (GamepadButton::LeftTrigger, PROGRESS),
+            (GamepadButton::LeftTrigger, WHEEL),
             (GamepadButton::Select, MAP),
+            (GamepadButton::North, MIRACLES),
         ];
         let axis = |axis| pad.get(axis).unwrap_or(0.);
         Pad {
@@ -253,6 +256,9 @@ pub struct Controls {
     key_grab: bool,
     pad_grab: bool,
     menu_direction: MenuDirection,
+    pad_wheel: Option<Wheel>,
+    stick_waits_for_center: bool,
+    mouse_position: Option<Vec2>,
 }
 
 #[derive(Default)]
@@ -570,6 +576,8 @@ pub fn collect(
         controls.key_grab = false;
         controls.pad_grab = false;
         controls.menu_direction = MenuDirection::default();
+        controls.pad_wheel = None;
+        controls.stick_waits_for_center = false;
         touches.clear();
         mouse.clear();
         wheel.clear();
@@ -697,8 +705,24 @@ pub fn collect(
             }
         }
     }
-    if let (Some(gesture), Some(cursor)) = (&mut controls.mouse, window.cursor_position()) {
+    let mouse_position = window.cursor_position();
+    let mouse_moved = controls.mouse_position != mouse_position;
+    controls.mouse_position = mouse_position;
+    if let (Some(gesture), Some(cursor)) = (&mut controls.mouse, mouse_position) {
         drag(gesture, cursor, &mut play, &mut view, size.y);
+    }
+    if mouse_moved
+        && !touched
+        && controls.fingers.is_empty()
+        && controls.mouse.is_none()
+        && play.panel == Panel::Closed
+        && play.tool == Tool::Build
+    {
+        if let Some(cursor) = mouse_position.filter(|&cursor| !hud::hit(&areas, cursor, scale).0) {
+            play.gamepad = false;
+            play.pointer = Some(cursor);
+            select(&mut play, &game, camera, pose, cursor);
+        }
     }
     for scroll in wheel.read().filter(|scroll| scroll.window == entity) {
         if play.panel == Panel::Closed {
@@ -745,6 +769,7 @@ pub fn collect(
     }
     for (key, action) in [
         (KeyCode::KeyR, UiAction::Rotate),
+        (KeyCode::KeyX, UiAction::Inspect),
         (KeyCode::KeyG, UiAction::Guide),
         (KeyCode::KeyH, UiAction::ToolTarget),
         (KeyCode::Equal, UiAction::Zoom(true)),
@@ -757,8 +782,9 @@ pub fn collect(
         (KeyCode::KeyB, UiAction::Panel(Panel::Catalog)),
         (KeyCode::KeyT, UiAction::Panel(Panel::Research)),
         (KeyCode::KeyI, UiAction::Panel(Panel::Inventory)),
-        (KeyCode::KeyF, UiAction::Panel(Panel::Modes)),
+        (KeyCode::KeyF, UiAction::MainMenu),
         (KeyCode::F1, UiAction::Panel(Panel::Menu)),
+        (KeyCode::Space, UiAction::ToggleWheel),
     ] {
         if keys.just_pressed(key) {
             play.activate(action, &mut game, &mut view, now);
@@ -772,7 +798,14 @@ pub fn collect(
                 - f32::from(keys.just_pressed(KeyCode::ArrowUp)),
         );
         if direction != Vec2::ZERO || keys.just_pressed(KeyCode::Enter) {
-            play.focus = hud::move_focus(&areas, play.focus, direction);
+            if let Panel::Wheel(wheel) = play.panel {
+                let turn = (direction.x + direction.y).signum() as i32;
+                let choice = wheel.step(play.focus, if direction == Vec2::ZERO { 0 } else { turn });
+                play.set_focus(Some(choice));
+            } else {
+                let focus = hud::move_focus(&areas, play.focus, direction);
+                play.set_focus(focus);
+            }
             if keys.just_pressed(KeyCode::Enter) {
                 if let Some(action) = play.focus {
                     play.activate(action, &mut game, &mut view, now);
@@ -798,9 +831,9 @@ pub fn collect(
     if !pad.connected || touched || !controls.fingers.is_empty() {
         return;
     }
-    let left = deadzone(pad.left);
+    let raw_left = deadzone(pad.left);
     let right = deadzone(pad.right);
-    if pressed != 0 || left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13 {
+    if pressed != 0 || raw_left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13 {
         if !play.gamepad {
             play.pointer = None;
             play.gamepad = true;
@@ -809,21 +842,121 @@ pub fn collect(
     if !play.gamepad {
         return;
     }
-    if play.panel == Panel::Closed {
-        controls.menu_direction.panel = Panel::Closed;
-        view.pan(right.x * dt * 16., right.y * dt * 16.);
-        if pad.zoom.abs() > 0.13 {
-            view.zoom(pad.zoom * dt * 1.20);
+    if pressed & WHEEL != 0 && matches!(play.panel, Panel::Closed | Panel::Wheel(_)) {
+        controls.pad_grab = false;
+        play.activate(UiAction::ToggleWheel, &mut game, &mut view, now);
+        return;
+    }
+    if matches!(play.panel, Panel::Closed | Panel::Wheel(_)) {
+        let building = play.panel == Panel::Closed && play.tool == Tool::Build;
+        let quick_wheel = if pressed & ROTATE != 0 && !building {
+            Some(Wheel::Build)
+        } else if pressed & MIRACLES != 0 {
+            Some(Wheel::Miracles)
+        } else if pressed & GUIDE != 0
+            && (play.tool == Tool::Hand || matches!(play.panel, Panel::Wheel(_)))
+        {
+            Some(Wheel::Hippo)
+        } else {
+            None
+        };
+        if let Some(wheel) = quick_wheel {
+            controls.pad_grab = false;
+            play.activate(UiAction::QuickWheel(wheel), &mut game, &mut view, now);
+            return;
         }
     }
+    let wheel = match play.panel {
+        Panel::Wheel(wheel) => Some(wheel),
+        _ => None,
+    };
+    let centered = pad.left.length_squared() < 0.24 * 0.24;
+    if controls.pad_wheel != wheel {
+        controls.pad_wheel = wheel;
+        controls.stick_waits_for_center = !centered;
+    } else if centered {
+        controls.stick_waits_for_center = false;
+    }
+    let left = if controls.stick_waits_for_center {
+        Vec2::ZERO
+    } else {
+        raw_left
+    };
     let horizontal = i32::from(pressed & RIGHT != 0) - i32::from(pressed & LEFT != 0);
     let vertical = i32::from(pressed & DOWN != 0) - i32::from(pressed & UP != 0);
-    if play.panel == Panel::Closed {
-        if horizontal != 0 {
-            let i = (play.tool as i32 + horizontal).rem_euclid(Tool::ALL.len() as i32);
-            play.tool(Tool::ALL[i as usize]);
+    if let Some(wheel) = wheel {
+        controls.menu_direction = MenuDirection::default();
+        let turn = (horizontal + vertical).signum();
+        let choice = if turn != 0 {
+            wheel.step(play.focus, turn)
+        } else if controls.stick_waits_for_center {
+            wheel.step(play.focus, 0)
+        } else {
+            wheel.aim(play.focus, pad.left)
+        };
+        play.set_focus(Some(choice));
+        let chosen = if pressed & EAST != 0 {
+            Some(UiAction::Cancel)
+        } else if pressed & MENU != 0 {
+            Some(UiAction::Panel(Panel::Menu))
+        } else if pressed & MAP != 0 {
+            Some(UiAction::Panel(Panel::Map))
+        } else if pressed & SOUTH != 0 {
+            play.focus
+        } else {
+            None
+        };
+        if let Some(action) = chosen {
+            play.activate(action, &mut game, &mut view, now);
         }
-        if left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13 {
+        return;
+    }
+    if play.panel == Panel::Catalog && pressed & (WHEEL | GUIDE) != 0 {
+        let page = if pressed & WHEEL != 0 {
+            play.catalog_page.saturating_sub(1)
+        } else {
+            let pages = play
+                .catalog_entries(&game)
+                .len()
+                .div_ceil(CATALOG_PAGE_SIZE);
+            (play.catalog_page + 1).min(pages.saturating_sub(1))
+        };
+        if page != play.catalog_page {
+            play.activate(UiAction::CatalogPage(page), &mut game, &mut view, now);
+        }
+        return;
+    }
+    let building = play.panel == Panel::Closed && play.tool == Tool::Build;
+    let zooming = pad.zoom.abs() > 0.13;
+    if play.panel == Panel::Closed {
+        view.pan(right.x * dt * 16., right.y * dt * 16.);
+        if zooming {
+            view.zoom_toward(pad.zoom * dt * 1.20, building.then(|| play.aim.world()));
+        }
+        if building {
+            let nudge = controls.menu_direction.update(
+                Panel::Closed,
+                pad.buttons | pressed,
+                Vec2::ZERO,
+                now,
+            );
+            let bounds = game.region().bounds;
+            let aim = play.aim.offset(nudge.x as i16, nudge.y as i16);
+            if nudge != Vec2::ZERO && bounds.contains(aim) {
+                play.aim = aim;
+                play.guide_marker = None;
+                play.pointer = None;
+            } else if right != Vec2::ZERO || zooming {
+                play.pointer = None;
+            }
+        } else {
+            controls.menu_direction = MenuDirection::default();
+            if horizontal != 0 {
+                let i = (play.tool as i32 + horizontal).rem_euclid(Tool::ALL.len() as i32);
+                play.tool(Tool::ALL[i as usize]);
+            }
+        }
+        if left != Vec2::ZERO || (!building && (right != Vec2::ZERO || zooming)) {
             let position = play
                 .pointer
                 .or_else(|| aim_on_screen(&play, &game, camera, pose))
@@ -842,7 +975,7 @@ pub fn collect(
                 play.activate(UiAction::Confirm, &mut game, &mut view, now);
             }
         }
-        if vertical != 0 && play.panel == Panel::Closed {
+        if !building && vertical != 0 && play.panel == Panel::Closed {
             let action = if vertical < 0 {
                 UiAction::Guide
             } else if play.tool == Tool::Hand {
@@ -852,12 +985,24 @@ pub fn collect(
             };
             play.activate(action, &mut game, &mut view, now);
         }
+        if pressed & ROTATE != 0 && building {
+            play.activate(UiAction::Rotate, &mut game, &mut view, now);
+        }
+        if pressed & GUIDE != 0 && play.panel == Panel::Closed {
+            play.activate(UiAction::ToolTarget, &mut game, &mut view, now);
+        }
     } else {
+        let menu_stick = if controls.stick_waits_for_center {
+            Vec2::ZERO
+        } else {
+            pad.left
+        };
         let direction =
             controls
                 .menu_direction
-                .update(play.panel, pad.buttons | pressed, pad.left, now);
-        play.focus = hud::move_focus(&areas, play.focus, direction);
+                .update(play.panel, pad.buttons | pressed, menu_stick, now);
+        let focus = hud::move_focus(&areas, play.focus, direction);
+        play.set_focus(focus);
         if pressed & SOUTH != 0 {
             if let Some(action) = play.focus {
                 play.activate(action, &mut game, &mut view, now);
@@ -867,18 +1012,10 @@ pub fn collect(
     if pad.buttons & SOUTH == 0 && std::mem::take(&mut controls.pad_grab) {
         play.finish_grab(&mut game, &mut view, now);
     }
-    let context = if play.panel == Panel::Closed && play.tool != Tool::Hand {
-        UiAction::Tool(play.tool)
-    } else {
-        UiAction::Panel(Panel::Progress)
-    };
     for (bit, action) in [
         (EAST, UiAction::Cancel),
         (MENU, UiAction::Panel(Panel::Menu)),
         (MAP, UiAction::Panel(Panel::Map)),
-        (ROTATE, UiAction::Rotate),
-        (GUIDE, UiAction::ToolTarget),
-        (PROGRESS, context),
     ] {
         if pressed & bit != 0 {
             play.activate(action, &mut game, &mut view, now);

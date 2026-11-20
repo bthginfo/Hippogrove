@@ -3,6 +3,7 @@ package game.hippogrove;
 import android.app.NativeActivity;
 import android.content.Context;
 import android.hardware.input.InputManager;
+import android.media.AudioManager;
 import android.os.Build;
 import android.view.DisplayCutout;
 import android.view.View;
@@ -23,6 +24,7 @@ public final class GameActivity extends NativeActivity
     protected void onCreate(android.os.Bundle state) {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         super.onCreate(state);
+        setVolumeControlStream(AudioManager.STREAM_MUSIC);
         inputs = (InputManager) getSystemService(Context.INPUT_SERVICE);
         getWindow().getDecorView().setOnApplyWindowInsetsListener(this);
     }

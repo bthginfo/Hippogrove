@@ -251,11 +251,54 @@ def pouch(p, l, o, r):
     l([(24,24),(40,24)], SHADE, 5)
     l([(30,27),(25,36)], '#876440', 2)
 
+def blocked(p, l, o, r):
+    p([(32,5),(56,49),(52,54),(12,54),(8,49)], EDGE)
+    p([(32,9),(52,49),(12,49)], '#d99558')
+    p([(32,13),(46,43),(18,43)], LIGHT)
+    l([(32,23),(32,34)], EDGE, 5)
+    o((29,38,35,44), EDGE)
+
+def speaker(p, l, o, r):
+    p([(10,23),(21,23),(36,12),(39,15),(39,49),(36,52),(21,41),(10,41)], EDGE)
+    p([(13,26),(23,26),(35,17),(35,47),(23,38),(13,38)], GOLD)
+    l([(44,24),(49,30),(49,35),(44,41)], LIGHT, 3)
+    l([(49,17),(56,25),(57,33),(55,41),(49,48)], '#d6a766', 3)
+
+def rotate(p, l, o, r):
+    l([(46,45),(38,52),(26,53),(15,47),(10,38),(11,28),(19,19),(34,16),(45,22)], EDGE, 9)
+    l([(46,45),(38,52),(26,53),(15,47),(10,38),(11,28),(19,19),(34,16),(45,22)], GOLD, 5)
+    p([(38,12),(53,17),(51,33),(33,28)], EDGE)
+    p([(39,16),(49,19),(48,29),(36,26)], LIGHT)
+
+def controller(p, l, o, r):
+    r((9,19,55,46), '#c9ab70', 12, EDGE)
+    l([(16,34),(30,34)], EDGE, 3)
+    l([(23,27),(23,41)], EDGE, 3)
+    o((42,24,49,31), '#704a33')
+    o((36,33,43,40), '#704a33')
+
+def home(p, l, o, r):
+    p([(13,29),(32,9),(51,29),(51,53),(13,53)], EDGE)
+    p([(16,31),(32,16),(48,31),(48,50),(16,50)], GOLD)
+    r((26,33,38,51), '#81523b', 3)
+    l([(10,31),(32,9),(54,31)], LIGHT, 4)
+
+def pad_square(p, l, o, r):
+    l([(12,12),(52,12),(52,52),(12,52),(12,12)], LIGHT, 7)
+
+def pad_triangle(p, l, o, r):
+    l([(32,11),(54,51),(10,51),(32,11)], LIGHT, 7)
+
+def pad_cross(p, l, o, r):
+    l([(14,14),(50,50)], '#354d41', 8)
+    l([(50,14),(14,50)], '#354d41', 8)
+
 
 if __name__ == '__main__':
-    atlas = Image.new('RGBA', (4 * SIZE, 7 * SIZE))
+    atlas = Image.new('RGBA', (4 * SIZE, 9 * SIZE))
     glyphs = [wood, stone, food, prayer, mana, paw, hammer, people, hippo, magic, map_icon, scroll, book, chart, pin, road,
-              boards, blocks, mallet, berry_basket, pouch, frostberries, rice, dates, olives, bamboo, jade]
+              boards, blocks, mallet, berry_basket, pouch, frostberries, rice, dates, olives, bamboo, jade,
+              blocked, speaker, rotate, controller, home, pad_square, pad_triangle, pad_cross]
     for index, glyph in enumerate(glyphs):
         atlas.paste(icon(glyph), ((index % 4) * SIZE, (index // 4) * SIZE))
     out = Path(__file__).resolve().parent.parent / 'assets' / 'ui' / 'atlas.png'

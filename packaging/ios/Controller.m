@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <AVFoundation/AVFoundation.h>
 #import <GameController/GameController.h>
 #import <UIKit/UIKit.h>
 
@@ -9,6 +10,16 @@ extern void hippogrove_controller_state(float lx, float ly, float rx, float ry,
 extern void hippogrove_safe_insets(float left, float top, float right, float bottom);
 
 static GCController *active;
+
+static void activate_game_audio(void) {
+    AVAudioSession *session = AVAudioSession.sharedInstance;
+    NSError *error = nil;
+    if (![session setCategory:AVAudioSessionCategoryPlayback
+                  withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&error]
+            || ![session setActive:YES error:&error]) {
+        NSLog(@"Hippogrove Audio: %@", error.localizedDescription);
+    }
+}
 
 static UIWindow *key_window(void) {
     UIApplication *application = UIApplication.sharedApplication;
@@ -46,7 +57,8 @@ static void publish(GCExtendedGamepad *pad) {
         | (pad.buttonX.pressed ? 128 : 0)
         | (pad.rightShoulder.pressed ? 256 : 0)
         | (pad.leftShoulder.pressed ? 512 : 0)
-        | (pad.buttonOptions.pressed ? 1024 : 0);
+        | (pad.buttonOptions.pressed ? 1024 : 0)
+        | (pad.buttonY.pressed ? 2048 : 0);
     hippogrove_controller_state(pad.leftThumbstick.xAxis.value, pad.leftThumbstick.yAxis.value,
         pad.rightThumbstick.xAxis.value, pad.rightThumbstick.yAxis.value,
         pad.rightTrigger.value - pad.leftTrigger.value, buttons, 1);
@@ -66,6 +78,12 @@ static void select_controller(GCController *controller) {
 
 void hippogrove_start_controllers(void) {
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    activate_game_audio();
+    [center addObserverForName:UIApplicationDidBecomeActiveNotification object:nil
+                        queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+        (void)note;
+        activate_game_audio();
+    }];
     for (NSNotificationName event in @[UIWindowDidBecomeKeyNotification,
             UIApplicationDidBecomeActiveNotification, UIDeviceOrientationDidChangeNotification]) {
         [center addObserverForName:event object:nil queue:NSOperationQueue.mainQueue

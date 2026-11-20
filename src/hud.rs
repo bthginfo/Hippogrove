@@ -13,10 +13,11 @@ use crate::{
         Settlement, SideQuest, Talent, stock_text,
     },
     modes::Mode,
-    play::{CameraRig, Panel, Play, Target, Tool, UiAction},
+    play::{CATALOG_PAGE_SIZE, CameraRig, Feedback, Panel, Play, Target, Tool, UiAction},
     region::{Biome, Material, Region},
-    sound::{Bus, Mix},
+    sound::{Bus, Mix, Sound},
     view::Board,
+    wheel::Wheel,
 };
 
 const PAPER: u32 = 0xf6eed7;
@@ -30,6 +31,9 @@ const GOLD: u32 = 0xffd487;
 const BRASS: u32 = 0xb99151;
 const JADE: u32 = 0xd4e9b9;
 const EDGE: f32 = 16.;
+const PAD_SQUARE: usize = 32;
+const PAD_TRIANGLE: usize = 33;
+const PAD_CROSS: usize = 34;
 
 #[derive(Component)]
 pub struct HitArea;
@@ -57,6 +61,8 @@ pub type HitTest<'w, 's> = Query<
 pub(crate) enum Label {
     Stock(Material),
     Faith,
+    FaithUse,
+    ManaUse,
     Objective,
     PracticeHint,
     Quest,
@@ -76,7 +82,6 @@ pub(crate) enum Label {
     Helpers,
     Spell(Miracle),
     Order(Tool, usize),
-    CityGoods,
     Refined(usize),
     Carried,
     Capacity,
@@ -85,10 +90,26 @@ pub(crate) enum Label {
     AreaStatus(usize, Material, bool),
     Subtitle,
     FirstDelivery(FirstDelivery),
+    PracticeStatus,
+    ResumeMode,
+    AudioStatus,
+    WheelChoice,
+    WheelDetail,
+    BlueprintStatus,
+    CatalogName,
+    CatalogPurpose,
+    CatalogPrice,
+    CatalogReadiness,
+    CatalogAction,
 }
 
 #[derive(Component)]
-pub struct Toast;
+pub(crate) struct Toast {
+    overlay: bool,
+}
+
+#[derive(Component)]
+pub(crate) struct FeedbackIcon;
 
 #[derive(Component)]
 pub struct CameraFade;
@@ -98,6 +119,9 @@ pub struct LoadingWorld;
 
 #[derive(Component)]
 pub struct PadReticle;
+
+#[derive(Component)]
+pub(crate) struct CatalogPortrait;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Layout {
@@ -120,6 +144,8 @@ struct Layout {
     safe: [u16; 4],
     catalog: Option<Branch>,
     catalog_page: usize,
+    inspected: Option<(Building, bool)>,
+    can_inspect: bool,
     tech: Tech,
     research_count: u32,
     insight: u16,
@@ -140,6 +166,8 @@ pub struct Hud {
     map: Option<((Mode, usize), Handle<Image>)>,
     world_art: Handle<Image>,
     world_cards: Handle<TextureAtlasLayout>,
+    building_art: [Handle<Image>; Biome::ALL.len()],
+    building_cards: Handle<TextureAtlasLayout>,
 }
 
 pub fn setup(
@@ -198,7 +226,7 @@ pub fn setup(
     hud.atlas = atlases.add(TextureAtlasLayout::from_grid(
         UVec2::splat(64),
         4,
-        7,
+        9,
         None,
         None,
     ));
@@ -207,6 +235,15 @@ pub fn setup(
         UVec2::new(200, 168),
         5,
         1,
+        None,
+        None,
+    ));
+    hud.building_art = ["valley", "fjord", "terraces", "lake", "aegean"]
+        .map(|world| assets.load(format!("embedded://ui/buildings/{world}.png")));
+    hud.building_cards = atlases.add(TextureAtlasLayout::from_grid(
+        UVec2::splat(96),
+        8,
+        Building::CATALOG_SIZE.div_ceil(8) as u32,
         None,
         None,
     ));
@@ -316,22 +353,51 @@ fn chart(region: &Region) -> Image {
     )
 }
 
-fn glyph(parent: &mut ChildSpawnerCommands, hud: &Hud, index: usize, size: f32) {
-    parent.spawn((
-        ImageNode::from_atlas_image(
-            hud.icons.clone(),
-            TextureAtlas {
-                layout: hud.atlas.clone(),
-                index,
+fn glyph(parent: &mut ChildSpawnerCommands, hud: &Hud, index: usize, size: f32) -> Entity {
+    parent
+        .spawn((
+            ImageNode::from_atlas_image(
+                hud.icons.clone(),
+                TextureAtlas {
+                    layout: hud.atlas.clone(),
+                    index,
+                },
+            ),
+            Node {
+                width: Val::Px(size),
+                height: Val::Px(size),
+                flex_shrink: 0.,
+                ..default()
             },
-        ),
-        Node {
-            width: Val::Px(size),
-            height: Val::Px(size),
-            flex_shrink: 0.,
-            ..default()
-        },
-    ));
+        ))
+        .id()
+}
+
+fn building_icon(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    biome: Biome,
+    kind: Building,
+    size: f32,
+) -> Entity {
+    parent
+        .spawn((
+            ImageNode::from_atlas_image(
+                hud.building_art[biome as usize].clone(),
+                TextureAtlas {
+                    layout: hud.building_cards.clone(),
+                    index: kind.index(),
+                },
+            ),
+            Node {
+                width: Val::Px(size),
+                height: Val::Px(size),
+                flex_shrink: 0.,
+                ..default()
+            },
+            BorderRadius::all(Val::Px(7.)),
+        ))
+        .id()
 }
 
 fn button_glyph(action: UiAction) -> Option<usize> {
@@ -350,6 +416,14 @@ fn button_glyph(action: UiAction) -> Option<usize> {
         UiAction::Panel(Panel::Research) => Some(9),
         UiAction::Panel(Panel::Inventory) => Some(20),
         UiAction::Panel(Panel::Modes) => Some(10),
+        UiAction::MainMenu => Some(31),
+        UiAction::Panel(Panel::Controls) => Some(30),
+        UiAction::Panel(Panel::Sound) | UiAction::Sound(_) | UiAction::TestSound => Some(28),
+        UiAction::Rotate => Some(29),
+        UiAction::Inspect => Some(12),
+        UiAction::ToolTarget => Some(14),
+        UiAction::Do(Action::Upgrade(_)) => Some(6),
+        UiAction::Do(Action::AcceptLocal | Action::FinishLocal) => Some(11),
         UiAction::ResearchBranch(branch) => Some(branch_glyph(branch)),
         UiAction::SelectTech(tech) => Some(branch_glyph(tech.branch())),
         UiAction::Guide => Some(14),
@@ -420,6 +494,7 @@ struct ButtonStyle {
     compact: bool,
     icon: Option<usize>,
     caption: Option<Label>,
+    height: Option<f32>,
 }
 
 fn styled_button(
@@ -459,13 +534,13 @@ fn styled_button(
             },
             Node {
                 min_width: Val::Px(if tool && !style.compact { 60. } else { 48. }),
-                min_height: Val::Px(if tool {
+                min_height: Val::Px(style.height.unwrap_or(if tool {
                     if style.compact { 54. } else { 66. }
                 } else if strong && !style.compact {
                     54.
                 } else {
                     48.
-                }),
+                })),
                 padding: UiRect::axes(
                     Val::Px(if style.compact {
                         6.
@@ -533,6 +608,8 @@ fn styled_button(
                     copy.commands().entity(entity).insert(Label::Confirm);
                 } else if matches!(action, UiAction::ToggleObjective) {
                     copy.commands().entity(entity).insert(Label::Quest);
+                } else if matches!(action, UiAction::CatalogBuild) {
+                    copy.commands().entity(entity).insert(Label::CatalogAction);
                 }
             };
             if let Some(caption) = style.caption {
@@ -725,25 +802,224 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                 });
         });
 
+    feedback_toast(
+        parent,
+        hud,
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(if layout.short { 63. } else { 74. }),
+            left: Val::Px(if layout.short { 8. } else { EDGE }),
+            width: Val::Percent(if layout.short { 47. } else { 43. }),
+            max_width: Val::Px(390.),
+            ..default()
+        },
+        true,
+    );
+}
+
+fn feedback_toast(parent: &mut ChildSpawnerCommands, hud: &Hud, mut node: Node, overlay: bool) {
+    node.align_items = AlignItems::Center;
+    node.column_gap = Val::Px(6.);
+    node.padding = UiRect::axes(Val::Px(8.), Val::Px(5.));
+    node.display = Display::None;
     parent
         .spawn((
-            Toast,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(if layout.short { 63. } else { 74. }),
-                left: Val::Px(if layout.short { 8. } else { EDGE }),
-                width: Val::Percent(43.),
-                max_width: Val::Px(390.),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                padding: UiRect::axes(Val::Px(9.), Val::Px(5.)),
-                ..default()
-            },
+            Toast { overlay },
+            node,
             Visibility::Hidden,
             BackgroundColor(rgb(DARK)),
             BorderRadius::all(Val::Px(10.)),
         ))
-        .with_children(|toast| label(toast, hud, Label::Notice, 14., LIGHT));
+        .with_children(|toast| {
+            let image = glyph(toast, hud, 11, 22.);
+            toast.commands().entity(image).insert(FeedbackIcon);
+            label(toast, hud, Label::Notice, 14., LIGHT);
+        });
+}
+
+fn placement_bar(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    play: &Play,
+    layout: Layout,
+    biome: Biome,
+) {
+    let kind = play.building();
+    let edge = if layout.short { 8. } else { EDGE };
+    let compact = ButtonStyle {
+        compact: true,
+        height: Some(if layout.short { 37. } else { 45. }),
+        ..default()
+    };
+    parent
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(edge),
+            right: Val::Px(edge),
+            bottom: Val::Px(edge),
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_children(|place| {
+            place
+                .spawn((
+                    HitArea,
+                    Node {
+                        width: Val::Percent(100.),
+                        max_width: Val::Px(610.),
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::axes(Val::Px(8.), Val::Px(6.)),
+                        row_gap: Val::Px(5.),
+                        border: UiRect::all(Val::Px(1.)),
+                        ..default()
+                    },
+                    BackgroundColor(rgb(DARK)),
+                    BorderColor(rgb(BRASS)),
+                    BorderRadius::all(Val::Px(13.)),
+                ))
+                .with_children(|toolbar| {
+                    toolbar
+                        .spawn(Node {
+                            column_gap: Val::Px(7.),
+                            align_items: AlignItems::Center,
+                            ..default()
+                        })
+                        .with_children(|preview| {
+                            building_icon(
+                                preview,
+                                hud,
+                                biome,
+                                kind,
+                                if layout.short { 49. } else { 67. },
+                            );
+                            preview
+                                .spawn(Node {
+                                    flex_grow: 1.,
+                                    min_width: Val::Px(0.),
+                                    flex_direction: FlexDirection::Column,
+                                    align_items: AlignItems::Start,
+                                    row_gap: Val::Px(2.),
+                                    ..default()
+                                })
+                                .with_children(|copy| {
+                                    text(
+                                        copy,
+                                        hud,
+                                        &format!(
+                                            "{} · {} × {} Felder",
+                                            kind.name(),
+                                            kind.size(),
+                                            kind.size()
+                                        ),
+                                        15.,
+                                        LIGHT,
+                                    );
+                                    text(
+                                        copy,
+                                        hud,
+                                        kind.use_text(),
+                                        if layout.short { 12. } else { 14. },
+                                        SUBTLE,
+                                    );
+                                    label(
+                                        copy,
+                                        hud,
+                                        Label::BlueprintStatus,
+                                        if layout.short { 12. } else { 14. },
+                                        GOLD,
+                                    );
+                                });
+                            styled_button(
+                                preview,
+                                hud,
+                                "Bauen",
+                                UiAction::Confirm,
+                                false,
+                                true,
+                                ButtonStyle {
+                                    icon: layout.gamepad.then_some(PAD_CROSS),
+                                    ..compact
+                                },
+                            );
+                        });
+                    toolbar
+                        .spawn(Node {
+                            justify_content: JustifyContent::SpaceBetween,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(5.),
+                            ..default()
+                        })
+                        .with_children(|actions| {
+                            actions
+                                .spawn(Node {
+                                    column_gap: Val::Px(4.),
+                                    ..default()
+                                })
+                                .with_children(|tools| {
+                                    styled_button(
+                                        tools,
+                                        hud,
+                                        if layout.gamepad { "X Drehen" } else { "Drehen" },
+                                        UiAction::Rotate,
+                                        false,
+                                        false,
+                                        ButtonStyle {
+                                            icon: Some(29),
+                                            ..compact
+                                        },
+                                    );
+                                    styled_button(
+                                        tools,
+                                        hud,
+                                        if layout.gamepad && layout.short {
+                                            "RB/R1 Platz"
+                                        } else if layout.gamepad {
+                                            "RB/R1 Freier Platz"
+                                        } else {
+                                            "Freier Platz"
+                                        },
+                                        UiAction::ToolTarget,
+                                        false,
+                                        false,
+                                        ButtonStyle {
+                                            icon: Some(14),
+                                            ..compact
+                                        },
+                                    );
+                                    styled_button(
+                                        tools,
+                                        hud,
+                                        if layout.gamepad && layout.short {
+                                            "B Abbruch"
+                                        } else if layout.gamepad {
+                                            "B/Kreis Abbrechen"
+                                        } else {
+                                            "Abbrechen"
+                                        },
+                                        UiAction::Cancel,
+                                        false,
+                                        false,
+                                        compact,
+                                    );
+                                });
+                            text(
+                                actions,
+                                hud,
+                                if layout.gamepad && layout.short {
+                                    "Feldweise mit\nSteuerkreuz"
+                                } else if layout.gamepad {
+                                    "Steuerkreuz versetzt feldweise"
+                                } else if cfg!(any(target_os = "ios", target_os = "android")) {
+                                    "Tippe auf den Bauplatz"
+                                } else {
+                                    "Maus setzt Vorschau · E baut"
+                                },
+                                12.,
+                                LIGHT,
+                            );
+                        });
+                });
+        });
 }
 
 fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Layout) {
@@ -789,12 +1065,12 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                             ..default()
                         })
                         .with_children(|detail| label(detail, hud, Label::Detail, 14., LIGHT));
-                    if play.tool == Tool::Build {
+                    if layout.can_inspect {
                         styled_button(
                             command,
                             hud,
-                            "Drehen",
-                            UiAction::Rotate,
+                            "Details",
+                            UiAction::Inspect,
                             false,
                             false,
                             quick,
@@ -827,7 +1103,10 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                         UiAction::Confirm,
                         false,
                         true,
-                        quick,
+                        ButtonStyle {
+                            icon: layout.gamepad.then_some(PAD_CROSS),
+                            ..quick
+                        },
                     );
                 });
 
@@ -858,13 +1137,62 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                     }
                 });
             if layout.gamepad {
-                text(
+                gamepad_legend(
                     hud_root,
                     hud,
-                    "Steuerkreuz ← → Werkzeuge · ↑ Auftrag · L1 Optionen · R1 Werkzeugziel",
-                    12.,
-                    LIGHT,
+                    &[
+                        ("LB/L1", None, "Auswahlrad"),
+                        ("X", Some(PAD_SQUARE), "Bauen"),
+                        ("Y", Some(PAD_TRIANGLE), "Wunder"),
+                        (
+                            "RB/R1",
+                            None,
+                            if play.tool == Tool::Hand {
+                                "Nilpferd"
+                            } else {
+                                "Werkzeugziel"
+                            },
+                        ),
+                        ("↑", None, "Auftrag"),
+                    ],
                 );
+            }
+        });
+}
+
+fn gamepad_legend(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    bindings: &[(&str, Option<usize>, &str)],
+) {
+    parent
+        .spawn(Node {
+            flex_wrap: FlexWrap::Wrap,
+            justify_content: JustifyContent::Center,
+            column_gap: Val::Px(4.),
+            row_gap: Val::Px(3.),
+            ..default()
+        })
+        .with_children(|legend| {
+            for &(binding, alternate, action) in bindings {
+                legend
+                    .spawn((
+                        Node {
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(4.),
+                            padding: UiRect::axes(Val::Px(5.), Val::Px(2.)),
+                            ..default()
+                        },
+                        BackgroundColor(rgb(DARK)),
+                        BorderRadius::all(Val::Px(5.)),
+                    ))
+                    .with_children(|item| {
+                        text(item, hud, binding, 12., GOLD);
+                        if let Some(index) = alternate {
+                            glyph(item, hud, index, 13.);
+                        }
+                        text(item, hud, action, 12., LIGHT);
+                    });
             }
         });
 }
@@ -879,7 +1207,13 @@ fn column_grid(columns: u16) -> Node {
     }
 }
 
-fn modal_header(parent: &mut ChildSpawnerCommands, hud: &Hud, title: &str, short: bool) {
+fn modal_header(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    title: &str,
+    short: bool,
+    actions: &[(&str, UiAction, bool)],
+) {
     let style = ButtonStyle {
         compact: short,
         ..default()
@@ -900,8 +1234,96 @@ fn modal_header(parent: &mut ChildSpawnerCommands, hud: &Hud, title: &str, short
             } else {
                 panel_heading(nav, hud, title, short);
             }
-            styled_button(nav, hud, "Zurück", UiAction::Cancel, false, true, style);
+            nav.spawn(Node {
+                column_gap: Val::Px(5.),
+                ..default()
+            })
+            .with_children(|actions_row| {
+                for &(name, action, primary) in actions {
+                    styled_button(actions_row, hud, name, action, false, primary, style);
+                }
+            });
         });
+}
+
+fn main_menu(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: bool) {
+    panel_heading(parent, hud, "Hippogrove", short);
+    let style = ButtonStyle {
+        compact: short,
+        ..default()
+    };
+    if let Some(mode) = game.continue_mode() {
+        styled_button(
+            parent,
+            hud,
+            "Spiel fortsetzen",
+            UiAction::SelectMode(mode),
+            false,
+            true,
+            ButtonStyle {
+                caption: Some(Label::ResumeMode),
+                ..style
+            },
+        );
+    }
+    let locked = game.practice_required();
+    let mut grid = column_grid(if locked || short { 2 } else { 4 });
+    grid.row_gap = Val::Px(6.);
+    parent.spawn(grid).with_children(|choices| {
+        styled_button(
+            choices,
+            hud,
+            "Tutorial",
+            UiAction::SelectMode(Mode::Tutorial),
+            false,
+            locked,
+            ButtonStyle {
+                caption: Some(Label::PracticeStatus),
+                ..style
+            },
+        );
+        if !locked {
+            styled_button(
+                choices,
+                hud,
+                "Kampagnen",
+                UiAction::ModeTab(false),
+                false,
+                false,
+                style,
+            );
+            styled_button(
+                choices,
+                hud,
+                "Freies Bauen",
+                UiAction::ModeTab(true),
+                false,
+                false,
+                style,
+            );
+        }
+        styled_button(
+            choices,
+            hud,
+            "Ton",
+            UiAction::Panel(Panel::Sound),
+            false,
+            false,
+            ButtonStyle {
+                icon: Some(28),
+                ..style
+            },
+        );
+    });
+    if locked {
+        text(
+            parent,
+            hud,
+            "Schließe das Tutorial ab, um die Kampagnen freizuschalten.",
+            15.,
+            MUTED,
+        );
+    }
 }
 
 fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: bool) {
@@ -926,6 +1348,7 @@ fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: 
             ("Fortschritt", Panel::Progress),
             ("Forschung", Panel::Research),
             ("Ton", Panel::Sound),
+            ("Steuerung", Panel::Controls),
         ] {
             let action = UiAction::Panel(panel);
             styled_button(
@@ -964,6 +1387,77 @@ fn sound_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, short:
             );
         }
     });
+    let style = ButtonStyle {
+        compact: short,
+        ..default()
+    };
+    parent.spawn(column_grid(2)).with_children(|actions| {
+        styled_button(
+            actions,
+            hud,
+            "Ton testen",
+            UiAction::TestSound,
+            false,
+            true,
+            style,
+        );
+        styled_button(
+            actions,
+            hud,
+            "Alles einschalten",
+            UiAction::EnableSound,
+            false,
+            false,
+            style,
+        );
+    });
+    label(parent, hud, Label::AudioStatus, 15., MUTED);
+}
+
+fn controls_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, gamepad: bool, short: bool) {
+    let bindings: &[(&str, &str)] = if gamepad {
+        &[
+            ("Linker Stick · Rechter Stick", "Zielen · Kamera"),
+            ("LT/RT · L2/R2", "Raus- und reinzoomen"),
+            (
+                "LB/L1 · X / Quadrat · Y / Dreieck",
+                "Alle Aktionen · Bauen · Wunder",
+            ),
+            ("RB/R1", "Nilpferd oder Werkzeugziel"),
+            ("Steuerkreuz", "Menüs · ↑ Auftrag · Bauplatz versetzen"),
+            ("A / Kreuz · B / Kreis", "Bestätigen · Zurück"),
+            ("Start", "Pause und Hauptmenü"),
+        ]
+    } else if cfg!(any(target_os = "android", target_os = "ios")) {
+        &[
+            ("Antippen", "Ziel oder Knopf wählen"),
+            ("Ziehen", "Kamera schwenken"),
+            ("Zwei Finger · + / −", "Zoomen"),
+            ("Greifen halten", "Bis zu 18 Einheiten aufnehmen"),
+        ]
+    } else {
+        &[
+            ("Maus · WASD", "Ziel wählen und Kamera schwenken"),
+            ("Mausrad · + / −", "Zoomen"),
+            ("Leertaste", "Auswahlrad öffnen"),
+            ("G", "Zum aktuellen Auftrag"),
+            ("E", "Aktion ausführen · halten zum Greifen"),
+            ("F", "Hauptmenü öffnen"),
+        ]
+    };
+    let size = if short { 14. } else { 17. };
+    for &(key, effect) in bindings {
+        parent
+            .spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: Val::Px(12.),
+                ..default()
+            })
+            .with_children(|row| {
+                text(row, hud, key, size, INK);
+                text(row, hud, effect, size, MUTED);
+            });
+    }
 }
 
 fn orders_panel(
@@ -1061,6 +1555,7 @@ fn spellbook(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, short: b
                     compact: short,
                     icon: (!short).then_some(icon),
                     caption: Some(Label::Spell(spell)),
+                    ..default()
                 },
             );
         }
@@ -1335,104 +1830,230 @@ fn catalog_panel(
     play: &Play,
     short: bool,
 ) {
-    parent.spawn(row()).with_children(|header| {
-        panel_heading(header, hud, "Baubuch", short);
-        label(header, hud, Label::CityGoods, 15., MUTED);
-    });
-    parent.spawn(row()).with_children(|tabs| {
-        button(
-            tabs,
-            hud,
-            "Grundbau",
-            UiAction::Catalog(None),
-            play.catalog_branch.is_none(),
-            false,
-        );
-        for branch in Branch::ALL {
-            button(
+    let style = ButtonStyle {
+        compact: short,
+        height: short.then_some(35.),
+        ..default()
+    };
+    let biome = game.region().kind;
+    let entries = play.catalog_entries(game);
+    let pages = entries.len().div_ceil(CATALOG_PAGE_SIZE);
+    let index = play.catalog_page;
+
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::SpaceBetween,
+            column_gap: Val::Px(5.),
+            ..default()
+        })
+        .with_children(|header| {
+            panel_heading(header, hud, "Baubuch", short);
+            header.spawn(row()).with_children(|nav| {
+                styled_button(
+                    nav,
+                    hud,
+                    "Hauptmenü",
+                    UiAction::MainMenu,
+                    false,
+                    false,
+                    style,
+                );
+                styled_button(nav, hud, "Zurück", UiAction::Cancel, false, false, style);
+            });
+        });
+    parent.spawn(column_grid(5)).with_children(|tabs| {
+        for branch in std::iter::once(None).chain(Branch::ALL.into_iter().map(Some)) {
+            styled_button(
                 tabs,
                 hud,
-                branch.name(),
-                UiAction::Catalog(Some(branch)),
-                play.catalog_branch == Some(branch),
+                branch.map_or("Grundbau", Branch::name),
+                UiAction::Catalog(branch),
+                play.catalog_branch == branch,
                 false,
+                style,
             );
         }
     });
-    let entries: Vec<_> = if let Some(branch) = play.catalog_branch {
-        Civic::ALL
-            .into_iter()
-            .filter(|kind| kind.available_in(game.region().kind) && kind.spec().branch == branch)
-            .map(Building::Civic)
-            .collect()
-    } else {
-        Building::ALL.to_vec()
-    };
-    let size = if short { 2 } else { 3 };
-    let pages = entries.len().div_ceil(size);
-    let index = play.catalog_page.min(pages.saturating_sub(1));
-    let research = game.campaign.research;
-    for &building in entries.iter().skip(index * size).take(size) {
-        let locked = building
-            .civic()
-            .map(|kind| kind.spec().unlock)
-            .filter(|&tech| !research.knows(tech));
-        let name = format!("{} · {}", building.name(), building.cost_text());
-        let action = UiAction::SelectBuilding(building);
-        let purpose = building
-            .civic()
-            .map_or_else(|| building.use_text(), |kind| kind.spec().purpose);
-        parent
-            .spawn(Node {
+    parent
+        .spawn(Node {
+            column_gap: Val::Px(8.),
+            ..default()
+        })
+        .with_children(|body| {
+            body.spawn(Node {
+                width: Val::Percent(44.),
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(2.),
+                row_gap: Val::Px(4.),
                 ..default()
             })
-            .with_children(|card| {
-                button(card, hud, &name, action, false, false);
-                if let Some(tech) = locked {
-                    text(
-                        card,
-                        hud,
-                        &format!("Forschung · {}", tech.name()),
-                        13.,
-                        MUTED,
-                    );
-                } else {
-                    text(card, hud, purpose, 14., MUTED);
+            .with_children(|cards| {
+                for &kind in entries
+                    .iter()
+                    .skip(index * CATALOG_PAGE_SIZE)
+                    .take(CATALOG_PAGE_SIZE)
+                {
+                    let action = UiAction::PreviewBuilding(kind);
+                    cards
+                        .spawn((
+                            Button,
+                            HitArea,
+                            ControlButton {
+                                action,
+                                selected: false,
+                                strong: false,
+                            },
+                            Node {
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(6.),
+                                min_height: Val::Px(if short { 43. } else { 63. }),
+                                padding: UiRect::axes(Val::Px(5.), Val::Px(2.)),
+                                border: UiRect::all(Val::Px(2.)),
+                                ..default()
+                            },
+                            BackgroundColor(rgb(SURFACE)),
+                            BorderColor(rgb(BRASS)),
+                            Outline::new(Val::Px(2.), Val::Px(1.), Color::NONE),
+                            BorderRadius::all(Val::Px(10.)),
+                        ))
+                        .with_children(|card| {
+                            building_icon(card, hud, biome, kind, if short { 35. } else { 51. });
+                            card.spawn(Node {
+                                flex_direction: FlexDirection::Column,
+                                align_items: AlignItems::Start,
+                                ..default()
+                            })
+                            .with_children(|copy| {
+                                text(copy, hud, kind.name(), if short { 14. } else { 17. }, LIGHT);
+                                text(
+                                    copy,
+                                    hud,
+                                    if game.region().sandbox {
+                                        "Freier Bau".into()
+                                    } else {
+                                        stock_text(kind.price())
+                                    }
+                                    .as_str(),
+                                    if short { 11. } else { 13. },
+                                    GOLD,
+                                );
+                            });
+                        });
                 }
             });
-    }
-    parent.spawn(row()).with_children(|bottom| {
-        if index > 0 {
-            button(
-                bottom,
-                hud,
-                "Vorherige",
-                UiAction::CatalogPage(index - 1),
-                false,
-                false,
-            );
-        }
-        if index + 1 < pages {
-            button(
-                bottom,
-                hud,
-                "Nächste",
-                UiAction::CatalogPage(index + 1),
-                false,
-                false,
-            );
-        }
-        button(
-            bottom,
-            hud,
-            "Forschung",
-            UiAction::Panel(Panel::Research),
-            false,
-            false,
-        );
-    });
+            body.spawn((
+                Node {
+                    flex_grow: 1.,
+                    flex_basis: Val::Px(0.),
+                    min_width: Val::Px(0.),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Start,
+                    row_gap: Val::Px(if short { 3. } else { 7. }),
+                    padding: UiRect::all(Val::Px(if short { 7. } else { 14. })),
+                    border: UiRect::all(Val::Px(1.)),
+                    ..default()
+                },
+                BackgroundColor(rgb(0xfcf3de)),
+                BorderColor(rgb(0xdac398)),
+                BorderRadius::all(Val::Px(12.)),
+            ))
+            .with_children(|details| {
+                details
+                    .spawn(Node {
+                        column_gap: Val::Px(6.),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    })
+                    .with_children(|heading| {
+                        let portrait = building_icon(
+                            heading,
+                            hud,
+                            biome,
+                            play.catalog_preview,
+                            if short { 40. } else { 63. },
+                        );
+                        heading.commands().entity(portrait).insert(CatalogPortrait);
+                        label(
+                            heading,
+                            hud,
+                            Label::CatalogName,
+                            if short { 17. } else { 23. },
+                            INK,
+                        );
+                    });
+                let size = if short { 13. } else { 16. };
+                label(details, hud, Label::CatalogPurpose, size, INK);
+                label(details, hud, Label::CatalogPrice, size, MUTED);
+                label(details, hud, Label::CatalogReadiness, size, 0x705127);
+            });
+        });
+    parent
+        .spawn(Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(4.),
+            ..default()
+        })
+        .with_children(|bottom| {
+            bottom
+                .spawn(Node {
+                    column_gap: Val::Px(5.),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|pagination| {
+                    if index > 0 {
+                        styled_button(
+                            pagination,
+                            hud,
+                            if play.gamepad { "L1 ‹" } else { "‹" },
+                            UiAction::CatalogPage(index - 1),
+                            false,
+                            false,
+                            style,
+                        );
+                    }
+                    text(
+                        pagination,
+                        hud,
+                        &format!("{}/{}", index + 1, pages.max(1)),
+                        14.,
+                        MUTED,
+                    );
+                    if index + 1 < pages {
+                        styled_button(
+                            pagination,
+                            hud,
+                            if play.gamepad { "› R1" } else { "›" },
+                            UiAction::CatalogPage(index + 1),
+                            false,
+                            false,
+                            style,
+                        );
+                    }
+                });
+            bottom.spawn(row()).with_children(|actions| {
+                styled_button(
+                    actions,
+                    hud,
+                    "Forschung",
+                    UiAction::Panel(Panel::Research),
+                    false,
+                    false,
+                    style,
+                );
+                styled_button(
+                    actions,
+                    hud,
+                    "Bauplatz wählen",
+                    UiAction::CatalogBuild,
+                    false,
+                    true,
+                    style,
+                );
+            });
+        });
 }
 
 fn research_panel(
@@ -1578,55 +2199,173 @@ fn inspection_panel(
 ) {
     let city = game.city();
     let region = game.region();
-    if let Some(site) = city.building_at(play.aim) {
-        panel_heading(parent, hud, site.kind.name(), short);
-        let purpose = site
-            .kind
-            .civic()
-            .map_or_else(|| site.kind.use_text(), |kind| kind.spec().purpose);
-        text(parent, hud, purpose, 17., INK);
-        let status = if city.connected(region, site) {
-            "Am Wegenetz"
-        } else {
-            "Ohne Weganschluss"
-        };
-        text(
+    let Some(site) = city.building_at(play.aim) else {
+        return;
+    };
+    let kind = site.kind;
+    let style = ButtonStyle {
+        compact: short,
+        height: short.then_some(37.),
+        ..default()
+    };
+    let body_text = if short { 14. } else { 17. };
+    let upgrade = kind.upgrade();
+    let connected = city.connected(region, site);
+    let connection = if connected {
+        "Am Wegenetz"
+    } else {
+        "Ohne Weganschluss"
+    };
+    modal_header(
+        parent,
+        hud,
+        kind.name(),
+        short,
+        &[
+            ("Hauptmenü", UiAction::MainMenu, false),
+            ("Zurück", UiAction::Cancel, false),
+        ],
+    );
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(9.),
+            ..default()
+        })
+        .with_children(|overview| {
+            building_icon(
+                overview,
+                hud,
+                region.kind,
+                kind,
+                if short { 62. } else { 85. },
+            );
+            overview
+                .spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Start,
+                    row_gap: Val::Px(3.),
+                    ..default()
+                })
+                .with_children(|summary| {
+                    let stage = if site.upgraded {
+                        "Stufe 2"
+                    } else if upgrade.is_some() {
+                        "Stufe 1"
+                    } else {
+                        "Fertig"
+                    };
+                    text(
+                        summary,
+                        hud,
+                        &format!("{stage} · {connection}"),
+                        body_text,
+                        DARK,
+                    );
+                    text(summary, hud, kind.use_text(), body_text, MUTED);
+                });
+        });
+    if let Some(upgrade) = upgrade {
+        let status = city.upgrade_plan(region, site.tile);
+        parent
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Start,
+                    padding: UiRect::all(Val::Px(8.)),
+                    row_gap: Val::Px(3.),
+                    ..default()
+                },
+                BackgroundColor(rgb(0xece3ca)),
+                BorderRadius::all(Val::Px(10.)),
+            ))
+            .with_children(|details| {
+                if site.upgraded {
+                    text(
+                        details,
+                        hud,
+                        &format!("Ausgebaut · {}", upgrade.benefit),
+                        body_text,
+                        DARK,
+                    );
+                } else {
+                    text(
+                        details,
+                        hud,
+                        &format!("Stufe 2 · {}", upgrade.benefit),
+                        body_text,
+                        DARK,
+                    );
+                    if region.sandbox {
+                        text(details, hud, "Freier Ausbau", body_text, MUTED);
+                    } else {
+                        text(
+                            details,
+                            hud,
+                            &format!("Material  {}", stock_text(upgrade.materials)),
+                            body_text,
+                            MUTED,
+                        );
+                        text(
+                            details,
+                            hud,
+                            &format!(
+                                "Gläubige {}/{} · Glauben {}/{}",
+                                city.inhabitants(),
+                                upgrade.believers,
+                                city.faith,
+                                upgrade.faith
+                            ),
+                            body_text,
+                            MUTED,
+                        );
+                    }
+                    if let Err(reason) = &status {
+                        text(details, hud, reason, body_text, 0x874320);
+                    }
+                }
+            });
+        if !site.upgraded {
+            styled_button(
+                parent,
+                hud,
+                if play.gamepad {
+                    "A  Ausbauen"
+                } else {
+                    "Ausbauen"
+                },
+                UiAction::Do(Action::Upgrade(site.tile)),
+                false,
+                true,
+                ButtonStyle {
+                    icon: play.gamepad.then_some(PAD_CROSS),
+                    ..style
+                },
+            );
+        }
+    }
+    if kind == Building::Civic(Civic::Barracks) {
+        styled_button(
             parent,
             hud,
-            if site.upgraded { "Stufe 2" } else { "Stufe 1" },
-            15.,
-            MUTED,
+            "Wache ausbilden",
+            UiAction::Do(Action::Muster(site.tile)),
+            false,
+            true,
+            style,
         );
-        text(parent, hud, status, 15., MUTED);
-        label(parent, hud, Label::CityGoods, 15., MUTED);
-        parent.spawn(row()).with_children(|actions| {
-            if site.kind.upgrade_price().is_some() && !site.upgraded {
-                button(
-                    actions,
-                    hud,
-                    "Ausbauen",
-                    UiAction::Do(Action::Upgrade(site.tile)),
-                    false,
-                    false,
-                );
-            }
-            if site.kind == Building::Civic(Civic::Barracks) {
-                button(
-                    actions,
-                    hud,
-                    "Wache ausbilden",
-                    UiAction::Do(Action::Muster(site.tile)),
-                    false,
-                    true,
-                );
-            }
-        });
     }
 }
 
 fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout) {
     if game.practice_required() {
-        panel_heading(parent, hud, "Übungsinsel", layout.short);
+        modal_header(
+            parent,
+            hud,
+            "Kampagnen",
+            layout.short,
+            &[("Zurück", UiAction::Cancel, false)],
+        );
         text(
             parent,
             hud,
@@ -1634,7 +2373,14 @@ fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
             17.,
             INK,
         );
-        button(parent, hud, "Weiter üben", UiAction::Cancel, false, true);
+        button(
+            parent,
+            hud,
+            "Tutorial",
+            UiAction::SelectMode(Mode::Tutorial),
+            false,
+            true,
+        );
         return;
     }
     let title = if game.mode == Mode::Tutorial && game.campaign_complete() {
@@ -1642,38 +2388,30 @@ fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
     } else {
         "Hippogrove"
     };
-    modal_header(parent, hud, title, layout.short);
-    let practice = game.mode != Mode::Tutorial && !layout.free_build_tab;
+    modal_header(
+        parent,
+        hud,
+        title,
+        layout.short,
+        &[("Zurück", UiAction::Cancel, true)],
+    );
     let style = ButtonStyle {
         compact: layout.short,
         ..default()
     };
-    parent
-        .spawn(column_grid(if practice { 3 } else { 2 }))
-        .with_children(|tabs| {
-            for (name, sandbox) in [("Kampagnen", false), ("Freies Bauen", true)] {
-                styled_button(
-                    tabs,
-                    hud,
-                    name,
-                    UiAction::ModeTab(sandbox),
-                    layout.free_build_tab == sandbox,
-                    false,
-                    style,
-                );
-            }
-            if practice {
-                styled_button(
-                    tabs,
-                    hud,
-                    "Übungsinsel",
-                    UiAction::SelectMode(Mode::Tutorial),
-                    false,
-                    false,
-                    style,
-                );
-            }
-        });
+    parent.spawn(column_grid(2)).with_children(|tabs| {
+        for (name, sandbox) in [("Kampagnen", false), ("Freies Bauen", true)] {
+            styled_button(
+                tabs,
+                hud,
+                name,
+                UiAction::ModeTab(sandbox),
+                layout.free_build_tab == sandbox,
+                false,
+                style,
+            );
+        }
+    });
     let mut gallery = column_grid(3);
     gallery.row_gap = Val::Px(6.);
     parent.spawn(gallery).with_children(|cards| {
@@ -2007,7 +2745,7 @@ fn inventory_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout,
                                 },
                                 column_gap: Val::Px(5.),
                                 padding: UiRect::all(Val::Px(5.)),
-                                min_height: Val::Px(if layout.short { 71. } else { 114. }),
+                                min_height: Val::Px(if layout.short { 48. } else { 98. }),
                                 border: UiRect::all(Val::Px(1.)),
                                 ..default()
                             },
@@ -2016,7 +2754,7 @@ fn inventory_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout,
                             BorderRadius::all(Val::Px(12.)),
                         ))
                         .with_children(|card| {
-                            glyph(card, hud, image, if layout.short { 48. } else { 64. });
+                            glyph(card, hud, image, if layout.short { 32. } else { 52. });
                             card.spawn(Node {
                                 align_items: AlignItems::Center,
                                 flex_direction: FlexDirection::Column,
@@ -2030,6 +2768,25 @@ fn inventory_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout,
                 }
             });
     }
+    parent.spawn(column_grid(2)).with_children(|resources| {
+        for (icon, tag) in [(3, Label::FaithUse), (4, Label::ManaUse)] {
+            resources
+                .spawn((
+                    Node {
+                        column_gap: Val::Px(5.),
+                        padding: UiRect::all(Val::Px(4.)),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(rgb(0xfcf3de)),
+                    BorderRadius::all(Val::Px(9.)),
+                ))
+                .with_children(|card| {
+                    glyph(card, hud, icon, if layout.short { 26. } else { 36. });
+                    label(card, hud, tag, if layout.short { 12. } else { 15. }, INK);
+                });
+        }
+    });
     parent
         .spawn((
             Node {
@@ -2060,9 +2817,11 @@ fn cutscene(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout) {
             position_type: PositionType::Absolute,
             right: Val::Px(EDGE),
             top: Val::Px(EDGE),
+            column_gap: Val::Px(6.),
             ..default()
         })
         .with_children(|skip| {
+            button(skip, hud, "Hauptmenü", UiAction::MainMenu, false, false);
             button(
                 skip,
                 hud,
@@ -2136,17 +2895,178 @@ fn first_delivery_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Gam
                     compact: short,
                     icon: Some(icon),
                     caption: Some(Label::FirstDelivery(choice)),
+                    ..default()
                 },
             );
         }
     });
 }
 
+fn selection_wheel(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    wheel: Wheel,
+    layout: Layout,
+    biome: Biome,
+) {
+    let height = if layout.short { 200. } else { 307. };
+    let width = if layout.short { 416. } else { 560. };
+    let slot = if layout.short {
+        Vec2::new(94., 40.)
+    } else {
+        Vec2::new(121., 53.)
+    };
+    parent
+        .spawn((
+            Node {
+                width: Val::Percent(100.),
+                height: Val::Percent(100.),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                row_gap: Val::Px(7.),
+                ..default()
+            },
+            BackgroundColor(rgb(0x15291d).with_alpha(0.67)),
+        ))
+        .with_children(|wheel_root| {
+            text(
+                wheel_root,
+                hud,
+                wheel.title(),
+                if layout.short { 23. } else { 30. },
+                LIGHT,
+            );
+            wheel_root
+                .spawn((
+                    HitArea,
+                    Node {
+                        width: Val::Percent(94.),
+                        max_width: Val::Px(width),
+                        height: Val::Px(height),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(Val::Px(2.)),
+                        ..default()
+                    },
+                    BackgroundColor(rgb(0x233b30).with_alpha(0.88)),
+                    BorderColor(rgb(BRASS)),
+                    BorderRadius::all(Val::Percent(50.)),
+                ))
+                .with_children(|ring| {
+                    ring.spawn(Node {
+                        max_width: Val::Px(if layout.short { 142. } else { 205. }),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: Val::Px(4.),
+                        ..default()
+                    })
+                    .with_children(|detail| {
+                        label(
+                            detail,
+                            hud,
+                            Label::WheelChoice,
+                            if layout.short { 16. } else { 21. },
+                            GOLD,
+                        );
+                        label(
+                            detail,
+                            hud,
+                            Label::WheelDetail,
+                            if layout.short { 12. } else { 15. },
+                            LIGHT,
+                        );
+                    });
+                    let entries = wheel.entries();
+                    for (index, entry) in entries.iter().enumerate() {
+                        let phase = index as f32 * std::f32::consts::TAU / entries.len() as f32;
+                        ring.spawn((
+                            Button,
+                            HitArea,
+                            ControlButton {
+                                action: entry.action,
+                                selected: false,
+                                strong: false,
+                            },
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Percent(50. + phase.sin() * 37.),
+                                top: Val::Percent(50. - phase.cos() * 37.),
+                                margin: UiRect {
+                                    left: Val::Px(-slot.x * 0.5),
+                                    top: Val::Px(-slot.y * 0.5),
+                                    ..default()
+                                },
+                                width: Val::Px(slot.x),
+                                height: Val::Px(slot.y),
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::Center,
+                                column_gap: Val::Px(4.),
+                                border: UiRect::all(Val::Px(2.)),
+                                padding: UiRect::axes(Val::Px(3.), Val::Px(1.)),
+                                ..default()
+                            },
+                            BackgroundColor(rgb(SURFACE)),
+                            BorderColor(rgb(BRASS)),
+                            Outline::new(Val::Px(3.), Val::Px(2.), Color::NONE),
+                            BorderRadius::all(Val::Px(14.)),
+                        ))
+                        .with_children(|chip| {
+                            if let UiAction::SelectBuilding(kind) = entry.action {
+                                building_icon(
+                                    chip,
+                                    hud,
+                                    biome,
+                                    kind,
+                                    if layout.short { 30. } else { 42. },
+                                );
+                            } else {
+                                glyph(chip, hud, entry.glyph, if layout.short { 16. } else { 22. });
+                            }
+                            let title = text(
+                                chip,
+                                hud,
+                                entry.name,
+                                if layout.short { 12. } else { 14. },
+                                LIGHT,
+                            );
+                            chip.commands().entity(title).insert(TextFont {
+                                font: hud.bold.clone(),
+                                font_size: if layout.short { 12. } else { 14. },
+                                ..default()
+                            });
+                        });
+                    }
+                });
+            text(
+                wheel_root,
+                hud,
+                if layout.gamepad {
+                    "Stick oder Steuerkreuz · A/Kreuz wählen · B/Kreis zurück"
+                } else {
+                    "Pfeile wählen · Enter bestätigt · Esc zurück"
+                },
+                13.,
+                LIGHT,
+            );
+        });
+}
+
 fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play, layout: Layout) {
     let region = game.region();
     let city = game.city();
     let tight = layout.narrow_modal
-        || (layout.short && matches!(play.panel, Panel::Map | Panel::Spells | Panel::Modes));
+        || (layout.short
+            && matches!(
+                play.panel,
+                Panel::MainMenu
+                    | Panel::Map
+                    | Panel::Menu
+                    | Panel::Spells
+                    | Panel::Modes
+                    | Panel::Catalog
+                    | Panel::Inspection
+            ));
     parent.spawn((
         Node{width:Val::Percent(100.),height:Val::Percent(100.),align_items:AlignItems::Center,
             justify_content:JustifyContent::Center,..default()},
@@ -2161,10 +3081,16 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             },
             BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
-            if !matches!(play.panel, Panel::Inventory | Panel::Modes | Panel::Area(_)) {
+            if !matches!(play.panel, Panel::MainMenu | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection) {
+                let actions = if play.panel == Panel::Menu {
+                    [("Hauptmenü", UiAction::MainMenu, false), ("Fortsetzen", UiAction::Resume, true)]
+                } else {
+                    [("Hauptmenü", UiAction::MainMenu, false), ("Zurück", UiAction::Cancel, true)]
+                };
                 modal_header(box_node, hud, match play.panel {
                     Panel::Map => "Landkarte",
                     Panel::Menu => "Spielmenü",
+                    Panel::Controls => "Steuerung",
                     Panel::Orders(tool) => tool.name(),
                     Panel::Spells => "Zauberbuch",
                     Panel::Quests => "Aufträge",
@@ -2172,10 +3098,12 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     Panel::FirstDelivery => "Wohin mit dem Holz?",
                     Panel::Sound => "Ton",
                     _ => "",
-                }, layout.short);
+                }, layout.short, &actions);
             }
             match play.panel {
+                Panel::MainMenu => main_menu(box_node, hud, game, layout.short),
                 Panel::Menu => menu_panel(box_node,hud,game,layout.short),
+                Panel::Controls => controls_panel(box_node, hud, play.gamepad, layout.short),
                 Panel::Orders(tool) => orders_panel(box_node,hud,play,tool,layout.short),
                 Panel::Spells => spellbook(box_node,hud,play,layout.short),
                 Panel::Journey => {
@@ -2248,13 +3176,13 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     }
                 }
                 Panel::FirstDelivery => first_delivery_panel(box_node, hud, game, layout.short),
-                Panel::Closed | Panel::Story => {}
+                Panel::Closed | Panel::Story | Panel::Wheel(_) => {}
             }
             // The same feedback is visible while purchasing a talent or choosing a chapter.
-            if !matches!(play.panel, Panel::Map | Panel::FirstDelivery | Panel::Modes) && !layout.narrow_modal {
-                label(box_node,hud,Label::Notice,16.,DARK);
+            if !matches!(play.panel, Panel::MainMenu | Panel::Controls | Panel::Map | Panel::FirstDelivery | Panel::Modes | Panel::Catalog | Panel::Inspection) && !layout.narrow_modal {
+                feedback_toast(box_node, hud, Node::default(), false);
             }
-            if layout.gamepad && !layout.narrow_modal {
+            if layout.gamepad && !layout.narrow_modal && !matches!(play.panel, Panel::Controls | Panel::Catalog | Panel::Inspection) {
                 text(box_node, hud, "Stick oder Steuerkreuz · A wählen · B zurück", 12., MUTED);
             }
         });
@@ -2322,6 +3250,20 @@ pub fn layout(
         safe,
         catalog: play.catalog_branch,
         catalog_page: play.catalog_page,
+        inspected: (play.panel == Panel::Inspection)
+            .then(|| {
+                game.city()
+                    .building_at(play.aim)
+                    .map(|site| (site.kind, site.upgraded))
+            })
+            .flatten(),
+        can_inspect: play.panel == Panel::Closed
+            && play.tool == Tool::Hand
+            && game.city().held.is_none()
+            && game
+                .city()
+                .building_at(play.aim)
+                .is_some_and(|site| site.kind == Building::Field),
         tech: play.tech,
         research_count: game.campaign.research.count(),
         insight: if play.panel == Panel::Research {
@@ -2373,9 +3315,15 @@ pub fn layout(
             .with_children(|safe_root| {
                 if play.panel == Panel::Closed {
                     top(safe_root, &hud, &game, key);
-                    bottom(safe_root, &hud, &play, key);
+                    if play.tool == Tool::Build {
+                        placement_bar(safe_root, &hud, &play, key, game.region().kind);
+                    } else {
+                        bottom(safe_root, &hud, &play, key);
+                    }
                 } else if play.panel == Panel::Story {
                     cutscene(safe_root, &hud, key);
+                } else if let Panel::Wheel(wheel) = play.panel {
+                    selection_wheel(safe_root, &hud, wheel, key, game.region().kind);
                 } else {
                     modal(safe_root, &hud, &game, &play, key);
                 }
@@ -2386,11 +3334,15 @@ pub fn layout(
     hud.layout = Some(key);
 }
 
-pub fn update(
+pub(crate) fn update(
     game: Res<Game>,
     play: Res<Play>,
     target: Res<Target>,
     time: Res<Time>,
+    realtime: Res<Time<Real>>,
+    sound: Res<Sound>,
+    mut portraits: Query<&mut ImageNode, With<CatalogPortrait>>,
+    mut feedback_icons: Query<&mut ImageNode, (With<FeedbackIcon>, Without<CatalogPortrait>)>,
     mut labels: Query<(&Label, &mut Text)>,
     mut buttons: Query<
         (
@@ -2402,17 +3354,45 @@ pub fn update(
         ),
         Without<Toast>,
     >,
-    mut toasts: Query<(&mut Visibility, &mut BackgroundColor), With<Toast>>,
+    mut toasts: Query<(&Toast, &mut Visibility, &mut Node, &mut BackgroundColor)>,
 ) {
     let city = game.city();
     let region = game.region();
     let gifts = game.campaign.gifts;
     let growth = gifts.creature;
+    let notice_active = !play.notice.is_empty() && time.elapsed_secs() < play.notice_until;
+    let (notice_color, notice_icon) = match play.notice_kind {
+        Feedback::Action => (DARK, 11),
+        Feedback::Selection => (SURFACE, 14),
+        Feedback::Quest => (0x555130, 12),
+        Feedback::Blocked => (0x69402f, 27),
+    };
+    for mut image in &mut feedback_icons {
+        if let Some(atlas) = &mut image.texture_atlas {
+            if atlas.index != notice_icon {
+                atlas.index = notice_icon;
+            }
+        }
+    }
+    for mut image in &mut portraits {
+        if let Some(atlas) = &mut image.texture_atlas {
+            let index = play.catalog_preview.index();
+            if atlas.index != index {
+                atlas.index = index;
+            }
+        }
+    }
     for (tag, mut text) in &mut labels {
         let value = match tag {
             Label::Stock(material) => city.stock[material.index()].to_string(),
             Label::Faith => city.faith.to_string(),
+            Label::FaithUse => format!("{} Glauben\nFür Ausbau und Einfluss", city.faith),
             Label::Mana => format!("{:.0}/{:.0}", city.mana, city.mana_cap(region, gifts)),
+            Label::ManaUse => format!(
+                "{:.0}/{:.0} Wunderkraft\nFür Wunder · lädt nach",
+                city.mana,
+                city.mana_cap(region, gifts)
+            ),
             Label::Calendar => format!(
                 "{} · {}",
                 city.day_phase().name(),
@@ -2446,6 +3426,75 @@ pub fn update(
                     )
                 }),
             Label::Objective => city.objective(region).1,
+            Label::PracticeStatus => game
+                .practice_city()
+                .map_or(
+                    "Übungsinsel",
+                    |city| match crate::practice::Step::current(city) {
+                        crate::practice::Step::Grab => "Übungsinsel",
+                        crate::practice::Step::Complete => "Übung erneut spielen",
+                        _ => "Übung fortsetzen",
+                    },
+                )
+                .into(),
+            Label::AudioStatus => sound.status(play.mix, realtime.elapsed_secs_f64()).into(),
+            Label::ResumeMode => game.continue_mode().map_or("", Mode::name).into(),
+            Label::BlueprintStatus => {
+                if target.legal {
+                    format!("Bauplatz frei · {}", target.detail)
+                } else {
+                    target.detail.clone()
+                }
+            }
+            Label::CatalogName => play.catalog_preview.name().into(),
+            Label::CatalogPurpose => play.catalog_preview.use_text().into(),
+            Label::CatalogPrice => {
+                if region.sandbox {
+                    "Keine Baukosten im freien Bauen".into()
+                } else {
+                    format!("Baukosten · {}", play.catalog_preview.cost_text())
+                }
+            }
+            Label::CatalogReadiness => game
+                .blueprint_readiness(play.catalog_preview)
+                .err()
+                .unwrap_or_else(|| {
+                    let size = play.catalog_preview.size();
+                    format!("Bauplan bereit · {size} × {size} Felder")
+                }),
+            Label::CatalogAction => {
+                let action = if play
+                    .catalog_preview
+                    .civic()
+                    .is_some_and(|civic| !game.campaign.research.knows(civic.spec().unlock))
+                {
+                    "Forschung ansehen"
+                } else {
+                    "Bauplatz wählen"
+                };
+                if play.gamepad {
+                    format!("A  {action}")
+                } else {
+                    action.into()
+                }
+            }
+            Label::WheelChoice | Label::WheelDetail => {
+                if let Panel::Wheel(wheel) = play.panel {
+                    wheel
+                        .entries()
+                        .iter()
+                        .find(|entry| Some(entry.action) == play.focus)
+                        .map_or_else(String::new, |entry| {
+                            if matches!(tag, Label::WheelChoice) {
+                                entry.name.into()
+                            } else {
+                                entry.detail(&game)
+                            }
+                        })
+                } else {
+                    String::new()
+                }
+            }
             Label::FirstDelivery(FirstDelivery::Village) => {
                 if city.count(Building::House) == 0 {
                     format!("{PAW_BUNDLE} Holz fürs erste Dach\nMehr Stimmung im Dorf")
@@ -2461,11 +3510,13 @@ pub fn update(
             }
             Label::PracticeHint => {
                 let step = crate::practice::Step::current(city);
-                if play.gamepad && step == crate::practice::Step::Grab {
-                    "A halten greift bis zu 18 Holz.".into()
-                } else {
-                    step.hint().into()
+                match (play.gamepad, step) {
+                    (true, crate::practice::Step::Grab) => "A halten greift bis zu 18 Holz.",
+                    (true, crate::practice::Step::House) => "A baut · LB/L1 zeigt Baupläne",
+                    (true, crate::practice::Step::Rain) => "A wirkt Regen · LB/L1 zeigt Wunder",
+                    _ => step.hint(),
                 }
+                .into()
             }
             Label::Creature => format!(
                 "{} · Rang {} · {:.0}% Kraft · {}",
@@ -2502,10 +3553,6 @@ pub fn update(
                 _ => "Quelle wählen",
             }
             .into(),
-            Label::CityGoods => format!(
-                "{} Bretter · {} Quader · {} Werkzeug",
-                city.society.goods[0], city.society.goods[1], city.society.goods[2]
-            ),
             Label::Refined(index) => city.society.goods[*index].to_string(),
             Label::Carried => city.held.map_or_else(
                 || "Pfote ist frei".into(),
@@ -2563,7 +3610,7 @@ pub fn update(
                 .map_or_else(String::new, |story| story.caption(region).into()),
             Label::Quest => city.objective(region).0.into(),
             Label::Notice => {
-                if time.elapsed_secs() < play.notice_until {
+                if notice_active {
                     play.notice.clone()
                 } else {
                     String::new()
@@ -2650,19 +3697,26 @@ pub fn update(
             text.0 = value;
         }
     }
-    for (mut visible, mut surface) in &mut toasts {
-        *visible = if !play.notice.is_empty() && time.elapsed_secs() < play.notice_until {
+    for (toast, mut visible, mut node, mut surface) in &mut toasts {
+        let show = notice_active && (toast.overlay || play.notice_panel == play.panel);
+        visible.set_if_neq(if show {
             Visibility::Visible
         } else {
             Visibility::Hidden
-        };
-        surface.0 = rgb(if play.notice_ok { DARK } else { 0x69402f });
+        });
+        let display = if show { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+        surface.set_if_neq(BackgroundColor(rgb(notice_color)));
     }
     for (button, interaction, mut color, mut border, mut outline) in &mut buttons {
         let focused = play.panel != Panel::Closed && play.focus == Some(button.action);
+        let blueprint_selected = button.action == UiAction::PreviewBuilding(play.catalog_preview);
         let hovered = *interaction != Interaction::None;
         let unavailable = match button.action {
             UiAction::Confirm => !target.legal,
+            UiAction::Do(Action::Upgrade(tile)) => city.upgrade_plan(region, tile).is_err(),
             UiAction::Do(Action::Travel(index)) => index > game.campaign.unlocked,
             UiAction::Do(Action::Learn(talent)) => gifts.rank(talent) >= 2 || gifts.points == 0,
             UiAction::Do(Action::Research(tech)) => game
@@ -2690,7 +3744,7 @@ pub fn update(
         };
         let shade = if unavailable {
             if button.strong { 0xc9c3ab } else { 0x59665a }
-        } else if focused || hovered {
+        } else if focused || hovered || blueprint_selected {
             if button.strong {
                 0xffe5b2
             } else if button.selected {
@@ -2710,7 +3764,7 @@ pub fn update(
             SURFACE
         };
         color.0 = rgb(shade);
-        border.0 = rgb(if focused {
+        border.0 = rgb(if focused || blueprint_selected {
             0xffecaa
         } else if button.selected || button.strong {
             GOLD

@@ -1202,7 +1202,7 @@ pub fn sync_board(
                             .with_children(|wing| art::gate_leaf(wing, &art, side));
                     }
                 }
-                if site.kind.upgrade_price().is_some() {
+                if site.kind.upgrade().is_some() {
                     parent
                         .spawn((UpgradeView(index), Transform::default(), Visibility::Hidden))
                         .with_children(|detail| {

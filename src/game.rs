@@ -78,6 +78,14 @@ pub fn stock_text(stock: Stock) -> String {
         .join(" · ")
 }
 
+#[derive(Clone, Copy)]
+pub struct BuildingUpgrade {
+    pub materials: Stock,
+    pub believers: usize,
+    pub faith: u16,
+    pub benefit: &'static str,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Building {
     House,
@@ -194,35 +202,48 @@ impl Building {
         }
     }
 
-    pub fn upgrade_price(self) -> Option<Stock> {
-        match self {
-            Self::House => Some([7, 5, 2]),
-            Self::Field => Some([4, 6, 0]),
-            Self::Store | Self::Granary => Some([8, 6, 0]),
-            Self::Well | Self::Tower => Some([4, 8, 0]),
-            Self::Market => Some([10, 6, 4]),
-            Self::Shrine | Self::Workshop | Self::Waystone => None,
-            Self::Civic(Civic::Lodge | Civic::Courtyard | Civic::Forge | Civic::Bastion) => {
-                Some([8, 6, 2])
+    pub fn upgrade(self) -> Option<BuildingUpgrade> {
+        let (materials, believers, faith, benefit) = match self {
+            Self::House => ([7, 5, 2], 3, 8, "+1 Wohnplatz"),
+            Self::Field => ([4, 6, 0], 3, 8, "+6 Nahrung je Ernte"),
+            Self::Store => ([8, 6, 0], 3, 8, "+20 Lagerplatz pro Rohstoff"),
+            Self::Granary => ([8, 6, 0], 4, 16, "+20 Lagerplatz pro Rohstoff"),
+            Self::Well => (
+                [4, 8, 0],
+                4,
+                14,
+                "Bewässerungsradius steigt von 5 auf 8 Felder",
+            ),
+            Self::Market => ([10, 6, 4], 5, 20, "6 statt 4 Baustoffe je Handel"),
+            Self::Tower => ([4, 8, 0], 5, 18, "Schutzradius steigt von 5 auf 9 Felder"),
+            Self::Civic(Civic::Lodge) => ([8, 6, 2], 5, 18, "+2 Wohnplätze"),
+            Self::Civic(Civic::Courtyard) => ([8, 6, 2], 6, 20, "+2 Wohnplätze"),
+            Self::Civic(Civic::Forge) => ([8, 6, 2], 5, 20, "2 statt 1 Werkzeug je Fertigung"),
+            Self::Civic(Civic::Bastion) => {
+                ([8, 6, 2], 6, 24, "Schutzradius steigt von 10 auf 14 Felder")
             }
-            Self::Civic(_) => None,
-        }
+            _ => return None,
+        };
+        Some(BuildingUpgrade {
+            materials,
+            believers,
+            faith,
+            benefit,
+        })
     }
 
     pub fn use_text(self) -> &'static str {
         match self {
-            Self::House => "Ein weiterer Gläubiger",
-            Self::Store | Self::Granary => "Mehr Platz für Vorräte",
-            Self::Field => "Größere Ernte",
-            Self::Shrine => "Glauben am Übergang",
+            Self::House => "+1 Wohnplatz für Gläubige",
+            Self::Store => "+24 Lagerplatz pro Rohstoff",
+            Self::Granary => "+48 Lagerplatz pro Rohstoff",
+            Self::Field => "Wächst mit Regen. Die Ernte bringt Nahrung.",
+            Self::Shrine => "Erweitert den Einfluss am Übergang und lädt Wunderkraft schneller",
             Self::Workshop => "Schaltet Speicher und Ausbau frei",
-            Self::Well => "Bewässert Felder in größerem Umkreis",
-            Self::Market => "Tauscht Nahrung gegen mehr Baustoffe",
-            Self::Tower => "Beschützt einen größeren Umkreis",
-            Self::Waystone => "Erweitert deinen Einfluss",
-            Self::Civic(Civic::Lodge | Civic::Courtyard) => "Zwei zusätzliche Wohnplätze",
-            Self::Civic(Civic::Forge) => "Fertigt zwei Werkzeuge je Auftrag",
-            Self::Civic(Civic::Bastion) => "Vergrößert den Schutzbereich",
+            Self::Well => "Bewässert Felder im Umkreis von 5 Feldern",
+            Self::Market => "Tauscht 2 Nahrung gegen 4 Holz oder Stein",
+            Self::Tower => "Schützt gegen Überfälle im Umkreis von 5 Feldern",
+            Self::Waystone => "Erweitert deinen Einfluss und verbraucht 5 Glauben",
             Self::Civic(kind) => kind.spec().purpose,
         }
     }
@@ -1132,10 +1153,10 @@ impl Settlement {
             .enumerate()
             .find(|(_, site)| site.contains(tile))
             .ok_or("Wähle ein Gebäude für den Ausbau.")?;
-        let price = site
+        let upgrade = site
             .kind
-            .upgrade_price()
-            .ok_or("Dieses Gebäude ist fertig ausgebaut.")?;
+            .upgrade()
+            .ok_or("Dieses Gebäude hat keine zweite Stufe.")?;
         if site.upgraded {
             return Err("Das Gebäude ist bereits ausgebaut.".into());
         }
@@ -1145,14 +1166,18 @@ impl Settlement {
         if !self.connected(region, site) {
             return Err("Schließe das Gebäude an einen Dorfweg an.".into());
         }
-        let price = if region.sandbox { [0; 3] } else { price };
-        if !self.affordable(price) {
-            return Err(format!(
-                "Für den Ausbau fehlen Baustoffe · {}",
-                stock_text(price)
-            ));
+        if region.sandbox {
+            return Ok((index, [0; 3]));
         }
-        Ok((index, price))
+        let believers = self.inhabitants();
+        if believers < upgrade.believers {
+            return Err("Mehr Gläubige brauchen zusätzliche Wohnplätze.".into());
+        }
+        if self.faith < upgrade.faith {
+            return Err("Bauen, Ernten und Dorfhilfe bringen mehr Glauben.".into());
+        }
+        self.material_requirements(upgrade.materials, [0; 3])?;
+        Ok((index, upgrade.materials))
     }
 
     fn upgrade(&mut self, region: &Region, tile: Tile) -> GameResult {
@@ -1164,7 +1189,8 @@ impl Settlement {
             self.welcome_resident(region, index);
         }
         self.faith = self.faith.saturating_add(3);
-        Ok(format!("{} ausgebaut · {}", kind.name(), kind.use_text()))
+        let benefit = kind.upgrade().expect("validated upgrade").benefit;
+        Ok(format!("{} ausgebaut · {benefit}", kind.name()))
     }
 
     pub fn district_need(need: DistrictNeed) -> &'static str {
@@ -1254,6 +1280,23 @@ impl Settlement {
             .all(|(owned, price)| owned >= price)
     }
 
+    fn material_requirements(&self, price: Stock, goods: Goods) -> Result<(), String> {
+        if self.affordable(price) && self.can_buy_goods(goods) {
+            return Ok(());
+        }
+        let raw = stock_text(std::array::from_fn(|i| {
+            price[i].saturating_sub(self.stock[i])
+        }));
+        let refined = goods_text(std::array::from_fn(|i| {
+            goods[i].saturating_sub(self.society.goods[i])
+        }));
+        let missing = [raw, refined]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        Err(format!("Es fehlen {}", missing.join(" · ")))
+    }
+
     fn pay_goods(&mut self, goods: Goods) {
         for (owned, price) in self.society.goods.iter_mut().zip(goods) {
             *owned -= price;
@@ -1272,13 +1315,7 @@ impl Settlement {
         self.placement_check(region, kind, tile, false).is_ok()
     }
 
-    fn placement_check(
-        &self,
-        region: &Region,
-        kind: Building,
-        tile: Tile,
-        check_cost: bool,
-    ) -> Result<(), String> {
+    fn blueprint_requirements(&self, region: &Region, kind: Building) -> Result<(), String> {
         if kind
             .civic()
             .is_some_and(|civic| !civic.available_in(region.kind))
@@ -1290,9 +1327,6 @@ impl Settlement {
                 Building::Shrine if self.count(kind) > 0 => {
                     return Err("Der Grenzschrein steht bereits.".into());
                 }
-                Building::Shrine if tile != region.frontier => {
-                    return Err("Wähle den goldenen Schreinplatz am Übergang.".into());
-                }
                 Building::Shrine if self.quest != Quest::Bridge || self.faith < region.faith => {
                     return Err(format!(
                         "Für den Grenzschrein brauchst du den dritten Auftrag und {} Glauben.",
@@ -1300,7 +1334,7 @@ impl Settlement {
                     ));
                 }
                 Building::Workshop | Building::Well if self.city_rank() < 2 => {
-                    return Err("Dieses Gebäude wird auf Dorfstufe 2 verfügbar.".into());
+                    return Err("Baue ein Lager und ein Feld für Dorfstufe 2.".into());
                 }
                 Building::Granary | Building::Market | Building::Tower if self.city_rank() < 3 => {
                     return Err("Baue eine Werkstatt für diese Gebäudeart.".into());
@@ -1314,20 +1348,33 @@ impl Settlement {
                 Building::Waystone if self.count(kind) >= WAYSTONE_LIMIT => {
                     return Err("Hier sind bereits alle Grenzsteine gesetzt.".into());
                 }
-                Building::Waystone
-                    if !tile
-                        .neighbors()
-                        .into_iter()
-                        .any(|cell| self.road_at(region, cell) && self.walkable(region, cell)) =>
-                {
-                    return Err(
-                        "Setze den Grenzstein neben einen Weg an der goldenen Grenze.".into(),
-                    );
-                }
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    fn placement_check(
+        &self,
+        region: &Region,
+        kind: Building,
+        tile: Tile,
+        check_cost: bool,
+    ) -> Result<(), String> {
+        self.blueprint_requirements(region, kind)?;
         match kind {
+            Building::Shrine if !region.sandbox && tile != region.frontier => {
+                return Err("Wähle den goldenen Schreinplatz am Übergang.".into());
+            }
+            Building::Waystone
+                if !region.sandbox
+                    && !tile
+                        .neighbors()
+                        .into_iter()
+                        .any(|cell| self.road_at(region, cell) && self.walkable(region, cell)) =>
+            {
+                return Err("Setze den Grenzstein neben einen Weg an der goldenen Grenze.".into());
+            }
             Building::Civic(Civic::Port | Civic::WaterTerrace)
                 if !kind
                     .tiles(tile)
@@ -1345,24 +1392,23 @@ impl Settlement {
             if !self.influence(region, cell) {
                 return Err("Der ganze Grundriss muss im Einflussgebiet liegen.".into());
             }
-            if region.water(cell)
-                || !self.walkable(region, cell)
-                || self.building_at(cell).is_some()
-                || (!kind.gate() && self.road_at(region, cell))
+            if region.water(cell) {
+                return Err("Verschiebe den Grundriss ganz aufs Land.".into());
+            }
+            if self.building_at(cell).is_some() || (!kind.gate() && self.road_at(region, cell)) {
+                return Err("Der Grundriss überlappt ein Gebäude oder einen Weg.".into());
+            }
+            if !self.walkable(region, cell)
                 || (!region.sandbox && cell == region.frontier && kind != Building::Shrine)
-                || self.walkers.iter().any(|walker| walker.tile() == cell)
             {
-                return Err("Suche freien Boden neben dem Weg.".into());
+                return Err("Verschiebe den Grundriss auf freien Boden.".into());
+            }
+            if self.walkers.iter().any(|walker| walker.tile() == cell) {
+                return Err("Warte kurz, bis das Feld frei ist.".into());
             }
         }
-        if check_cost
-            && !region.sandbox
-            && (!self.affordable(kind.price()) || !self.can_buy_goods(kind.goods_price()))
-        {
-            return Err(format!(
-                "Es fehlen Baustoffe. Benötigt werden {}.",
-                kind.cost_text()
-            ));
+        if check_cost && !region.sandbox {
+            self.material_requirements(kind.price(), kind.goods_price())?;
         }
         if kind.gate()
             || self.footprint_has_detour(region, kind, tile)
@@ -3613,6 +3659,8 @@ pub struct Campaign {
     #[serde(default)]
     pub intro_seen: bool,
     #[serde(default)]
+    practice_finished: bool,
+    #[serde(default)]
     pub research: Research,
     pub settlements: Vec<Option<Settlement>>,
 }
@@ -3628,6 +3676,7 @@ impl Campaign {
             unlocked: 0,
             gifts: Gifts::default(),
             intro_seen: sandbox || regions[0].tutorial,
+            practice_finished: false,
             research: Research::default(),
             settlements,
         };
@@ -3865,6 +3914,32 @@ impl Game {
             || self.archives.iter().any(|profile| profile.mode == mode)
     }
 
+    pub fn continue_mode(&self) -> Option<Mode> {
+        if self.mode == Mode::Tutorial {
+            self.archives.last().map(|profile| profile.mode)
+        } else {
+            Some(self.mode)
+        }
+    }
+
+    pub fn practice_city(&self) -> Option<&Settlement> {
+        if self.mode == Mode::Tutorial {
+            Some(self.city())
+        } else {
+            self.archives
+                .iter()
+                .find(|profile| profile.mode == Mode::Tutorial)
+                .and_then(|profile| profile.campaign.settlements.first()?.as_ref())
+        }
+    }
+
+    pub fn replay_finished_practice(&mut self) {
+        if self.mode == Mode::Tutorial && self.campaign_complete() {
+            self.campaign = Campaign::new(&self.regions);
+            self.campaign.practice_finished = true;
+        }
+    }
+
     pub fn switch_mode(&mut self, mode: Mode) -> GameResult {
         if self.mode == mode {
             return Ok(mode.name().into());
@@ -3917,6 +3992,19 @@ impl Game {
         self.city().placement(self.region(), kind, tile)
     }
 
+    pub fn blueprint_readiness(&self, kind: Building) -> Result<(), String> {
+        if let Some(civic) = kind.civic() {
+            self.campaign.research.permits(civic)?;
+        }
+        let city = self.city();
+        let region = self.region();
+        city.blueprint_requirements(region, kind)?;
+        if region.sandbox {
+            return Ok(());
+        }
+        city.material_requirements(kind.price(), kind.goods_price())
+    }
+
     pub fn act(&mut self, action: Action) -> GameResult {
         let index = self.campaign.active;
         let settlement = self.campaign.settlements[index].as_mut().unwrap();
@@ -3957,7 +4045,8 @@ impl Game {
                     return Err("Dieser Auftrag wurde bereits angenommen.".into());
                 }
                 settlement.local_accepted = true;
-                Ok("Der Nebenauftrag steht jetzt unter Aufträge.".into())
+                let (title, _, _) = settlement.local_quest(region);
+                Ok(format!("Auftrag angenommen · {title}"))
             }
             Action::FinishLocal => {
                 if settlement.side_quest(region) != SideQuest::Ready {
@@ -3967,7 +4056,7 @@ impl Game {
                 settlement.faith = settlement.faith.saturating_add(6);
                 gifts.earn();
                 research.earn(2);
-                Ok("Nebenauftrag erfüllt · 6 Glauben · 2 Erkenntnis".into())
+                Ok("Nebenauftrag erfüllt · +6 Glauben · +2 Erkenntnis · +1 Talentpunkt".into())
             }
             Action::RecallHelpers => settlement.recall_helpers(),
             Action::MoveHippo(tile) => settlement.move_hippo(region, tile),
@@ -4082,6 +4171,9 @@ impl Game {
         let region = &self.regions[index];
         let previous = city.outcome;
         let main = city.advance_quest(region);
+        if main && region.tutorial {
+            self.campaign.practice_finished = true;
+        }
         if let Some(outcome) = city.outcome.filter(|_| previous.is_none()) {
             let shift = if outcome == Outcome::Alliance {
                 16
@@ -4119,7 +4211,10 @@ impl Game {
     }
 
     pub fn practice_required(&self) -> bool {
-        self.mode == Mode::Tutorial && !self.campaign_complete() && self.archives.is_empty()
+        self.mode == Mode::Tutorial
+            && !self.campaign.practice_finished
+            && !self.campaign_complete()
+            && self.archives.is_empty()
     }
 }
 
@@ -4264,6 +4359,74 @@ mod tests {
         assert_eq!(game.mode, campaign);
         assert!(game.has_save(Mode::Tutorial));
         assert_eq!(game.city().buildings.len(), 0);
+    }
+
+    #[test]
+    fn the_main_menu_reopens_practice_and_preserves_the_last_campaign() {
+        let mut game = Game::start(Mode::Tutorial);
+        let mut play = Play::new(&game);
+        let mut view = CameraRig::new(&game);
+        play.show_main_menu(&game);
+        assert_eq!(play.focus, Some(UiAction::SelectMode(Mode::Tutorial)));
+        for shortcut in [
+            UiAction::Panel(Panel::Map),
+            UiAction::ToolTarget,
+            UiAction::Cancel,
+        ] {
+            play.activate(shortcut, &mut game, &mut view, 0.);
+            assert_eq!(play.panel, Panel::MainMenu);
+        }
+        play.activate(
+            UiAction::SelectMode(Mode::Tutorial),
+            &mut game,
+            &mut view,
+            1.,
+        );
+        assert_eq!(play.panel, Panel::Closed);
+        let source = game.region().sources[0].tile;
+        game.act(Action::Grab(source, PAW_BUNDLE)).unwrap();
+        play.activate(UiAction::Panel(Panel::Menu), &mut game, &mut view, 2.);
+        assert_eq!(play.focus, Some(UiAction::MainMenu));
+        play.activate(UiAction::MainMenu, &mut game, &mut view, 2.);
+        play.activate(
+            UiAction::SelectMode(Mode::Tutorial),
+            &mut game,
+            &mut view,
+            2.,
+        );
+        assert_eq!(game.city().held.unwrap().count, PAW_BUNDLE);
+
+        game.campaign.settlements[0].as_mut().unwrap().quest = Quest::Complete;
+        play.show_main_menu(&game);
+        play.activate(
+            UiAction::SelectMode(Mode::Tutorial),
+            &mut game,
+            &mut view,
+            3.,
+        );
+        assert_eq!(
+            crate::practice::Step::current(game.city()),
+            crate::practice::Step::Grab
+        );
+        assert!(!game.practice_required());
+        let campaign = Mode::Campaign(Biome::Valley);
+        game.switch_mode(campaign).unwrap();
+        let source = game.region().sources[0].tile;
+        game.act(Action::Grab(source, PAW_LIMIT)).unwrap();
+        play.show_main_menu(&game);
+        play.activate(
+            UiAction::SelectMode(Mode::Tutorial),
+            &mut game,
+            &mut view,
+            4.,
+        );
+        assert!(game.city().held.is_none());
+        let saved = serde_json::to_vec(&game.saved_games()).unwrap();
+        let mut game = Game::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
+        play.show_main_menu(&game);
+        assert_eq!(play.focus, Some(UiAction::SelectMode(campaign)));
+        play.activate(UiAction::SelectMode(campaign), &mut game, &mut view, 5.);
+        assert_eq!(game.city().held.unwrap().count, PAW_LIMIT);
     }
 
     #[test]
@@ -4730,7 +4893,7 @@ mod tests {
                     let tile = site.unwrap_or_else(|| place_quest_building(game, kind, roadside));
                     if upgraded {
                         connect_quest_site(game, tile);
-                        stock_for(game, kind.upgrade_price().unwrap());
+                        stock_for(game, kind.upgrade().unwrap().materials);
                         game.act(Action::Upgrade(tile)).unwrap();
                     }
                     if met(game) {
@@ -4918,7 +5081,7 @@ mod tests {
                 .connected(&region, game.city().building_at(site).unwrap())
         );
         if kind == Building::House {
-            stock_for(game, kind.upgrade_price().unwrap());
+            stock_for(game, kind.upgrade().unwrap().materials);
             game.act(Action::Upgrade(site)).unwrap();
             assert!(game.act(Action::Upgrade(site)).is_err());
         }
@@ -5252,6 +5415,51 @@ mod tests {
         assert!(game.act(Action::Build(Building::House, target, 0)).is_err());
         assert_eq!(game.city().stock, remaining);
         assert_eq!(game.city().count(Building::House), 1);
+    }
+
+    #[test]
+    fn upgrades_check_believers_and_faith_then_pay_once() {
+        let mut game = fresh();
+        let tile = place_quest_building(&mut game, Building::House, true);
+        for kind in [Building::Store, Building::Field, Building::Workshop] {
+            build(&mut game, kind);
+        }
+        let upgrade = Building::House.upgrade().unwrap();
+        stock_for(&mut game, upgrade.materials);
+        let stock = game.city().stock;
+        let city = game.campaign.settlements[0].as_mut().unwrap();
+        assert_eq!(city.inhabitants(), upgrade.believers);
+        let resident = city.walkers.pop().unwrap();
+        assert!(
+            game.act(Action::Upgrade(tile))
+                .unwrap_err()
+                .contains("Gläubige")
+        );
+        let city = game.campaign.settlements[0].as_mut().unwrap();
+        city.walkers.push(resident);
+        city.faith = upgrade.faith - 1;
+        assert!(
+            game.act(Action::Upgrade(tile))
+                .unwrap_err()
+                .contains("Glauben")
+        );
+        assert_eq!(game.city().stock, stock);
+        let housing = game.city().housing();
+        game.campaign.settlements[0].as_mut().unwrap().faith = upgrade.faith;
+        assert!(
+            game.act(Action::Upgrade(tile))
+                .unwrap()
+                .contains(upgrade.benefit)
+        );
+        assert_eq!(game.city().housing(), housing + 1);
+        assert_eq!(game.city().faith, upgrade.faith + 3);
+        let paid = std::array::from_fn(|i| stock[i] - upgrade.materials[i]);
+        assert_eq!(game.city().stock, paid);
+        let saved = serde_json::to_vec(&game.saved_games()).unwrap();
+        let mut resumed = Game::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
+        assert!(resumed.city().building_at(tile).unwrap().upgraded);
+        assert!(resumed.act(Action::Upgrade(tile)).is_err());
+        assert_eq!(resumed.city().stock, paid);
     }
 
     #[test]
