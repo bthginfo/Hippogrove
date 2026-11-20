@@ -2239,6 +2239,7 @@ name = "hippogrove"
 version = "1.0.0"
 dependencies = [
  "bevy",
+ "ndk-sys 0.6.0+11769913",
  "serde",
  "serde_json",
 ]

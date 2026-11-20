@@ -140,7 +140,7 @@ fn embed_assets(app: &App) {
     use std::path::Path;
 
     let assets = app.world().resource::<EmbeddedAssetRegistry>();
-    let files: [(&str, &[u8]); 4] = [
+    let files: [(&str, &[u8]); 5] = [
         (
             "fonts/DMSans-Bold.ttf",
             include_bytes!("../assets/fonts/DMSans-Bold.ttf"),
@@ -157,6 +157,7 @@ fn embed_assets(app: &App) {
             "models/hippo.glb",
             include_bytes!("../assets/models/hippo.glb"),
         ),
+        ("ui/atlas.png", include_bytes!("../assets/ui/atlas.png")),
     ];
     for (name, data) in files {
         assets.insert_asset(Path::new("assets").join(name), Path::new(name), data);

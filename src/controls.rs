@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+#[cfg(target_os = "android")]
+mod android;
+
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 use bevy::input::gamepad::{GamepadAxis, GamepadButton};
 use bevy::{
@@ -53,6 +56,47 @@ static MOBILE_PAD: std::sync::Mutex<Pad> = std::sync::Mutex::new(Pad {
 });
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
+static SAFE_INSETS: std::sync::Mutex<Vec4> = std::sync::Mutex::new(Vec4::ZERO);
+
+pub fn safe_insets(_window: &Window) -> [u16; 4] {
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let insets = *SAFE_INSETS
+            .lock()
+            .unwrap_or_else(|state| state.into_inner());
+        #[cfg(target_os = "android")]
+        let insets = insets / _window.scale_factor();
+        insets.to_array().map(|inset| inset.max(0.).ceil() as u16)
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    [0; 4]
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_game_hippogrove_GameActivity_publishInsets(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+) {
+    *SAFE_INSETS
+        .lock()
+        .unwrap_or_else(|state| state.into_inner()) =
+        Vec4::new(left as f32, top as f32, right as f32, bottom as f32);
+}
+
+#[cfg(target_os = "ios")]
+#[unsafe(no_mangle)]
+pub extern "C" fn hippogrove_safe_insets(left: f32, top: f32, right: f32, bottom: f32) {
+    *SAFE_INSETS
+        .lock()
+        .unwrap_or_else(|state| state.into_inner()) = Vec4::new(left, top, right, bottom);
+}
+
+#[cfg(any(target_os = "ios", target_os = "android"))]
 fn native_pad(
     left_x: f32,
     left_y: f32,
@@ -79,22 +123,6 @@ fn native_pad(
     };
 }
 
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_game_hippogrove_GameActivity_publishController(
-    _env: *mut std::ffi::c_void,
-    _class: *mut std::ffi::c_void,
-    lx: f32,
-    ly: f32,
-    rx: f32,
-    ry: f32,
-    zoom: f32,
-    buttons: i32,
-    connected: u8,
-) {
-    native_pad(lx, ly, rx, ry, zoom, buttons as u32, connected != 0);
-}
-
 #[cfg(target_os = "ios")]
 #[unsafe(no_mangle)]
 pub extern "C" fn hippogrove_controller_state(
@@ -117,6 +145,10 @@ unsafe extern "C" {
 
 #[cfg(target_os = "ios")]
 #[link(name = "GameController", kind = "framework")]
+unsafe extern "C" {}
+
+#[cfg(target_os = "ios")]
+#[link(name = "UIKit", kind = "framework")]
 unsafe extern "C" {}
 
 #[cfg(target_os = "ios")]
@@ -172,15 +204,17 @@ struct Drag {
     start: Vec2,
     last: Vec2,
     over_ui: bool,
+    pressed: Option<UiAction>,
     dragging: bool,
 }
 
 impl Drag {
-    fn new(position: Vec2, over_ui: bool) -> Self {
+    fn new(position: Vec2, (over_ui, pressed): (bool, Option<UiAction>)) -> Self {
         Self {
             start: position,
             last: position,
             over_ui,
+            pressed,
             dragging: false,
         }
     }
@@ -332,7 +366,7 @@ fn release(
     let (over_ui, action) = hud::hit(areas, position, scale);
     if !gesture.dragging && gesture.start.distance(position) <= 15. {
         if gesture.over_ui {
-            if let Some(action) = action {
+            if let Some(action) = action.filter(|action| Some(*action) == gesture.pressed) {
                 play.activate(action, game, view, now);
             }
         } else if !over_ui && play.panel == Panel::Closed {
@@ -405,7 +439,7 @@ pub fn collect(
                 if controls.fingers.len() == 1 {
                     controls.touch = Some((
                         event.id,
-                        Drag::new(event.position, hud::hit(&areas, event.position, scale).0),
+                        Drag::new(event.position, hud::hit(&areas, event.position, scale)),
                     ));
                 } else {
                     controls.touch = None;
@@ -483,7 +517,7 @@ pub fn collect(
         if let Some(cursor) = window.cursor_position() {
             play.pointer = Some(cursor);
             if event.state == ButtonState::Pressed {
-                controls.mouse = Some(Drag::new(cursor, hud::hit(&areas, cursor, scale).0));
+                controls.mouse = Some(Drag::new(cursor, hud::hit(&areas, cursor, scale)));
             } else if let Some(gesture) = controls.mouse.take() {
                 release(
                     gesture, cursor, &mut play, &mut game, &mut view, camera, pose, &areas, scale,
@@ -547,6 +581,22 @@ pub fn collect(
             play.activate(action, &mut game, &mut view, now);
         }
     }
+    if play.panel != Panel::Closed {
+        let direction = Vec2::new(
+            f32::from(keys.just_pressed(KeyCode::ArrowRight))
+                - f32::from(keys.just_pressed(KeyCode::ArrowLeft)),
+            f32::from(keys.just_pressed(KeyCode::ArrowDown))
+                - f32::from(keys.just_pressed(KeyCode::ArrowUp)),
+        );
+        if direction != Vec2::ZERO || keys.just_pressed(KeyCode::Enter) {
+            play.focus = hud::move_focus(&areas, play.focus, direction);
+            if keys.just_pressed(KeyCode::Enter) {
+                if let Some(action) = play.focus {
+                    play.activate(action, &mut game, &mut view, now);
+                }
+            }
+        }
+    }
 
     let pad = read_pad(&gamepads);
     let pressed = if controls.resume_pad {
@@ -582,7 +632,6 @@ pub fn collect(
             view.zoom(pad.zoom * dt * 1.20);
         }
     }
-    let mut cursor = play.pointer.unwrap_or(size * 0.5);
     let horizontal = i32::from(pressed & RIGHT != 0) - i32::from(pressed & LEFT != 0);
     let vertical = i32::from(pressed & DOWN != 0) - i32::from(pressed & UP != 0);
     if play.panel == Panel::Closed {
@@ -594,37 +643,25 @@ pub fn collect(
             let choice = (play.option as i32 + vertical).rem_euclid(play.tool.choices() as i32);
             play.choose(choice as usize);
         }
-    } else if horizontal != 0 || vertical != 0 {
-        let mut buttons: Vec<_> = areas
-            .iter()
-            .filter_map(|(button, node, pose, visible)| {
-                (button.is_some() && visible.get() && !node.is_empty())
-                    .then_some((node.stack_index(), pose.translation().truncate() / scale))
-            })
-            .collect();
-        buttons.sort_by_key(|(order, _)| *order);
-        if !buttons.is_empty() {
-            let current = buttons
-                .iter()
-                .position(|(_, position)| position.distance(cursor) < 8.);
-            let direction = horizontal + vertical;
-            let next = current.map_or(0, |index| {
-                (index as i32 + direction.signum()).rem_euclid(buttons.len() as i32) as usize
-            });
-            cursor = buttons[next].1;
+        let cursor = (play.pointer.unwrap_or(size * 0.5)
+            + Vec2::new(left.x, -left.y) * size.y * 0.83 * dt)
+            .clamp(Vec2::ZERO, size);
+        play.pointer = Some(cursor);
+        let over_ui = hud::hit(&areas, cursor, scale).0;
+        if !over_ui && (left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13) {
+            select(&mut play, &game, camera, pose, cursor);
         }
-    }
-    cursor = (cursor + Vec2::new(left.x, -left.y) * size.y * 0.83 * dt).clamp(Vec2::ZERO, size);
-    play.pointer = Some(cursor);
-    let (over_ui, hit) = hud::hit(&areas, cursor, scale);
-    if play.panel == Panel::Closed
-        && !over_ui
-        && (left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13)
-    {
-        select(&mut play, &game, camera, pose, cursor);
-    }
-    if pressed & SOUTH != 0 {
-        play.activate(hit.unwrap_or(UiAction::Confirm), &mut game, &mut view, now);
+        if pressed & SOUTH != 0 {
+            play.activate(UiAction::Confirm, &mut game, &mut view, now);
+        }
+    } else {
+        let direction = Vec2::new(horizontal as f32, vertical as f32);
+        play.focus = hud::move_focus(&areas, play.focus, direction);
+        if pressed & SOUTH != 0 {
+            if let Some(action) = play.focus {
+                play.activate(action, &mut game, &mut view, now);
+            }
+        }
     }
     for (bit, action) in [
         (EAST, UiAction::Cancel),
