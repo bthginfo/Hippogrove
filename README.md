@@ -2,13 +2,17 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
+**[Hippogrove 1.2.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/aa2770b035bd9b175dcd0d6a926cb5a722fac5a3/Hippogrove-1.2.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.2.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/aa2770b035bd9b175dcd0d6a926cb5a722fac5a3/Hippogrove-1.2.0.apk.sha256)
+
+Die signierte Standalone-App braucht Android 8 oder neuer und Vulkan. Die APK unterstützt ARM64 und x86_64. Die App lässt sich parallel zu älteren Hippogrove-Versionen installieren und hat ihren eigenen Spielstand.
+
 Hippogrove spielt sich im Querformat per Touch oder mit angeschlossenem Controller. Fünf Themenkampagnen haben je drei Kapitel. In Europa, im nordischen Fjord, auf ostasiatischen Terrassen, am afrikanisch inspirierten See und in der griechischen Ägäis stiftest du Bündnisse oder gewinnst Siedlungen mit Wundern und Wachen. Für jede Landschaft gibt es auch **Freies Bauen** mit offenen Brücken, allen Plänen und einem eigenen Spielstand. [Kampagnen und Sandbox](docs/V1.md#kampagnen-und-freies-bauen)
 
 ![Der Ägäisbogen im Spiel mit Theater, Hafen, Badhaus und dem Nilpferd](docs/aegaeisbogen-spiel.jpg)
 
 ## Spielen
 
-Für Android gibt es Hippogrove als signierte Standalone-APK. Sie benötigt Android 8 oder neuer, ein 64-Bit-Gerät und Vulkan. Die Standalone-App nutzt die Paket-ID `game.hippogrove.standalone` und hat ihren eigenen Spielstand. [Aktuelles GitHub-Release](https://github.com/bthginfo/Hippogrove/releases/latest)
+Öffne die heruntergeladene APK auf deinem Android-Gerät und installiere sie. In der App-Übersicht findest du das Spiel unter **Hippogrove**. [Alle Veröffentlichungen](https://github.com/bthginfo/Hippogrove/releases)
 
 Das Spiel startet im **Hauptmenü**. Über **Tutorial** erreichst du die Übungsinsel und kannst sie später erneut spielen. Der Marker zeigt dir Holz, Sammelplatz, Bauplatz, Feld und Nilpferd. Tippe auf **Greifen**, um bis zu sechs Einheiten aufzuheben, oder halte den Knopf für bis zu 18. Lass los, wenn die gewünschte Menge angezeigt wird. **Zum Ziel** führt zum nächsten offenen Auftrag und wählt das passende Werkzeug. Nach der Übung öffnet sich die Kampagnenauswahl. Aus einer Partie führt **Menü → Hauptmenü** zurück zur Auswahl. **Spiel fortsetzen** lädt deine laufende Partie.
 
@@ -32,7 +36,7 @@ Auf den neuen Inseln bringen Rivale und Kreatur eine eigene Bedrohung mit. Ivens
 
 Jedes Kapitel hat eigene Bitten und einen Nebenauftrag. Im Weidenland versorgst du Mühlen und Höfe, im Fjord sicherst du Winterquartiere und auf den Terrassen bringst du mehrere Reisernten ein. Am See verbinden neue Wege die Brunnen und Märkte. In der Ägäis produzierst du Öl und richtest ein Theater für das Fest der Winde ein. Das Auftragsfenster zeigt den Fortschritt jedes Ziels. Schon besuchte Kapitel aus älteren Spielständen behalten ihre Aufträge.
 
-Im Entwicklungsstand 1.2 führt dich der nächste Auftragsschritt oben rechts zu den Details. Ein `!` auf der Karte kennzeichnet einen verfügbaren Nebenauftrag, ein `?` eine abholbare Belohnung. Der goldene Knopf zeigt die Aktion am ausgewählten Ziel. **Nilpferd** öffnet die Befehle zum Sammeln, Herbeirufen und zur Pflege. Das **Zauberbuch** zeigt die Voraussetzungen für Wunder. Der Fokusrahmen zeigt im Menü, welche Aktion du per Controller oder Tastatur bestätigst.
+Wähle oben rechts den aktuellen Auftrag, um seine Details zu öffnen. Ein `!` auf der Karte kennzeichnet einen verfügbaren Nebenauftrag, ein `?` eine abholbare Belohnung. Der goldene Knopf zeigt die Aktion am ausgewählten Ziel. **Nilpferd** öffnet die Befehle zum Sammeln, Herbeirufen und zur Pflege. Das **Zauberbuch** zeigt die Voraussetzungen für Wunder. Der Fokusrahmen zeigt im Menü, welche Aktion du per Controller oder Tastatur bestätigst.
 
 | Steuerung | Kamera und Ziel | Aktionen |
 | --- | --- | --- |
@@ -60,7 +64,7 @@ rustup target add aarch64-linux-android x86_64-linux-android
 tools/build-android.sh
 ```
 
-Ein Entwicklungsbuild liegt unter `build/android/`. Für die Standalone-APK setze `HIPPOGROVE_STANDALONE=1`, `HIPPOGROVE_KEYSTORE` und `HIPPOGROVE_KEY_PASSWORD_FILE`. Der Schlüsselalias ist standardmäßig `hippogrove` und lässt sich mit `HIPPOGROVE_KEY_ALIAS` setzen. Die signierte APK landet unter `build/android/standalone/`. Updates der Standalone-App verwenden dieselbe Signatur.
+Ein Entwicklungsbuild liegt unter `build/android/`. Für die Standalone-APK setze `HIPPOGROVE_STANDALONE=1`, `HIPPOGROVE_KEYSTORE` und `HIPPOGROVE_KEY_PASSWORD_FILE`. Der Schlüsselalias ist standardmäßig `hippogrove` und lässt sich mit `HIPPOGROVE_KEY_ALIAS` setzen. Die signierte APK landet unter `build/android/standalone/`. Updates der Standalone-App verwenden die Paket-ID `game.hippogrove.standalone` und dieselbe Signatur.
 
 ### iOS und iPadOS
 
@@ -86,5 +90,7 @@ Die Karten reichen bis 178 × 140 Felder. Gebirgsketten, Täler, dichte Haine, F
 Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus Waldwinkel 1.5. Die Instrumentalspur „Between the Olives“ wird mit `art/build_music.py` erzeugt. Musik, Umgebung und Effekte lassen sich im Spielmenü unter **Ton** einzeln schalten. [Waldwinkel 1.5](https://github.com/bthginfo/waldwinkel/tree/8a98a76a2921690b533015e3f57fadccc2c66b24)
 
 ## Geprüfter Stand
+
+Alle 33 Rust-Tests für 1.2.0 waren erfolgreich. Der Spieldurchlauf mit virtuellem Gamepad umfasste Tutorial, Kampagneneinstieg, Baubuch und Ausbau. Der APK-Download und seine Signatur wurden geprüft. Der Lauf auf physischen Android-Geräten steht aus.
 
 Die Rust-Tests spielen den Friedensweg durch die 15 Themenkapitel sowie die fünf Kapitel der Chronik und den Kampfweg im Weidental. Sie prüfen auch die Forschungs- und Produktionsketten, Geburten, Patrouillen, Wunder, die Menüführung und die Übernahme älterer Spielstände. [Spielaufnahmen und Prüfungen für 1.0](docs/V1.md) · [Stadtentwicklung](docs/Stadtentwicklung.md)
