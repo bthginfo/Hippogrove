@@ -22,6 +22,8 @@ fi
 
 export SDKROOT="$(xcrun --sdk "$sdk" --show-sdk-path)"
 export IPHONEOS_DEPLOYMENT_TARGET=15.0
+# Rust's aarch64-apple-ios-sim spelling is not a valid Clang triple.
+export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:-} --target=$triple -isysroot \"$SDKROOT\""
 out="$PWD/build/ios/$sdk"
 app="$out/Hippogrove.app"
 mkdir -p "$app/assets"
