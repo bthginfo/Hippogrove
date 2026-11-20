@@ -768,6 +768,146 @@ pub fn draw(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind: Ci
                 [1.36, 0.13, 0.14],
             );
         }
+        Civic::Gate => {
+            for x in [-0.82, 0.82] {
+                box_at(
+                    parent,
+                    art,
+                    wall(art, biome),
+                    [x, 0.92, 0.],
+                    [0.25, 1.84, 0.32],
+                );
+                box_at(
+                    parent,
+                    art,
+                    &art.warm_stone,
+                    [x, 0.14, 0.],
+                    [0.35, 0.25, 0.41],
+                );
+                box_at(
+                    parent,
+                    art,
+                    trim(art, biome),
+                    [x, 1.82, 0.],
+                    [0.32, 0.15, 0.39],
+                );
+                lamp(parent, art, x, 1.57, 0.24);
+            }
+            box_at(parent, art, &art.timber, [0., 1.91, 0.], [1.86, 0.20, 0.42]);
+            roof(
+                parent,
+                art,
+                biome,
+                [0., 2.02, 0.],
+                [2.04, 0.54, 0.66],
+                false,
+            );
+            box_at(parent, art, &art.gold, [0., 1.96, 0.24], [0.25, 0.17, 0.06]);
+        }
+        Civic::Forester => {
+            shell(
+                parent,
+                art,
+                biome,
+                [-0.25, -0.35],
+                [2.31, 1.36, 1.80],
+                false,
+            );
+            for x in [-0.75, 0.48] {
+                parcel(parent, art, Material::Wood, Vec3::new(x, 0.22, 0.91), 0.94);
+                parcel(parent, art, Material::Wood, Vec3::new(x, 0.46, 0.93), 0.79);
+            }
+            lamp(parent, art, -1.01, 1.12, 0.85);
+        }
+        Civic::WinterHall => {
+            shell(parent, art, biome, [0., -0.18], [2.68, 1.75, 2.05], true);
+            steps(parent, art, 0., 1.13, 1.36);
+            for x in [-0.99, 0.99] {
+                column(parent, art, biome, x, 1.10, 1.39);
+                lamp(parent, art, x, 1.31, 1.30);
+            }
+            brazier(parent, art, 0., 0.26, 1.08);
+            pennant(parent, art, biome, 0., 1.62, 1.05);
+        }
+        Civic::SeedPavilion => {
+            box_at(parent, art, &art.timber, [0., 0.19, 0.], [2.65, 0.31, 2.50]);
+            for x in [-1.0, 1.] {
+                for z in [-0.95, 0.95] {
+                    column(parent, art, biome, x, z, 1.63);
+                    pot(parent, art, x * 0.72, z * 0.71, 0.36, z > 0.);
+                }
+                lamp(parent, art, x, 1.42, 1.10);
+            }
+            roof(
+                parent,
+                art,
+                biome,
+                [0., 1.78, 0.],
+                [2.86, 0.94, 2.63],
+                false,
+            );
+            box_at(
+                parent,
+                art,
+                &art.plank,
+                [0., 0.56, 0.04],
+                [1.40, 0.40, 0.69],
+            );
+        }
+        Civic::WaterTerrace => {
+            for step in 0..3 {
+                let height = 0.82 - step as f32 * 0.21;
+                let z = step as f32 * 0.68 - 0.66;
+                box_at(
+                    parent,
+                    art,
+                    &art.warm_stone,
+                    [0., height * 0.5, z],
+                    [2.63, height, 0.71],
+                );
+                box_at(
+                    parent,
+                    art,
+                    &art.ripple,
+                    [0., height + 0.025, z],
+                    [1.82, 0.04, 0.56],
+                );
+                for x in [-0.98, 0.98] {
+                    box_at(
+                        parent,
+                        art,
+                        &art.plaster,
+                        [x, height + 0.09, z],
+                        [0.25, 0.18, 0.72],
+                    );
+                }
+            }
+            for x in [-0.91, 0.91] {
+                column(parent, art, biome, x, -0.86, 1.56);
+                pot(parent, art, x, 1.06, 0.36, false);
+            }
+        }
+        Civic::OlivePress => {
+            shell(parent, art, biome, [0.12, -0.53], [2.46, 1.43, 1.44], false);
+            round(parent, art, &art.limestone, [0., 0.30, 0.64], 1.43, 0.44);
+            part(
+                parent,
+                &art.cylinder,
+                &art.warm_stone,
+                Vec3::new(0., 0.76, 0.64),
+                Vec3::new(0.83, 0.24, 0.83),
+                Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            );
+            box_at(
+                parent,
+                art,
+                &art.timber,
+                [0.56, 0.76, 0.64],
+                [0.94, 0.14, 0.13],
+            );
+            pot(parent, art, -1.03, 0.69, 0.15, false);
+            pot(parent, art, 1.08, 1.07, 0.13, false);
+        }
         Civic::Beacon => {
             round(parent, art, &art.stone, [0., 0.62, 0.], 0.83, 1.07);
             round(parent, art, &art.limestone, [0., 1.19, 0.], 1.30, 0.17);

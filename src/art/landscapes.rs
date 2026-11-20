@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 
 use bevy::{pbr::NotShadowCaster, prelude::*};
 
-use super::{Art, Geometry, broadleaf, mound, part, place_scene, rgb};
+use super::{Art, Geometry, nature, place_scene, rgb};
 use crate::{
     game::Settlement,
-    region::{Biome, Region, Tile},
+    region::{Biome, Bounds, Material, Region, Tile},
     terrain::{self, WATER, hash, noise, smooth},
 };
 
@@ -14,6 +14,9 @@ const DETAIL: i16 = 2;
 
 #[derive(Component)]
 pub struct LandscapeProp(pub Tile);
+
+#[derive(Component, Clone, Copy)]
+pub struct ForestPatch(pub Bounds);
 
 struct Palette {
     grass: [u32; 2],
@@ -91,6 +94,7 @@ pub fn landscape(
 ) {
     let palette = Palette::for_biome(region.kind);
     let bounds = region.bounds.padded(8);
+    let occupied = occupied_land(city);
     if region.kind == Biome::Aegean {
         // Continue the sea beyond the detailed chunks in the campaign overview.
         let center = (region.bounds.0.world() + region.bounds.1.world()) * 0.5;
@@ -102,7 +106,7 @@ pub fn landscape(
             palette.open_water(),
         );
         parent.spawn((
-            Mesh3d(meshes.add(sea.mesh())),
+            Mesh3d(meshes.add(sea.render_mesh())),
             MeshMaterial3d(art.water.clone()),
             Transform::default(),
             NotShadowCaster,
@@ -123,20 +127,106 @@ pub fn landscape(
                     continue;
                 }
                 parent.spawn((
-                    Mesh3d(meshes.add(geometry.mesh())),
+                    Mesh3d(meshes.add(geometry.render_mesh())),
                     MeshMaterial3d(material.clone()),
                     Transform::default(),
                     NotShadowCaster,
                 ));
             }
+            let patch = ForestPatch(Bounds(Tile(x, z), end.offset(-1, -1)));
+            let forest = forest_geometry(region, patch, &occupied);
+            if !forest.positions.is_empty() {
+                parent.spawn((
+                    patch,
+                    Mesh3d(meshes.add(forest.render_mesh())),
+                    MeshMaterial3d(art.ground.clone()),
+                    Transform::default(),
+                ));
+            }
         }
     }
-    let occupied: BTreeSet<_> = city
-        .buildings
+    landmarks(parent, art, region, &occupied);
+}
+
+fn occupied_land(city: &Settlement) -> BTreeSet<Tile> {
+    city.buildings
         .iter()
         .flat_map(|site| site.kind.tiles(site.tile))
-        .collect();
-    landmarks(parent, art, region, &occupied);
+        .chain(city.roads.iter().copied())
+        .collect()
+}
+
+pub fn forest_mesh(region: &Region, patch: ForestPatch, city: &Settlement) -> Mesh {
+    forest_geometry(region, patch, &occupied_land(city)).render_mesh()
+}
+
+fn forest_geometry(region: &Region, patch: ForestPatch, occupied: &BTreeSet<Tile>) -> Geometry {
+    let mut mesh = Geometry::default();
+    let cliff = rgb(Palette::for_biome(region.kind).cliff);
+    for tile in patch.0.tiles() {
+        let Tile(x, z) = tile;
+        if region.water(tile)
+            || region.road(tile)
+            || region.fixed_structure(tile)
+            || region.source_at(tile).is_some()
+            || occupied.contains(&tile)
+        {
+            continue;
+        }
+        let key = hash(x, z, 171);
+        let where_ = tile.local()
+            + Vec2::new(
+                ((key & 15) as f32 - 7.) * 0.051,
+                (((key >> 4) & 15) as f32 - 7.) * 0.051,
+            );
+        let p = terrain::on_ground(region, Tile::world_point(where_));
+        let clearing = tile.within(region.start, 5)
+            || tile.within(region.frontier, 4)
+            || tile.within(region.rival_shrine, 4)
+            || region
+                .districts
+                .iter()
+                .any(|district| tile.within(district.center, 5));
+        let stand = region
+            .areas
+            .iter()
+            .any(|area| area.material == Material::Wood && tile.within(area.center, 12));
+        let grove =
+            smooth((noise(where_, 8.3, 154) * 0.79 + noise(where_, 3., 241) * 0.21 - 0.25) / 0.57);
+        let coast = terrain::shore(region, where_);
+        if coast < 0.24 {
+            continue;
+        }
+        let high = match region.kind {
+            Biome::Fjord => 13.,
+            Biome::Terraces => 19.,
+            _ => 18.,
+        };
+        let growth = (grove * 0.39 + if stand { 0.23 } else { 0.035 })
+            * (1. - smooth((p.y - high * 0.58) / high));
+        if !clearing && p.y <= high && coast > 0.81 && (key % 1000) as f32 / 1000. < growth {
+            let scale = 0.53 + ((key >> 16) % 39) as f32 * 0.021;
+            nature::tree(&mut mesh, p - Vec3::Y * 0.055, scale, region.kind, key >> 9);
+        } else if !clearing
+            && (region.rocky(tile) || coast < 0.9 || grove < 0.34)
+            && (key % 100) < if region.rocky(tile) { 35 } else { 22 }
+        {
+            let scale = if p.y > 2.0 { 0.93 } else { 0.54 } + ((key >> 8) % 19) as f32 * 0.036;
+            let size = Vec3::new(scale, scale * (0.67 + grove * 0.31), scale * 0.84);
+            nature::stone(&mut mesh, p - Vec3::Y * 0.07, size, cliff, key >> 12);
+            if key % 3 == 0 {
+                let small = Tile::world_point(where_) + Vec3::new(scale * 0.78, 0., scale * 0.31);
+                nature::stone(
+                    &mut mesh,
+                    terrain::on_ground(region, small),
+                    size * 0.48,
+                    cliff,
+                    key >> 10,
+                );
+            }
+        }
+    }
+    mesh
 }
 
 fn chunk(
@@ -163,11 +253,16 @@ fn chunk(
             let coast = terrain::shore(region, local);
             let position =
                 Tile::world_point(local).with_y(terrain::surface_height(region, local, coast));
-            samples.push(Sample {
+            let sample = Sample {
                 local,
                 position,
                 coast,
-            });
+            };
+            let colors = [
+                land_color(region, palette, sample),
+                sea_color(region, palette, sample),
+            ];
+            samples.push((sample, colors));
         }
     }
     for z in 0..length as usize {
@@ -184,19 +279,20 @@ fn chunk(
             } else {
                 [[b, c, d], [b, d, a]]
             };
-            for corners in triangles {
+            for values in triangles {
+                let corners = values.map(|(sample, _)| sample);
                 let land = corners.iter().any(|s| s.coast > 0.);
                 let sea = corners.iter().any(|s| s.coast <= 0.);
                 if land {
                     ground.tri_colors(
                         corners.map(|s| s.position),
-                        corners.map(|s| land_color(region, palette, s)),
+                        values.map(|(_, colors)| colors[0]),
                     );
                 }
                 if sea {
                     water.tri_colors(
                         corners.map(|s| s.position.with_y(WATER)),
-                        corners.map(|s| sea_color(region, palette, s)),
+                        values.map(|(_, colors)| colors[1]),
                     );
                     if land {
                         shoreline(&mut foam, corners);
@@ -455,23 +551,16 @@ fn landmarks(
         let key = hash(x, z, 93);
         let p = terrain::on_ground(region, tile.world());
         let near_water = tile.neighbors().into_iter().any(|t| region.water(t));
-        let village = tile.within(region.start, 8)
-            || tile.within(region.frontier, 9)
-            || tile.within(region.rival_shrine, 7)
-            || region
-                .districts
-                .iter()
-                .any(|district| tile.within(district.center, 9));
         let close = tile.within(region.start, 23) || tile.within(region.rival_shrine, 20);
         let yaw = (key % 127) as f32 * 0.049;
-        let bank = near_water && key % if close { 13 } else { 26 } == 0;
-        let orchard = region.kind == Biome::Aegean
-            && tile.within(region.start, 8)
-            && !tile.within(region.start, 4)
-            && key % 13 == 0;
-        let tree = !near_water && ((!village && key % if close { 11 } else { 23 } == 0) || orchard);
-        let detail = key % if close { 19 } else { 83 } == 0;
-        if !(bank || tree || detail) {
+        let bank = near_water && key % if close { 13 } else { 47 } == 0;
+        let legacy_tree = matches!(region.kind, Biome::Fjord | Biome::Valley)
+            && !near_water
+            && close
+            && !tile.within(region.start, 7)
+            && key % 81 == 0;
+        let detail = key % if close { 19 } else { 193 } == 0;
+        if !(bank || legacy_tree || detail) {
             continue;
         }
         parent
@@ -483,52 +572,9 @@ fn landmarks(
             .with_children(|parent| {
                 let p = Vec3::ZERO;
                 if bank {
-                    place_scene(
-                        parent,
-                        &art.waldwinkel.rock,
-                        p - Vec3::Y * 0.12,
-                        0.55 + (key % 19) as f32 * 0.026,
-                        0.,
-                    );
-                } else if tree {
-                    let scale = if orchard {
-                        0.71
-                    } else {
-                        0.65 + (key % 43) as f32 * 0.017
-                    };
-                    if region.kind == Biome::Fjord || (region.kind == Biome::Valley && key % 3 != 0)
-                    {
-                        place_scene(parent, &art.waldwinkel.conifer, p, scale * 0.80, 0.);
-                        if region.kind == Biome::Fjord {
-                            for (tier, size) in [(3.06, 0.81), (2.17, 0.92), (1.37, 1.04)] {
-                                mound(
-                                    parent,
-                                    art,
-                                    &art.white,
-                                    p + Vec3::Y * tier * scale,
-                                    Vec3::new(size, 0.16, size) * scale,
-                                );
-                            }
-                        }
-                    } else if region.kind == Biome::Aegean && key % 3 == 1 {
-                        part(
-                            parent,
-                            &art.cone,
-                            &art.evergreen[0],
-                            p + Vec3::Y * 1.43 * scale,
-                            Vec3::new(0.81, 2.87, 0.70) * scale,
-                            Quat::from_rotation_y(yaw),
-                        );
-                        mound(
-                            parent,
-                            art,
-                            &art.evergreen[1],
-                            p + Vec3::Y * 1.32 * scale,
-                            Vec3::new(0.79, 1.90, 0.66) * scale,
-                        );
-                    } else {
-                        broadleaf(parent, art, p, scale, region.kind);
-                    }
+                    place_scene(parent, &art.waldwinkel.rock, p - Vec3::Y * 0.12, 0.72, 0.);
+                } else if legacy_tree {
+                    place_scene(parent, &art.waldwinkel.conifer, p, 0.6, 0.);
                 } else {
                     let model = match region.kind {
                         Biome::Aegean | Biome::Lake if near_water => &art.waldwinkel.shell,

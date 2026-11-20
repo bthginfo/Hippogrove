@@ -3,7 +3,9 @@ use bevy::prelude::*;
 use crate::{
     civic::{Branch, Civic, Goods, Tech},
     game::{Action, Building, Crop, Game, Miracle, Quest, stock_text},
-    region::Tile,
+    modes::Mode,
+    region::{Biome, Tile},
+    story::{Sequence, Story},
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -76,6 +78,9 @@ pub enum Panel {
     Catalog,
     Research,
     Inspection,
+    Inventory,
+    Story,
+    Modes,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,6 +101,10 @@ pub enum UiAction {
     ResearchBranch(Branch),
     SelectTech(Tech),
     Do(Action),
+    FinishStory,
+    ReplayArrival,
+    ModeTab(bool),
+    SelectMode(Mode),
 }
 
 #[derive(Resource)]
@@ -103,6 +112,9 @@ pub struct Play {
     pub aim: Tile,
     pub tool: Tool,
     pub panel: Panel,
+    pub story: Option<Story>,
+    previous_quest: Quest,
+    pub free_build_tab: bool,
     pub option: usize,
     pub rotation: u8,
     pub road_anchor: Option<Tile>,
@@ -123,10 +135,24 @@ pub struct Play {
 
 impl Play {
     pub fn new(game: &Game) -> Self {
+        let story = (!game.campaign.intro_seen && game.campaign.active == 0).then(|| {
+            Story::new(if game.region().kind == Biome::Aegean {
+                Sequence::Islands
+            } else {
+                Sequence::Arrival
+            })
+        });
         Self {
             aim: game.region().sources[0].tile,
             tool: Tool::Hand,
-            panel: Panel::Closed,
+            panel: if story.is_some() {
+                Panel::Story
+            } else {
+                Panel::Closed
+            },
+            story,
+            previous_quest: game.city().quest,
+            free_build_tab: game.mode.sandbox(),
             option: 0,
             rotation: 0,
             road_anchor: None,
@@ -185,6 +211,14 @@ impl Play {
             }
             Tool::Hand if city.held.is_none() && region.district_at(self.aim).is_some() => {
                 Action::Settle(region.district_at(self.aim).unwrap())
+            }
+            Tool::Hand
+                if city.held.is_none()
+                    && region
+                        .area_at(self.aim)
+                        .is_some_and(|index| !city.camps[index]) =>
+            {
+                Action::Camp(region.area_at(self.aim).unwrap())
             }
             Tool::Hand => Action::Hand(self.aim),
             Tool::Build => Action::Build(self.building(), self.aim, self.rotation),
@@ -254,6 +288,15 @@ impl Play {
         view: &mut CameraRig,
         now: f32,
     ) -> bool {
+        if self.story.is_some() {
+            if matches!(
+                action,
+                UiAction::FinishStory | UiAction::Cancel | UiAction::Confirm
+            ) {
+                self.finish_story(game, view);
+            }
+            return false;
+        }
         match action {
             UiAction::Tool(tool) => self.tool(tool),
             UiAction::Choice(i) => self.choose(i),
@@ -319,7 +362,9 @@ impl Play {
             }
             UiAction::Confirm => {}
             UiAction::Cancel => {
-                if self.panel != Panel::Closed {
+                if self.panel == Panel::Modes && !game.campaign.intro_seen {
+                    self.choose_mode(game.mode, game, view, now);
+                } else if self.panel != Panel::Closed {
                     self.panel = Panel::Closed;
                     self.focus = None;
                 } else if self.road_anchor.is_some() {
@@ -357,13 +402,54 @@ impl Play {
                 self.focus = None;
             }
             UiAction::ToggleObjective => self.objective_expanded = !self.objective_expanded,
+            UiAction::ReplayArrival if game.campaign.active == 0 => {
+                self.start_story(Sequence::Arrival, game, view);
+            }
+            UiAction::ReplayArrival | UiAction::FinishStory => {}
+            UiAction::ModeTab(sandbox) => self.free_build_tab = sandbox,
+            UiAction::SelectMode(mode) => {
+                self.choose_mode(mode, game, view, now);
+            }
             UiAction::Do(action) => return self.execute(action, game, view, now),
         }
         false
     }
 
+    fn choose_mode(&mut self, mode: Mode, game: &mut Game, view: &mut CameraRig, now: f32) {
+        match game.switch_mode(mode) {
+            Ok(name) => {
+                let revision = self.revision.wrapping_add(1);
+                let gamepad = self.gamepad;
+                *self = Self::new(game);
+                self.revision = revision;
+                self.gamepad = gamepad;
+                *view = CameraRig::new(game);
+                if let Some(story) = self.story {
+                    story.frame(game.region(), view);
+                    self.focus = Some(UiAction::FinishStory);
+                } else {
+                    self.notice = name;
+                    self.notice_until = now + 3.;
+                    self.notice_ok = true;
+                }
+            }
+            Err(reason) => {
+                self.notice = reason;
+                self.notice_until = now + 5.;
+                self.notice_ok = false;
+            }
+        }
+    }
+
     fn execute(&mut self, action: Action, game: &mut Game, view: &mut CameraRig, now: f32) -> bool {
         let previous = game.campaign.active;
+        let first_island_landing = matches!(action, Action::Travel(4))
+            && game.mode == Mode::Chronicle
+            && game
+                .campaign
+                .settlements
+                .get(4)
+                .is_some_and(Option::is_none);
         let result = game.act(action);
         let success = result.is_ok();
         self.notice = result.unwrap_or_else(|error| error);
@@ -388,12 +474,70 @@ impl Play {
                 self.notice = game.region().subtitle.clone();
                 self.notice_until = now + 8.;
                 *view = CameraRig::new(game);
+                self.previous_quest = game.city().quest;
             } else if matches!(action, Action::Travel(_)) {
                 self.panel = Panel::Closed;
                 self.focus = None;
             }
+            let scene = match action {
+                Action::Travel(4) if first_island_landing => Some(Sequence::Islands),
+                Action::Repair if previous == 0 && !game.mode.sandbox() => Some(Sequence::Crossing),
+                _ => None,
+            };
+            if let Some(scene) = scene {
+                self.start_story(scene, game, view);
+            }
         }
         success
+    }
+
+    pub fn observe_shelter(&mut self, game: &Game, view: &mut CameraRig) {
+        let quest = game.city().quest;
+        if self.story.is_none()
+            && game.campaign.active == 0
+            && self.previous_quest == Quest::Shelter
+            && quest == Quest::Fields
+        {
+            self.start_story(Sequence::Shelter, game, view);
+        }
+        self.previous_quest = quest;
+    }
+
+    fn start_story(&mut self, sequence: Sequence, game: &Game, view: &mut CameraRig) {
+        let story = Story::new(sequence);
+        story.frame(game.region(), view);
+        self.story = Some(story);
+        self.panel = Panel::Story;
+        self.focus = Some(UiAction::FinishStory);
+        self.pointer = None;
+    }
+
+    pub fn finish_story(&mut self, game: &mut Game, view: &mut CameraRig) {
+        let Some(story) = self.story.take() else {
+            return;
+        };
+        self.panel = Panel::Closed;
+        self.focus = None;
+        self.pointer = None;
+        if !game.campaign.intro_seen {
+            game.campaign.intro_seen = true;
+            self.revision = self.revision.wrapping_add(1);
+        }
+        let region = game.region();
+        match story.sequence {
+            Sequence::Arrival => {
+                self.tool(Tool::Hand);
+                self.aim = region.sources[0].tile;
+                *view = CameraRig::new(game);
+            }
+            Sequence::Crossing => {
+                self.aim = region.bridge();
+                view.focus(self.aim);
+            }
+            Sequence::Shelter | Sequence::Islands => {
+                view.focus(region.start);
+            }
+        }
     }
 }
 
@@ -414,11 +558,10 @@ impl CameraRig {
             height: 22.,
             min: region.bounds.0.world(),
             max: region.bounds.1.world(),
-            max_height: if region.kind == crate::region::Biome::Aegean {
-                149.
-            } else {
-                106.
-            },
+            max_height: ((region.bounds.1.world() - region.bounds.0.world())
+                .dot(Vec3::new(0.35, 0., 0.57))
+                + 26.)
+                .max(150.),
         }
     }
 
@@ -500,11 +643,13 @@ impl Target {
                 }
                 let result = &self.placement.as_ref().unwrap().1;
                 self.legal = result.is_ok();
-                self.detail = result
-                    .as_ref()
-                    .err()
-                    .cloned()
-                    .unwrap_or_else(|| kind.cost_text());
+                self.detail = result.as_ref().err().cloned().unwrap_or_else(|| {
+                    if region.sandbox {
+                        "Freier Bau".into()
+                    } else {
+                        kind.cost_text()
+                    }
+                });
                 format!("{} bauen", kind.name())
             }
             Action::Cast(spell, tile) => {
@@ -572,10 +717,19 @@ impl Target {
                 };
                 label.into()
             }
+            Action::Camp(index) => {
+                let plan = city.camp_plan(index);
+                self.legal = plan.is_ok();
+                self.detail = plan.err().map_or_else(
+                    || format!("{} · 5 Holz · 6 Glauben", region.areas[index].name),
+                    str::to_owned,
+                );
+                "Sammellager bauen".into()
+            }
             Action::Assign(_, hippo) => {
                 self.legal = region.source_at(tile).is_some();
                 if let Some(index) = region.source_at(tile) {
-                    let name = region.sources[index].material.name();
+                    let name = region.kind.material(region.sources[index].material);
                     self.detail = format!("{name} · {} verfügbar", city.nodes[index]);
                 } else {
                     self.detail = "Wähle einen Holzstoß, Felsen oder Beerenstrauch.".into();
@@ -672,7 +826,7 @@ impl Target {
                 self.legal = city.influence(region, tile) && city.nodes[index] > 0;
                 self.detail = format!(
                     "{} · {} verfügbar",
-                    region.sources[index].material.name(),
+                    region.kind.material(region.sources[index].material),
                     city.nodes[index]
                 );
                 "Greifen".into()

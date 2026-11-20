@@ -6,7 +6,16 @@ use bevy::{
     window::{AppLifecycle, WindowCloseRequested},
 };
 
-use crate::game::{Campaign, Game};
+use serde::Deserialize;
+
+use crate::game::{Campaign, Game, Saves};
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SavedFile {
+    Profiles(Saves),
+    Legacy(Campaign),
+}
 
 #[derive(Resource)]
 pub struct SaveFile {
@@ -45,10 +54,11 @@ impl SaveFile {
         }
     }
 
-    pub fn load(&self) -> Option<Campaign> {
+    pub fn load(&self) -> Option<Saves> {
         let data = fs::read(&self.path).ok()?;
         match serde_json::from_slice(&data) {
-            Ok(save) => Some(save),
+            Ok(SavedFile::Profiles(saved)) => Some(saved),
+            Ok(SavedFile::Legacy(campaign)) => Some(Saves::legacy(campaign)),
             Err(error) => {
                 warn!("Spielstand konnte nicht gelesen werden: {error}");
                 None
@@ -67,12 +77,12 @@ impl SaveFile {
         }
     }
 
-    pub fn write(&self, campaign: &Campaign) -> io::Result<()> {
+    pub fn write(&self, saves: &Saves) -> io::Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?
         }
         let temporary = self.path.with_extension("tmp");
-        fs::write(&temporary, serde_json::to_vec(campaign)?)?;
+        fs::write(&temporary, serde_json::to_vec(saves)?)?;
         fs::rename(temporary, &self.path)
     }
 }
@@ -92,7 +102,7 @@ pub fn checkpoint(
     let closed = closing.read().count() > 0 || exits.read().count() > 0;
     let now = time.elapsed_secs();
     if suspended || closed || file.revision != play.revision || now - file.last_saved >= 3. {
-        match file.write(&game.campaign) {
+        match file.write(&game.saved_games()) {
             Ok(()) => {
                 file.last_saved = now;
                 file.revision = play.revision;

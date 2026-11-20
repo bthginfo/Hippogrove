@@ -8,8 +8,9 @@ use bevy::{
 use crate::{
     art::{self, Art, block, mound, part},
     game::{Building, Crop, Game, MAX_ROAD_RUN, MAX_WALKERS, Miracle, Quest, Walker},
+    modes::Mode,
     play::{CameraRig, Panel, Play, Target, Tool},
-    region::{Biome, CELL, Material, Tile},
+    region::{AREA_COUNT, Biome, CELL, Material, Tile},
     terrain,
 };
 
@@ -18,11 +19,12 @@ pub struct WorldCamera;
 
 #[derive(Resource, Default)]
 pub struct Board {
-    active: Option<usize>,
+    active: Option<(Mode, usize)>,
     root: Option<Entity>,
     bridge: Option<(bool, Entity)>,
     boundary: Option<([bool; 5], Entity)>,
     boundary_anchors: usize,
+    boundary_camps: [bool; AREA_COUNT],
     roads: Option<(usize, Entity)>,
     buildings: usize,
     walkers: usize,
@@ -30,13 +32,20 @@ pub struct Board {
 }
 
 #[derive(Component)]
-pub struct SourceView(usize);
+pub struct SourceView {
+    index: usize,
+    grown: bool,
+    yaw: f32,
+}
 
 #[derive(Component)]
 pub struct GuardView(usize);
 
 #[derive(Component)]
-pub struct RivalFlag(Option<usize>);
+pub enum Banner {
+    Rival(Option<usize>),
+    Camp(usize),
+}
 
 #[derive(Component)]
 pub struct UpgradeView(usize);
@@ -52,6 +61,9 @@ pub struct WalkerView {
     index: usize,
     speed: f32,
     phase: f32,
+    facing: Quat,
+    holding: bool,
+    gathering: f32,
 }
 
 #[derive(Component)]
@@ -60,6 +72,13 @@ pub struct Limb {
     side: f32,
     arm: bool,
     origin: Vec3,
+}
+
+#[derive(Component)]
+pub struct GateWing {
+    tile: Tile,
+    side: f32,
+    opening: f32,
 }
 
 #[derive(Component)]
@@ -72,7 +91,7 @@ pub enum CarryView {
 pub struct Cloud;
 
 #[derive(Component)]
-pub struct GroundRing(Option<(usize, Tile, i16, bool)>);
+pub struct GroundRing(Option<(Mode, usize, Tile, i16, bool)>);
 
 #[derive(Clone, Copy, Component)]
 pub enum Blueprint {
@@ -98,6 +117,21 @@ enum EffectPhase {
     Falling,
     Splash,
     Flash,
+    Debris,
+}
+
+#[derive(Clone, Copy)]
+struct HarvestMotion {
+    age: f32,
+    depleted: bool,
+    regrowing: bool,
+}
+
+#[derive(Resource, Default)]
+pub struct HarvestEffects {
+    active: Option<(Mode, usize)>,
+    stock: Vec<u16>,
+    motion: Vec<Option<HarvestMotion>>,
 }
 
 pub fn setup(
@@ -117,7 +151,7 @@ pub fn setup(
                 viewport_height: view.height,
             },
             near: 0.01,
-            far: 410.,
+            far: 790.,
             ..OrthographicProjection::default_3d()
         }),
         Transform::from_translation(view.target + Vec3::new(13., 22., 26.))
@@ -222,11 +256,15 @@ pub fn setup(
 pub fn move_camera(
     time: Res<Time>,
     view: Res<CameraRig>,
+    game: Res<Game>,
     mut camera: Single<(&mut Transform, &mut Projection), With<WorldCamera>>,
 ) {
     let (pose, projection) = &mut *camera;
     let follow = 1. - (-13. * time.delta_secs()).exp();
-    let desired = view.target + Vec3::new(13., 22., 26.) * (view.height / 22.).max(1.);
+    let elevation = terrain::height(game.region(), view.target).max(0.)
+        * terrain::smooth((72. - view.height) / 47.);
+    let desired =
+        view.target.with_y(elevation) + Vec3::new(13., 22., 26.) * (view.height / 22.).max(1.);
     pose.translation = pose.translation.lerp(desired, follow);
     pose.look_to(Vec3::new(-13., -22., -26.), Vec3::Y);
     if let Projection::Orthographic(ortho) = &mut **projection {
@@ -333,6 +371,9 @@ fn spawn_walker(
                 index,
                 speed: 0.,
                 phase: 0.,
+                facing: Quat::from_rotation_y(0.44),
+                holding: walker.bundle.is_some(),
+                gathering: 0.,
             },
             Transform::from_translation(walker.world().with_y(ground))
                 .with_scale(Vec3::splat(scale))
@@ -450,8 +491,9 @@ pub fn sync_board(
     game: Res<Game>,
     mut board: ResMut<Board>,
     scenery: Query<(Entity, &art::LandscapeProp)>,
+    mut forests: Query<(&art::ForestPatch, &mut Mesh3d)>,
 ) {
-    let current = game.campaign.active;
+    let current = (game.mode, game.campaign.active);
     let region = game.region();
     let city = game.city();
     if board.active != Some(current) {
@@ -467,16 +509,66 @@ pub fn sync_board(
             ))
             .with_children(|parent| {
                 art::landscape(parent, &mut meshes, &art, region, city);
-                for (i, source) in region.sources.iter().enumerate() {
+                for (index, source) in region.sources.iter().enumerate() {
+                    let p = grounded(source.tile);
+                    let yaw =
+                        (terrain::hash(source.tile.0, source.tile.1, 115) % 69) as f32 * 0.092;
+                    if index < region.original_sources {
+                        parent
+                            .spawn((
+                                SourceView {
+                                    index,
+                                    grown: true,
+                                    yaw: 0.,
+                                },
+                                Transform::from_translation(p),
+                                Visibility::Inherited,
+                            ))
+                            .with_children(|child| {
+                                contact_shadow(child, &art, 1.15);
+                                art::resources(child, &art, source.material);
+                            });
+                    } else {
+                        parent.spawn((
+                            SourceView {
+                                index,
+                                grown: true,
+                                yaw,
+                            },
+                            Mesh3d(
+                                art.deposits[region.kind as usize][source.material.index()].clone(),
+                            ),
+                            MeshMaterial3d(art.ground.clone()),
+                            Transform::from_translation(p)
+                                .with_rotation(Quat::from_rotation_y(yaw)),
+                            Visibility::Inherited,
+                        ));
+                    }
+                    parent.spawn((
+                        SourceView {
+                            index,
+                            grown: false,
+                            yaw,
+                        },
+                        Mesh3d(
+                            art.deposits[region.kind as usize]
+                                [source.material.index() + Material::ALL.len()]
+                            .clone(),
+                        ),
+                        MeshMaterial3d(art.ground.clone()),
+                        Transform::from_translation(p).with_rotation(Quat::from_rotation_y(yaw)),
+                        Visibility::Hidden,
+                    ));
+                }
+                for (index, area) in region.areas.iter().enumerate() {
                     parent
                         .spawn((
-                            SourceView(i),
-                            Transform::from_translation(grounded(source.tile)),
-                            Visibility::Visible,
+                            Transform::from_translation(grounded(area.center)),
+                            Visibility::Inherited,
                         ))
-                        .with_children(|p| {
-                            contact_shadow(p, &art, 1.15);
-                            art::resources(p, &art, source.material);
+                        .with_children(|camp| {
+                            let flag = art::camp(camp, &art, area.material);
+                            camp.commands().entity(flag).insert(Banner::Camp(index));
                         });
                 }
                 for p in [region.start, region.rival_shrine]
@@ -510,7 +602,7 @@ pub fn sync_board(
                     }
                     let p = grounded(district.center);
                     parent.spawn((
-                        RivalFlag(Some(index)),
+                        Banner::Rival(Some(index)),
                         Mesh3d(art.ring.clone()),
                         MeshMaterial3d(art.blue.clone()),
                         Transform::from_translation(p + Vec3::Y * 0.055)
@@ -564,7 +656,7 @@ pub fn sync_board(
                                 Vec3::new(1.75, 1.73, 0.99),
                                 Vec3::new(0.68, 0.54, 0.056),
                             );
-                            p.commands().entity(flag).insert(RivalFlag(None));
+                            p.commands().entity(flag).insert(Banner::Rival(None));
                         });
                 }
                 for (i, &tile) in region.guards.iter().enumerate() {
@@ -605,7 +697,9 @@ pub fn sync_board(
         city.districts[1].outcome.is_some(),
     ];
     if board.boundary.as_ref().is_none_or(|(previous, _)| {
-        *previous != flags || board.boundary_anchors != city.count(Building::Waystone)
+        *previous != flags
+            || board.boundary_anchors != city.count(Building::Waystone)
+            || board.boundary_camps != city.camps
     }) {
         if let Some((_, entity)) = board.boundary.take() {
             commands.entity(entity).despawn();
@@ -622,6 +716,7 @@ pub fn sync_board(
             .id();
         board.boundary = Some((flags, entity));
         board.boundary_anchors = city.count(Building::Waystone);
+        board.boundary_camps = city.camps;
     }
     if board
         .bridge
@@ -641,6 +736,26 @@ pub fn sync_board(
             })
             .id();
         board.bridge = Some((city.bridge_fixed, entity));
+    }
+    if board.buildings != city.buildings.len()
+        || board.roads.map_or(0, |(count, _)| count) != city.roads.len()
+    {
+        let previous_roads = board.roads.map_or(0, |(count, _)| count);
+        for (patch, mut mesh) in &mut forests {
+            let changed = city
+                .roads
+                .iter()
+                .skip(previous_roads)
+                .any(|&tile| patch.0.contains(tile))
+                || city.buildings.iter().skip(board.buildings).any(|site| {
+                    site.kind
+                        .tiles(site.tile)
+                        .any(|tile| patch.0.contains(tile))
+                });
+            if changed {
+                mesh.0 = meshes.add(art::forest_mesh(region, *patch, city));
+            }
+        }
     }
     if !city.roads.is_empty()
         && board
@@ -681,6 +796,21 @@ pub fn sync_board(
             ))
             .with_children(|parent| {
                 art::building(parent, &art, region.kind, site.kind);
+                if site.kind.gate() {
+                    for side in [-1., 1.] {
+                        parent
+                            .spawn((
+                                GateWing {
+                                    tile: site.tile,
+                                    side,
+                                    opening: 0.,
+                                },
+                                Transform::from_translation(Vec3::new(side * 0.73, 0.04, 0.)),
+                                Visibility::Inherited,
+                            ))
+                            .with_children(|wing| art::gate_leaf(wing, &art, side));
+                    }
+                }
                 if site.kind.upgrade_price().is_some() {
                     parent
                         .spawn((UpgradeView(index), Transform::default(), Visibility::Hidden))
@@ -694,13 +824,27 @@ pub fn sync_board(
                         .with_children(|plants| {
                             for (i, x) in [-0.96, -0.32, 0.32, 0.96].into_iter().enumerate() {
                                 for (j, z) in [-0.87, -0.28, 0.28, 0.87].into_iter().enumerate() {
-                                    art::place_scene(
-                                        plants,
-                                        &art.waldwinkel.crop,
-                                        Vec3::new(x, 0.16, z),
-                                        0.60,
-                                        (i * 19 + j * 11) as f32 * 0.29,
-                                    );
+                                    let p = Vec3::new(x, 0.16, z);
+                                    let yaw = (i * 19 + j * 11) as f32 * 0.29;
+                                    if region.kind == Biome::Valley {
+                                        art::place_scene(
+                                            plants,
+                                            &art.waldwinkel.crop,
+                                            p,
+                                            0.60,
+                                            yaw,
+                                        );
+                                    } else {
+                                        part(
+                                            plants,
+                                            &art.deposits[region.kind as usize]
+                                                [Material::Food.index()],
+                                            &art.ground,
+                                            p,
+                                            Vec3::splat(0.46),
+                                            Quat::from_rotation_y(yaw),
+                                        );
+                                    }
                                 }
                             }
                         });
@@ -725,6 +869,7 @@ pub fn sync_board(
 pub fn props(
     game: Res<Game>,
     art: Res<Art>,
+    harvest: Res<HarvestEffects>,
     mut visuals: Query<
         (
             &mut Visibility,
@@ -745,13 +890,49 @@ pub fn props(
             With<UpgradeView>,
         )>,
     >,
-    mut flags: Query<(&RivalFlag, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut flags: Query<(&Banner, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
     let region = game.region();
     let city = game.city();
     for (mut visible, source, guard, crop, marker, carry, upgraded, pose) in &mut visuals {
         let show = if let Some(source) = source {
-            city.nodes.get(source.0).is_some_and(|&amount| amount > 0)
+            let material = region.sources[source.index].material;
+            let active = harvest.motion.get(source.index).and_then(|&motion| motion);
+            let stock = city.nodes[source.index];
+            let dropping = active.is_some_and(|motion| motion.depleted && stock == 0);
+            let age = active.map_or(1., |motion| motion.age);
+            let stretched =
+                dropping && material == Material::Wood && source.index >= region.original_sources;
+            if let Some(mut pose) = pose {
+                let pulse = (age * 34.).sin() * (1. - age / 0.47).max(0.);
+                let tilt = if stretched {
+                    terrain::smooth((age - 0.06) / 0.60) * 1.48
+                } else if stock == 0 && dropping {
+                    terrain::smooth(age * 1.8) * 0.35
+                } else {
+                    pulse
+                        * if material == Material::Stone {
+                            0.06
+                        } else {
+                            0.16
+                        }
+                };
+                let returning = active.is_some_and(|motion| motion.regrowing);
+                let settle = if returning {
+                    0.28 + terrain::smooth(age / 0.78) * 0.72
+                } else if dropping && source.grown && !stretched {
+                    1. - terrain::smooth(age / 0.7) * 0.45
+                } else {
+                    1.
+                };
+                pose.scale = Vec3::splat(settle * (1. - pulse.abs() * 0.05));
+                pose.rotation = Quat::from_rotation_y(source.yaw) * Quat::from_rotation_z(tilt);
+            }
+            if source.grown {
+                stock > 0 || (dropping && age < if stretched { 0.91 } else { 0.64 })
+            } else {
+                stock == 0 && (!dropping || age >= 0.42)
+            }
         } else if let Some(guard) = guard {
             city.guards.get(guard.0).is_some_and(|&spirit| spirit > 0)
         } else if let Some(crop) = crop {
@@ -787,12 +968,18 @@ pub fn props(
         };
     }
     for (flag, mut surface) in &mut flags {
-        let outcome = flag.0.map_or(city.outcome, |i| city.districts[i].outcome);
-        surface.0 = match outcome {
-            Some(crate::game::Outcome::Alliance) => art.valid.clone(),
-            Some(crate::game::Outcome::Victory) => art.amber.clone(),
-            None => art.blue.clone(),
-        }
+        surface.0 = match *flag {
+            Banner::Camp(index) if city.camps[index] => art.gold.clone(),
+            Banner::Camp(_) => art.blue.clone(),
+            Banner::Rival(district) => {
+                let outcome = district.map_or(city.outcome, |i| city.districts[i].outcome);
+                match outcome {
+                    Some(crate::game::Outcome::Alliance) => art.valid.clone(),
+                    Some(crate::game::Outcome::Victory) => art.amber.clone(),
+                    None => art.blue.clone(),
+                }
+            }
+        };
     }
 }
 
@@ -802,7 +989,7 @@ pub fn animate(
     mut actors: Query<(&mut WalkerView, &mut Transform), Without<Limb>>,
     mut limbs: Query<(&Limb, &mut Transform), Without<WalkerView>>,
 ) {
-    let delta = time.delta_secs().max(0.0001);
+    let delta = time.delta_secs().clamp(0.0001, 0.10);
     let city = game.city();
     let region = game.region();
     let mut motion = [(0., 0.); MAX_WALKERS];
@@ -812,16 +999,27 @@ pub fn animate(
         };
         let goal = walker.world().with_y(0.);
         let offset = goal - pose.translation.with_y(0.);
-        let blend = 1. - (-16. * delta).exp();
-        let speed = (offset.length() * blend / delta / 2.8).clamp(0., 1.);
-        meta.speed += (speed - meta.speed) * blend;
-        meta.phase += delta * (6.9 * meta.speed + 0.6);
-        if offset.length_squared() > 0.0006 {
-            let facing = Quat::from_rotation_y(offset.x.atan2(offset.z));
-            pose.rotation = pose.rotation.slerp(facing, (delta * 10.).min(1.));
+        let blend = 1. - (-18. * delta).exp();
+        let travel = offset * blend;
+        let pace = (travel.length() / delta / 4.8).clamp(0., 1.);
+        meta.speed += (pace - meta.speed) * (1. - (-10. * delta).exp());
+        let stride = if walker.hippo { 1.44 } else { 1.20 };
+        meta.phase = (meta.phase + travel.length() * std::f32::consts::TAU / stride)
+            .rem_euclid(std::f32::consts::TAU);
+        if travel.length_squared() > 0.00002 {
+            let facing = Quat::from_rotation_y(travel.x.atan2(travel.z));
+            meta.facing = meta.facing.slerp(facing, 1. - (-12. * delta).exp());
         }
-        let bob = meta.phase.sin().abs() * 0.055 * meta.speed;
-        let next = pose.translation + offset * blend;
+        let holding = walker.bundle.is_some();
+        if holding && !meta.holding {
+            meta.gathering = 0.48;
+        }
+        meta.holding = holding;
+        meta.gathering = (meta.gathering - delta).max(0.);
+        let bow = (meta.gathering / 0.48 * std::f32::consts::PI).sin() * 0.20;
+        pose.rotation = meta.facing * Quat::from_rotation_x(bow);
+        let bob = meta.phase.sin().abs() * 0.040 * meta.speed;
+        let next = pose.translation + travel;
         let ground = terrain::actor_height(region, next, city.bridge_fixed);
         pose.translation = next.with_y(ground + bob);
         pose.scale = Vec3::splat(actor_scale(walker));
@@ -848,6 +1046,22 @@ pub fn animate(
         if !limb.arm {
             pose.translation.y += (swing * 0.11).max(0.);
         }
+    }
+}
+
+pub fn gates(
+    time: Res<Time>,
+    walkers: Query<&Transform, (With<WalkerView>, Without<GateWing>)>,
+    mut wings: Query<(&mut GateWing, &mut Transform), Without<WalkerView>>,
+) {
+    let blend = 1. - (-14. * time.delta_secs()).exp();
+    for (mut gate, mut pose) in &mut wings {
+        let p = gate.tile.world();
+        let approach = walkers
+            .iter()
+            .any(|walker| walker.translation.with_y(0.).distance_squared(p) < 9.5);
+        gate.opening = gate.opening.lerp(if approach { 1. } else { 0. }, blend);
+        pose.rotation = Quat::from_rotation_y(gate.side * gate.opening * 1.64);
     }
 }
 
@@ -894,7 +1108,7 @@ pub fn aim(
     cloud_pose.translation = p + Vec3::new(0.18, 1.56 + time.elapsed_secs().sin() * 0.065, -0.23);
     cloud_pose.rotation = Quat::from_rotation_y(0.51);
     cloud_pose.scale = Vec3::splat(1.17);
-    **cloud_visible = if open {
+    **cloud_visible = if open || play.story.is_some_and(|story| story.show_paw(region)) {
         Visibility::Visible
     } else {
         Visibility::Hidden
@@ -905,7 +1119,13 @@ pub fn aim(
     } else {
         0
     };
-    let signature = (game.campaign.active, play.aim, cells, city.bridge_fixed);
+    let signature = (
+        game.mode,
+        game.campaign.active,
+        play.aim,
+        cells,
+        city.bridge_fixed,
+    );
     if open && play.tool != Tool::Build && ring_shape.0 != Some(signature) {
         let radius = if cells == 0 {
             0.74
@@ -963,7 +1183,8 @@ pub fn aim(
             continue;
         }
         let center = terrain::on_ground(region, kind.center(play.aim));
-        let rotation = Quat::from_rotation_y(play.rotation as f32 * std::f32::consts::FRAC_PI_2);
+        let rotation = city.build_rotation(region, kind, play.aim, play.rotation);
+        let rotation = Quat::from_rotation_y(f32::from(rotation) * std::f32::consts::FRAC_PI_2);
         pose.rotation = rotation;
         surface.0 = if target.legal {
             art.ghost.clone()
@@ -974,6 +1195,8 @@ pub fn aim(
             Blueprint::Base => {
                 let size = if kind == Building::Tower {
                     Vec3::new(1.47, 2.86, 1.47)
+                } else if kind.gate() {
+                    Vec3::new(1.73, 2.42, 0.42)
                 } else if kind.size() == 1 {
                     Vec3::new(1.35, 1.54, 1.32)
                 } else if kind == Building::Field {
@@ -1008,6 +1231,99 @@ pub fn aim(
                 };
             }
             Blueprint::Road(_) => unreachable!(),
+        }
+    }
+}
+
+pub fn harvest(
+    mut commands: Commands,
+    time: Res<Time>,
+    game: Res<Game>,
+    view: Res<CameraRig>,
+    art: Res<Art>,
+    board: Res<Board>,
+    mut effects: ResMut<HarvestEffects>,
+) {
+    let region = game.region();
+    let city = game.city();
+    let key = (game.mode, game.campaign.active);
+    if effects.active != Some(key) {
+        effects.active = Some(key);
+        effects.stock.clone_from(&city.nodes);
+        effects.motion = vec![None; city.nodes.len()];
+        return;
+    }
+    let delta = time.delta_secs().min(0.12);
+    for motion in &mut effects.motion {
+        if let Some(value) = motion {
+            value.age += delta;
+            if value.age > 0.96 {
+                *motion = None;
+            }
+        }
+    }
+    let mut budget = 30;
+    for (index, (&count, source)) in city.nodes.iter().zip(&region.sources).enumerate() {
+        let was = std::mem::replace(&mut effects.stock[index], count);
+        if count > 0 && was == 0 {
+            effects.motion[index] = Some(HarvestMotion {
+                age: 0.,
+                depleted: false,
+                regrowing: true,
+            });
+        }
+        if count >= was {
+            continue;
+        }
+        effects.motion[index] = Some(HarvestMotion {
+            age: 0.,
+            depleted: count == 0,
+            regrowing: false,
+        });
+        let Some(root) = board.root else {
+            continue;
+        };
+        let point = terrain::on_ground(region, source.tile.world());
+        if point.distance_squared(view.target) > (view.height * 1.65).powi(2) {
+            continue;
+        }
+        for i in 0..budget.min(if count == 0 { 12 } else { 6 }) {
+            let angle =
+                (i as f32 * 2.399 + (index % 5) as f32 * 0.77).rem_euclid(std::f32::consts::TAU);
+            let away = Vec3::new(angle.cos(), 0., angle.sin());
+            let strength = 0.56 + (i % 4) as f32 * 0.31;
+            let (mesh, material, height, size) = match source.material {
+                Material::Wood if i % 3 == 0 => (&art.lump, &art.leaf[1], 1.22, 0.13),
+                Material::Wood => (&art.cube, &art.plank, 0.46, 0.095),
+                Material::Stone if i % 3 == 0 => (&art.lump, &art.plaster, 0.29, 0.125),
+                Material::Stone => (&art.lump, &art.stone, 0.37, 0.17),
+                Material::Food if i % 3 == 0 => (&art.lump, &art.leaf[2], 0.59, 0.11),
+                Material::Food => {
+                    let fruit = match region.kind {
+                        Biome::Fjord => &art.cobalt,
+                        Biome::Terraces | Biome::Lake => &art.gold,
+                        Biome::Aegean => &art.leaf[1],
+                        _ => &art.berry,
+                    };
+                    (&art.lump, fruit, 0.72, 0.13)
+                }
+            };
+            commands.spawn((
+                ChildOf(root),
+                Effect {
+                    age: 0.,
+                    length: 0.70 + (i % 5) as f32 * 0.056,
+                    velocity: away * (strength * 1.29) + Vec3::Y * (1.45 + strength),
+                    scale: size,
+                    phase: EffectPhase::Debris,
+                },
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_translation(point + away * 0.30 + Vec3::Y * height)
+                    .with_scale(Vec3::splat(size)),
+                bevy::pbr::NotShadowCaster,
+            ));
+            budget -= 1;
         }
     }
 }
@@ -1139,6 +1455,18 @@ pub fn magic(
                 pose.translation.y = pose.translation.y.max(contact(pose.translation) + 0.06);
                 let scale = effect.scale * (1. - effect.age / effect.length).sqrt();
                 pose.scale = Vec3::new(scale, scale * 0.41, scale);
+            }
+            EffectPhase::Debris => {
+                pose.translation += effect.velocity * delta - Vec3::Y * 4.9 * delta * delta;
+                effect.velocity.y -= 9.8 * delta;
+                let ground = contact(pose.translation) + 0.045;
+                if pose.translation.y <= ground {
+                    pose.translation.y = ground;
+                    effect.velocity = effect.velocity.with_y(effect.velocity.y.abs() * 0.29) * 0.73;
+                }
+                pose.rotate_local_x(delta * 7.);
+                pose.rotate_local_z(delta * 4.);
+                pose.scale = Vec3::splat(effect.scale * (1. - effect.age / effect.length).sqrt());
             }
             EffectPhase::Flash => {}
         }

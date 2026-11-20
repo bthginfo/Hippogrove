@@ -8,9 +8,10 @@ use crate::{
 };
 
 mod landscapes;
+mod nature;
 mod settlement_models;
 
-pub use landscapes::{LandscapeProp, landscape};
+pub use landscapes::{ForestPatch, LandscapeProp, forest_mesh, landscape};
 
 pub fn rgb(hex: u32) -> Color {
     Color::srgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -50,7 +51,6 @@ pub struct Art {
     pub plan_corners: Handle<Mesh>,
     pub plan_cross: Handle<Mesh>,
     pub leaf: [Handle<StandardMaterial>; 3],
-    pub evergreen: [Handle<StandardMaterial>; 3],
     pub clay: Handle<StandardMaterial>,
     pub timber: Handle<StandardMaterial>,
     pub plank: Handle<StandardMaterial>,
@@ -85,6 +85,7 @@ pub struct Art {
     foam: Handle<StandardMaterial>,
     pub waldwinkel: WoodlandKit,
     pub hippo_model: Handle<Scene>,
+    pub deposits: [[Handle<Mesh>; 6]; 5],
 }
 
 impl Art {
@@ -108,11 +109,6 @@ impl Art {
                 paint(mats, 0x9ca74c),
                 paint(mats, 0xadb359),
                 paint(mats, 0x728540),
-            ],
-            evergreen: [
-                paint(mats, 0x596d45),
-                paint(mats, 0x697e48),
-                paint(mats, 0x81914e),
             ],
             clay: paint(mats, 0xa57856),
             timber: paint(mats, 0x8c5736),
@@ -167,6 +163,23 @@ impl Art {
             }),
             waldwinkel: WoodlandKit::load(assets),
             hippo_model: assets.load("embedded://models/hippo.glb#Scene0"),
+            deposits: [
+                Biome::Valley,
+                Biome::Fjord,
+                Biome::Terraces,
+                Biome::Lake,
+                Biome::Aegean,
+            ]
+            .map(|biome| {
+                std::array::from_fn(|index| {
+                    let material = Material::ALL[index % Material::ALL.len()];
+                    meshes.add(nature::deposit(
+                        biome,
+                        material,
+                        index < Material::ALL.len(),
+                    ))
+                })
+            }),
         }
     }
 }
@@ -311,6 +324,12 @@ impl Geometry {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
+    }
+
+    fn render_mesh(self) -> Mesh {
+        let mut mesh = self.mesh();
+        mesh.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        mesh
     }
 }
 
@@ -519,97 +538,6 @@ fn plan_cross() -> Mesh {
     geometry.mesh()
 }
 
-fn broadleaf(parent: &mut ChildSpawnerCommands, art: &Art, p: Vec3, scale: f32, biome: Biome) {
-    if biome == Biome::Aegean {
-        olive_tree(parent, art, p, scale);
-        return;
-    }
-    part(
-        parent,
-        &art.cylinder,
-        &art.timber,
-        p + Vec3::Y * scale * 0.93,
-        Vec3::new(0.28, 1.86, 0.28) * scale,
-        Quat::from_rotation_z(0.08),
-    );
-    for (i, (x, z, y)) in [(0., 0., 2.25), (-0.61, 0.13, 1.98), (0.60, -0.12, 2.12)]
-        .into_iter()
-        .enumerate()
-    {
-        let mat = if biome == Biome::Terraces && i != 0 {
-            &art.red
-        } else {
-            &art.leaf[i]
-        };
-        let spread = if biome == Biome::Lake {
-            Vec3::new(1.9, 0.63, 1.45)
-        } else {
-            Vec3::new(1.55, 1.54, 1.35)
-        };
-        mound(
-            parent,
-            art,
-            mat,
-            p + Vec3::new(x, y, z) * scale,
-            spread * scale,
-        );
-    }
-    if biome == Biome::Valley {
-        for (i, (x, z, y)) in [(-0.69, 0.40, 1.59), (0.62, 0.30, 1.59), (0.13, 0.62, 1.72)]
-            .into_iter()
-            .enumerate()
-        {
-            mound(
-                parent,
-                art,
-                &art.leaf[i],
-                p + Vec3::new(x, y, z) * scale,
-                Vec3::new(0.57, 1.51, 0.66) * scale,
-            );
-        }
-    }
-}
-
-fn olive_tree(parent: &mut ChildSpawnerCommands, art: &Art, at: Vec3, scale: f32) {
-    for (a, b, width) in [
-        ([0., -0.09, 0.], [-0.14, 0.93, 0.01], 0.37),
-        ([-0.14, 0.72, 0.01], [0.15, 1.51, 0.01], 0.27),
-        ([-0.13, 0.87, 0.07], [-0.70, 1.64, 0.29], 0.21),
-        ([0.07, 1.27, 0.05], [0.64, 1.73, -0.19], 0.16),
-        ([-0.19, 1.20, 0.03], [-0.27, 1.81, -0.48], 0.14),
-    ] {
-        let a = Vec3::from(a);
-        let b = Vec3::from(b);
-        let axis = b - a;
-        part(
-            parent,
-            &art.cylinder,
-            &art.timber,
-            at + (a + b) * scale * 0.5,
-            Vec3::new(width, axis.length(), width) * scale,
-            Quat::from_rotation_arc(Vec3::Y, axis.normalize()),
-        );
-    }
-    for (i, (x, y, z, width)) in [
-        (-0.68, 1.78, 0.24, 1.21),
-        (0.58, 1.84, -0.19, 1.34),
-        (-0.24, 1.97, -0.47, 1.07),
-        (0.16, 2.09, 0.12, 1.26),
-        (-0.15, 1.68, 0.49, 0.90),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        mound(
-            parent,
-            art,
-            &art.leaf[i % art.leaf.len()],
-            at + Vec3::new(x, y, z) * scale,
-            Vec3::new(width, 0.56 + (i % 2) as f32 * 0.16, width * 0.80) * scale,
-        );
-    }
-}
-
 pub fn resources(parent: &mut ChildSpawnerCommands, art: &Art, material: Material) {
     match material {
         Material::Wood => {
@@ -671,6 +599,74 @@ pub fn resources(parent: &mut ChildSpawnerCommands, art: &Art, material: Materia
             }
         }
     }
+}
+
+pub fn camp(parent: &mut ChildSpawnerCommands, art: &Art, material: Material) -> Entity {
+    block(
+        parent,
+        art,
+        &art.warm_stone,
+        Vec3::Y * 0.09,
+        Vec3::new(1.45, 0.18, 1.30),
+    );
+    block(
+        parent,
+        art,
+        &art.plank,
+        Vec3::new(-0.22, 0.26, 0.18),
+        Vec3::new(0.72, 0.29, 0.64),
+    );
+    parcel(parent, art, material, Vec3::new(0.27, 0.25, -0.22), 0.75);
+    block(
+        parent,
+        art,
+        &art.dark_wood,
+        Vec3::new(0.38, 0.94, -0.29),
+        Vec3::new(0.12, 1.78, 0.13),
+    );
+    block(
+        parent,
+        art,
+        &art.amber,
+        Vec3::new(0.38, 1.67, 0.),
+        Vec3::splat(0.16),
+    );
+    block(
+        parent,
+        art,
+        &art.blue,
+        Vec3::new(0.05, 1.29, -0.27),
+        Vec3::new(0.62, 0.49, 0.07),
+    )
+}
+
+pub fn gate_leaf(parent: &mut ChildSpawnerCommands, art: &Art, sign: f32) {
+    for i in 0..4 {
+        let x = -sign * (0.09 + i as f32 * 0.17);
+        block(
+            parent,
+            art,
+            if i % 3 == 0 { &art.plank } else { &art.timber },
+            Vec3::new(x, 0.63, 0.),
+            Vec3::new(0.16, 1.10 + i as f32 * 0.035, 0.096),
+        );
+    }
+    for y in [0.30, 0.91] {
+        block(
+            parent,
+            art,
+            &art.dark_wood,
+            Vec3::new(-sign * 0.34, y, 0.059),
+            Vec3::new(0.68, 0.075, 0.06),
+        );
+    }
+    block(
+        parent,
+        art,
+        &art.gold,
+        Vec3::new(-sign * 0.56, 0.66, 0.079),
+        Vec3::splat(0.095),
+    );
 }
 
 pub fn parcel(

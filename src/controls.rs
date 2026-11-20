@@ -21,7 +21,7 @@ use crate::{
     game::{Building, Game, Miracle},
     hud::{self, HitTest},
     play::{CameraRig, Panel, Play, Tool, UiAction},
-    region::{CELL, Tile},
+    region::{CELL, Material, Tile},
     terrain,
     view::WorldCamera,
 };
@@ -264,8 +264,11 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
         if play.tool == Tool::Hand
             || (matches!(play.tool, Tool::Helpers | Tool::Hippo) && play.option == 0)
         {
-            for source in &region.sources {
+            for (index, source) in region.sources.iter().enumerate() {
                 consider(source.tile, source.tile.world() + Vec3::Y * 0.35);
+                if index >= region.original_sources && source.material == Material::Wood {
+                    consider(source.tile, source.tile.world() + Vec3::Y * 1.54);
+                }
             }
         }
         if play.tool == Tool::Hand {
@@ -273,6 +276,9 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
             consider(region.bridge(), region.bridge().world() + Vec3::Y * 0.23);
             for district in &region.districts {
                 consider(district.center, district.center.world() + Vec3::Y * 0.55);
+            }
+            for area in &region.areas {
+                consider(area.center, area.center.world() + Vec3::Y * 0.56);
             }
             for site in &city.buildings {
                 if city.held.is_none() || city.can_store_at(region, site.tile) {
@@ -585,6 +591,8 @@ pub fn collect(
         (KeyCode::KeyQ, UiAction::Panel(Panel::Quests)),
         (KeyCode::KeyB, UiAction::Panel(Panel::Catalog)),
         (KeyCode::KeyT, UiAction::Panel(Panel::Research)),
+        (KeyCode::KeyI, UiAction::Panel(Panel::Inventory)),
+        (KeyCode::KeyF, UiAction::Panel(Panel::Modes)),
     ] {
         if keys.just_pressed(key) {
             play.activate(action, &mut game, &mut view, now);
