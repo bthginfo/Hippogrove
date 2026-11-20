@@ -1,11 +1,18 @@
 use std::collections::BTreeSet;
 
-use bevy::{pbr::NotShadowCaster, prelude::*};
+use bevy::{
+    asset::RenderAssetUsages,
+    pbr::NotShadowCaster,
+    prelude::*,
+    render::mesh::{Indices, PrimitiveTopology},
+    window::PrimaryWindow,
+};
 
-use super::{Art, Geometry, nature, place_scene, rgb};
+use super::{Art, Geometry, nature, place_scene, rgb, vertex_color};
 use crate::{
-    game::Settlement,
-    region::{Biome, Bounds, Material, Region, Tile},
+    game::{Game, Settlement},
+    play::CameraRig,
+    region::{Biome, Bounds, CELL, Material, Region, Tile},
     terrain::{self, WATER, hash, noise, smooth},
 };
 
@@ -17,6 +24,9 @@ pub struct LandscapeProp(pub Tile);
 
 #[derive(Component, Clone, Copy)]
 pub struct ForestPatch(pub Bounds);
+
+#[derive(Component)]
+pub struct MeadowPatch(Bounds);
 
 struct Palette {
     grass: [u32; 2],
@@ -120,26 +130,33 @@ pub fn landscape(
         for x in (left..right).step_by(CHUNK as usize) {
             let end = Tile((x + CHUNK).min(right), (z + CHUNK).min(south));
             let (ground, water, foam) = chunk(region, &palette, Tile(x, z), end, sea_bounds);
-            for (geometry, material, build_mesh) in [
+            let patch_bounds = Bounds(Tile(x, z), end.offset(-1, -1));
+            let land = !ground.positions.is_empty();
+            for (mesh, material) in [
+                (land.then(|| ground.terrain_mesh()), &art.terrain_surface),
+                (water, &art.water),
                 (
-                    ground,
-                    &art.terrain_surface,
-                    Geometry::terrain_mesh as fn(Geometry) -> Mesh,
+                    (!foam.positions.is_empty()).then(|| foam.render_mesh()),
+                    &art.foam,
                 ),
-                (water, &art.water, Geometry::render_mesh),
-                (foam, &art.foam, Geometry::render_mesh),
             ] {
-                if geometry.positions.is_empty() {
-                    continue;
-                }
+                let Some(mesh) = mesh else { continue };
                 parent.spawn((
-                    Mesh3d(meshes.add(build_mesh(geometry))),
+                    Mesh3d(meshes.add(mesh)),
                     MeshMaterial3d(material.clone()),
                     Transform::default(),
                     NotShadowCaster,
                 ));
             }
-            let patch = ForestPatch(Bounds(Tile(x, z), end.offset(-1, -1)));
+            if land {
+                parent.spawn((
+                    MeadowPatch(patch_bounds),
+                    Transform::default(),
+                    Visibility::Hidden,
+                    NotShadowCaster,
+                ));
+            }
+            let patch = ForestPatch(patch_bounds);
             let forest = forest_geometry(region, patch, &occupied);
             if !forest.positions.is_empty() {
                 parent.spawn((
@@ -152,6 +169,66 @@ pub fn landscape(
         }
     }
     landmarks(parent, art, region, &occupied);
+}
+
+pub fn meadow_detail(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    art: Res<Art>,
+    game: Res<Game>,
+    view: Res<CameraRig>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut patches: Query<(Entity, &MeadowPatch, Option<&Mesh3d>, &mut Visibility)>,
+) {
+    let close = view.rendered_height < 56.;
+    let center = Tile::coordinates(view.target);
+    let aspect = window.width() / window.height().max(1.);
+    let radius = view.rendered_height / CELL * (0.5 * aspect.hypot(1.65)) + 6.;
+    let mut pending = Vec::new();
+    for (entity, patch, mesh, mut visible) in &mut patches {
+        let Bounds(first, last) = patch.0;
+        let nearest = center.clamp(first.local(), last.local());
+        let distance = center.distance_squared(nearest);
+        let show = close && distance <= radius * radius;
+        let ready = mesh.is_some();
+        visible.set_if_neq(if show && ready {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+        if show && !ready {
+            pending.push((distance, entity, patch.0));
+        }
+    }
+    if pending.is_empty() {
+        return;
+    }
+    pending.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+    let region = game.region();
+    let palette = Palette::for_biome(region.kind);
+    for (_, entity, bounds) in pending.into_iter().take(2) {
+        let mut geometry = Geometry::default();
+        for tile in bounds.tiles() {
+            let key = hash(tile.0, tile.1, 223);
+            if key % 3 == 0
+                && !region.water(tile)
+                && !region.road(tile)
+                && !region.rocky(tile)
+                && !region.fixed_structure(tile)
+            {
+                meadow(&mut geometry, region, &palette, tile, key);
+            }
+        }
+        if geometry.positions.is_empty() {
+            commands.entity(entity).remove::<MeadowPatch>();
+        } else {
+            commands.entity(entity).insert((
+                Mesh3d(meshes.add(geometry.terrain_mesh())),
+                MeshMaterial3d(art.terrain_surface.clone()),
+                Visibility::Inherited,
+            ));
+        }
+    }
 }
 
 fn occupied_land(city: &Settlement, region: &Region) -> BTreeSet<Tile> {
@@ -187,7 +264,12 @@ fn forest_geometry(region: &Region, patch: ForestPatch, occupied: &BTreeSet<Tile
                 ((key & 15) as f32 - 7.) * 0.051,
                 (((key >> 4) & 15) as f32 - 7.) * 0.051,
             );
-        let p = terrain::on_ground(region, Tile::world_point(where_));
+        let point = Tile::world_point(where_);
+        let coast = terrain::shore(region, where_);
+        if coast < 0.24 {
+            continue;
+        }
+        let p = point.with_y(terrain::surface_height(region, where_, coast).max(WATER));
         let clearing = tile.within(region.start, 5)
             || tile.within(region.frontier, 4)
             || tile.within(region.rival_shrine, 4)
@@ -201,10 +283,6 @@ fn forest_geometry(region: &Region, patch: ForestPatch, occupied: &BTreeSet<Tile
             .any(|area| area.material == Material::Wood && tile.within(area.center, 12));
         let grove =
             smooth((noise(where_, 8.3, 154) * 0.79 + noise(where_, 3., 241) * 0.21 - 0.25) / 0.57);
-        let coast = terrain::shore(region, where_);
-        if coast < 0.24 {
-            continue;
-        }
         let high = match region.kind {
             Biome::Fjord => 13.,
             Biome::Terraces => 19.,
@@ -277,9 +355,9 @@ fn chunk(
     start: Tile,
     end: Tile,
     sea_bounds: Option<Bounds>,
-) -> (Geometry, Geometry, Geometry) {
+) -> (Geometry, Option<Mesh>, Geometry) {
     let mut ground = Geometry::default();
-    let mut water = Geometry::default();
+    let mut stream = Vec::new();
     let mut foam = Geometry::default();
     let width = (end.0 - start.0) * DETAIL;
     let length = (end.1 - start.1) * DETAIL;
@@ -296,47 +374,39 @@ fn chunk(
             let coast = terrain::shore(region, local);
             let position =
                 Tile::world_point(local).with_y(terrain::surface_height(region, local, coast));
-            let sample = Sample {
+            samples.push(Sample {
                 local,
                 position,
                 coast,
-            };
-            let colors = [
-                land_color(region, palette, sample),
-                sea_color(palette, sample, sea_bounds),
-            ];
-            samples.push((sample, colors));
+            });
         }
     }
+    let mut land_colors = vec![None; samples.len()];
     for z in 0..length as usize {
         for x in 0..width as usize {
             let i = z * stride + x;
-            let [a, b, c, d] = [
-                samples[i],
-                samples[i + stride],
-                samples[i + stride + 1],
-                samples[i + 1],
-            ];
+            let [a, b, c, d] = [i, i + stride, i + stride + 1, i + 1];
             let triangles = if (x + z) % 2 == 0 {
                 [[a, b, c], [a, c, d]]
             } else {
                 [[b, c, d], [b, d, a]]
             };
-            for values in triangles {
-                let corners = values.map(|(sample, _)| sample);
+            for face in triangles {
+                let corners = face.map(|index| samples[index]);
                 let land = corners.iter().any(|s| s.coast > 0.);
                 let sea = corners.iter().any(|s| s.coast <= 0.);
                 if land {
-                    ground.tri_colors(
+                    ground.tri_linear(
                         corners.map(|s| s.position),
-                        values.map(|(_, colors)| colors[0]),
+                        face.map(|i| {
+                            *land_colors[i].get_or_insert_with(|| {
+                                vertex_color(land_color(region, palette, samples[i]))
+                            })
+                        }),
                     );
                 }
                 if sea {
-                    water.tri_colors(
-                        corners.map(|s| s.position.with_y(WATER)),
-                        values.map(|(_, colors)| colors[1]),
-                    );
+                    stream.extend(face.map(|index| index as u16));
                     if land {
                         shoreline(&mut foam, corners);
                     }
@@ -354,12 +424,50 @@ fn chunk(
                 }
             } else if region.road(tile) {
                 stones(&mut ground, region, palette, tile, key);
-            } else if key % 3 == 0 && !region.rocky(tile) && !region.fixed_structure(tile) {
-                meadow(&mut ground, region, palette, tile, key);
             }
         }
     }
-    (ground, water, foam)
+    (
+        ground,
+        water_mesh(&samples, stream, palette, sea_bounds),
+        foam,
+    )
+}
+
+fn water_mesh(
+    samples: &[Sample],
+    mut triangles: Vec<u16>,
+    palette: &Palette,
+    bounds: Option<Bounds>,
+) -> Option<Mesh> {
+    if triangles.is_empty() {
+        return None;
+    }
+    // Water is flat, so adjacent triangles can share vertices and upward normals.
+    let mut vertex_indices = vec![None; samples.len()];
+    let mut positions = Vec::new();
+    let mut colors = Vec::new();
+    for index in &mut triangles {
+        let sample_index = usize::from(*index);
+        *index = *vertex_indices[sample_index].get_or_insert_with(|| {
+            let next = positions.len() as u16;
+            let sample = samples[sample_index];
+            positions.push(sample.position.with_y(WATER).to_array());
+            colors.push(vertex_color(sea_color(palette, sample, bounds)));
+            next
+        });
+    }
+    let normals = vec![Vec3::Y.to_array(); positions.len()];
+    Some(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+        .with_inserted_indices(Indices::U16(triangles)),
+    )
 }
 
 fn land_color(region: &Region, palette: &Palette, s: Sample) -> Color {
@@ -410,6 +518,10 @@ fn land_color(region: &Region, palette: &Palette, s: Sample) -> Color {
 }
 
 fn sea_color(palette: &Palette, s: Sample, bounds: Option<Bounds>) -> Color {
+    let detail = bounds.map_or(1., |bounds| sea_detail(bounds, s.local));
+    if detail == 0. {
+        return palette.open_water();
+    }
     let depth = -s.coast;
     let run = noise(Vec2::new(s.local.x * 0.67, s.local.y * 1.61), 0.98, 80);
     let broad = noise(s.local, 9.5, 86);
@@ -420,7 +532,6 @@ fn sea_color(palette: &Palette, s: Sample, bounds: Option<Bounds>) -> Color {
         &rgb(0xc4e8ca),
         smooth((run - 0.54) / 0.46) * (1. - depth_fade) * 0.38,
     );
-    let detail = bounds.map_or(1., |bounds| sea_detail(bounds, s.local));
     palette.open_water().mix(&local_color, detail)
 }
 
@@ -594,20 +705,24 @@ fn landmarks(
             continue;
         }
         let key = hash(x, z, 93);
-        let p = terrain::on_ground(region, tile.world());
-        let near_water = tile.neighbors().into_iter().any(|t| region.water(t));
         let close = tile.within(region.start, 23) || tile.within(region.rival_shrine, 20);
-        let yaw = (key % 127) as f32 * 0.049;
-        let bank = near_water && key % if close { 13 } else { 47 } == 0;
-        let legacy_tree = matches!(region.kind, Biome::Fjord | Biome::Valley)
-            && !near_water
+        let bank_prop = key % if close { 13 } else { 47 } == 0;
+        let tree = matches!(region.kind, Biome::Fjord | Biome::Valley)
             && close
             && !tile.within(region.start, 7)
             && key % 81 == 0;
         let detail = key % if close { 19 } else { 193 } == 0;
+        if !(bank_prop || tree || detail) {
+            continue;
+        }
+        let near_water = tile.neighbors().into_iter().any(|t| region.water(t));
+        let bank = near_water && bank_prop;
+        let legacy_tree = tree && !near_water;
         if !(bank || legacy_tree || detail) {
             continue;
         }
+        let p = terrain::on_ground(region, tile.world());
+        let yaw = (key % 127) as f32 * 0.049;
         parent
             .spawn((
                 LandscapeProp(tile),
@@ -629,5 +744,29 @@ fn landmarks(
                     place_scene(parent, model, p, 0.51 + (key % 11) as f32 * 0.036, 0.);
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn water_faces_share_the_flat_grid_vertices() {
+        let region = Region::practice();
+        let palette = Palette::for_biome(region.kind);
+        let start = Tile(-12, -12);
+        let (land, water, _) = chunk(&region, &palette, start, start.offset(CHUNK, CHUNK), None);
+        assert!(land.positions.is_empty());
+        let water = water.unwrap();
+        let sides = (CHUNK * DETAIL) as usize;
+        assert_eq!(water.count_vertices(), (sides + 1).pow(2));
+        assert_eq!(water.indices().unwrap().len(), 6 * sides.pow(2));
+        let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(normals)) =
+            water.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
+            panic!("The water mesh has planar normals");
+        };
+        assert!(normals.iter().all(|normal| *normal == Vec3::Y.to_array()));
     }
 }

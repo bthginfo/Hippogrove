@@ -9,7 +9,7 @@ use crate::{
     modes::Mode,
     practice::Step as PracticeStep,
     quests::Goal,
-    region::{Biome, Material, Tile},
+    region::{Biome, Bounds, Material, Tile},
     sound::{Bus, Cue, Mix},
     story::{Sequence, Story},
     terrain,
@@ -464,18 +464,23 @@ impl Play {
     fn building_tile(game: &Game, kind: Building, origin: Tile, roadside: bool) -> Tile {
         let region = game.region();
         let city = game.city();
-        region
-            .bounds
+        let mut nearby: Vec<_> = Bounds(origin.offset(-8, -8), origin.offset(8, 8))
             .tiles()
-            .filter(|tile| tile.within(origin, 8))
-            .filter(|&tile| city.placement_site(region, kind, tile))
-            .min_by_key(|&tile| {
-                let connected = kind
-                    .tiles(tile)
-                    .flat_map(Tile::neighbors)
-                    .any(|cell| city.road_at(region, cell) && city.walkable(region, cell));
-                (roadside && !connected, tile.distance(origin))
+            .filter(|tile| region.bounds.contains(*tile) && tile.within(origin, 8))
+            .map(|tile| {
+                let disconnected = roadside
+                    && !kind
+                        .tiles(tile)
+                        .flat_map(Tile::neighbors)
+                        .any(|cell| city.road_at(region, cell) && city.walkable(region, cell));
+                ((disconnected, tile.distance(origin), tile.1, tile.0), tile)
             })
+            .collect();
+        nearby.sort_unstable_by_key(|&(rank, _)| rank);
+        nearby
+            .into_iter()
+            .map(|(_, tile)| tile)
+            .find(|&tile| city.placement_site(region, kind, tile))
             .unwrap_or(origin)
     }
 

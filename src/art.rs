@@ -22,7 +22,7 @@ mod rivals;
 mod settlement_models;
 
 pub(crate) use alignment::{city_decor, companion_decor, style_creature};
-pub use landscapes::{ForestPatch, LandscapeProp, forest_mesh, landscape};
+pub use landscapes::{ForestPatch, LandscapeProp, forest_mesh, landscape, meadow_detail};
 pub(crate) use rivals::{creature as rival_creature, faction_color, leader as rival_leader};
 
 pub fn rgb(hex: u32) -> Color {
@@ -383,19 +383,27 @@ pub struct Geometry {
     colors: Vec<[f32; 4]>,
 }
 
+fn vertex_color(color: Color) -> [f32; 4] {
+    let linear = color.to_linear();
+    [linear.red, linear.green, linear.blue, linear.alpha]
+}
+
 impl Geometry {
     pub fn tri(&mut self, a: Vec3, b: Vec3, c: Vec3, color: Color) {
         self.tri_colors([a, b, c], [color; 3]);
     }
 
     fn tri_colors(&mut self, points: [Vec3; 3], colors: [Color; 3]) {
+        self.tri_linear(points, colors.map(vertex_color));
+    }
+
+    fn tri_linear(&mut self, points: [Vec3; 3], colors: [[f32; 4]; 3]) {
         let [a, b, c] = points;
         let normal = (b - a).cross(c - a).normalize_or_zero();
         for (p, color) in points.into_iter().zip(colors) {
-            let lin = color.to_linear();
             self.positions.push(p.to_array());
             self.normals.push(normal.to_array());
-            self.colors.push([lin.red, lin.green, lin.blue, lin.alpha]);
+            self.colors.push(color);
         }
     }
 

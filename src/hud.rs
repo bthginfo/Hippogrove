@@ -137,8 +137,7 @@ pub struct Hud {
     serif: Handle<Font>,
     icons: Handle<Image>,
     atlas: Handle<TextureAtlasLayout>,
-    maps: Vec<Handle<Image>>,
-    maps_mode: Option<Mode>,
+    map: Option<((Mode, usize), Handle<Image>)>,
     world_art: Handle<Image>,
     world_cards: Handle<TextureAtlasLayout>,
 }
@@ -250,17 +249,24 @@ pub fn pad_reticle(
     reticle: Single<(&mut Node, &mut Visibility), With<PadReticle>>,
 ) {
     let (mut node, mut visible) = reticle.into_inner();
+    if !play.gamepad || play.panel != Panel::Closed {
+        visible.set_if_neq(Visibility::Hidden);
+        return;
+    }
     let (camera, pose) = *camera;
     let position = play
         .pointer
         .or_else(|| crate::controls::aim_on_screen(&play, &game, camera, pose));
-    if let Some(point) = position.filter(|_| play.gamepad && play.panel == Panel::Closed) {
+    if let Some(point) = position {
         let logical = point / scale.0;
-        node.left = Val::Px(logical.x - 6.5);
-        node.top = Val::Px(logical.y - 6.5);
-        *visible = Visibility::Visible;
+        let (left, top) = (Val::Px(logical.x - 6.5), Val::Px(logical.y - 6.5));
+        if node.left != left || node.top != top {
+            node.left = left;
+            node.top = top;
+        }
+        visible.set_if_neq(Visibility::Visible);
     } else {
-        *visible = Visibility::Hidden;
+        visible.set_if_neq(Visibility::Hidden);
     }
 }
 
@@ -1077,7 +1083,13 @@ fn map_chart(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
                 overflow: Overflow::clip(),
                 ..default()
             },
-            ImageNode::new(hud.maps[game.campaign.active].clone()),
+            ImageNode::new(
+                hud.map
+                    .as_ref()
+                    .expect("The map is generated when its panel opens")
+                    .1
+                    .clone(),
+            ),
             BorderRadius::all(Val::Px(12.)),
         ))
         .with_children(|map| {
@@ -2258,13 +2270,15 @@ pub fn layout(
     mut scale: ResMut<UiScale>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    if hud.maps_mode != Some(game.mode) {
-        hud.maps = game
-            .regions
-            .iter()
-            .map(|region| images.add(chart(region)))
-            .collect();
-        hud.maps_mode = Some(game.mode);
+    if play.panel == Panel::Map {
+        let map_key = (game.mode, game.campaign.active);
+        if hud
+            .map
+            .as_ref()
+            .is_none_or(|(current, _)| *current != map_key)
+        {
+            hud.map = Some((map_key, images.add(chart(game.region()))));
+        }
     }
     let safe = crate::controls::safe_insets(&window);
     let [left, top_inset, right, bottom_inset] = safe.map(f32::from);

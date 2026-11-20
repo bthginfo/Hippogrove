@@ -1364,9 +1364,17 @@ impl Settlement {
                 kind.cost_text()
             ));
         }
-        if kind.gate() {
-            return Ok(());
+        if kind.gate()
+            || self.footprint_has_detour(region, kind, tile)
+            || self.footprint_keeps_routes(region, kind, tile)
+        {
+            Ok(())
+        } else {
+            Err("Diese Stelle würde einen Sammelweg versperren.".into())
         }
+    }
+
+    fn footprint_keeps_routes(&self, region: &Region, kind: Building, tile: Tile) -> bool {
         // Check that the footprint leaves each currently reachable resource accessible.
         let depot_edge = region.depot.offset(1, 0);
         let new_footprint = |p| kind.tiles(tile).any(|cell| cell == p);
@@ -1374,7 +1382,7 @@ impl Settlement {
         let walk = self.walk_grid(region);
         let before = Self::reachable(region, &walk, depot_edge, |_| false);
         let after = Self::reachable(region, &walk, depot_edge, new_footprint);
-        if region.sources.iter().any(|source| {
+        let source_blocked = region.sources.iter().any(|source| {
             let accessible = |mask: &[bool]| {
                 source
                     .tile
@@ -1384,19 +1392,55 @@ impl Settlement {
                     .any(|index| mask[index])
             };
             accessible(&before) && !accessible(&after)
-        }) || self.walkers.iter().any(|walker| {
+        });
+        let walker_blocked = self.walkers.iter().any(|walker| {
             bounds
                 .index(walker.tile())
                 .is_some_and(|index| before[index] && !after[index])
-        }) {
-            return Err("Diese Stelle würde einen Sammelweg versperren.".into());
+        });
+        !source_blocked && !walker_blocked
+    }
+
+    fn footprint_has_detour(&self, region: &Region, kind: Building, tile: Tile) -> bool {
+        if kind
+            .tiles(tile)
+            .any(|cell| cell == region.depot.offset(1, 0))
+        {
+            return false;
         }
-        Ok(())
+        let size = kind.size();
+        let rim = (-1..size)
+            .map(|x| tile.offset(x, -1))
+            .chain((-1..size).map(|z| tile.offset(size, z)))
+            .chain((0..=size).rev().map(|x| tile.offset(x, size)))
+            .chain((0..=size).rev().map(|z| tile.offset(-1, z)));
+        // A continuous walkable rim can replace every route through the footprint.
+        // Sites touching a resource still need the full check for its access tiles.
+        let mut previous = self.walkable(region, tile.offset(-1, 0));
+        let mut runs = 0;
+        for cell in rim {
+            if region.source_at(cell).is_some() {
+                return false;
+            }
+            let open = self.walkable(region, cell);
+            runs += u8::from(open && !previous);
+            if runs > 1 {
+                return false;
+            }
+            previous = open;
+        }
+        true
     }
 
     fn walk_grid(&self, region: &Region) -> Vec<bool> {
         let bounds = region.bounds;
         let mut walk = region.walk_grid(self.bridge_fixed);
+        if let Some(index) = self
+            .opening_farm(region)
+            .and_then(|tile| bounds.index(tile))
+        {
+            walk[index] = false;
+        }
         for tile in self
             .buildings
             .iter()
@@ -1471,11 +1515,22 @@ impl Settlement {
     ) -> Option<VecDeque<Tile>> {
         let bounds = region.bounds;
         let start_index = bounds.index(start)?;
-        bounds.index(target)?;
+        let target_index = bounds.index(target)?;
         if start.distance(target) == u16::from(beside) {
             return Some(VecDeque::new());
         }
         let walk = self.walk_grid(region);
+        let goal_open = if beside {
+            target
+                .neighbors()
+                .into_iter()
+                .any(|tile| bounds.index(tile).is_some_and(|index| walk[index]))
+        } else {
+            walk[target_index]
+        };
+        if !goal_open {
+            return None;
+        }
         let mut paved = vec![false; bounds.len()];
         for &tile in &self.roads {
             if let Some(index) = bounds.index(tile) {
@@ -4319,6 +4374,11 @@ mod tests {
         let farm = game.city().opening_farm(&region).unwrap();
         assert!(!region.water(farm) && !region.rocky(farm) && !region.fixed_structure(farm));
         assert!(region.source_at(farm).is_none());
+        assert!(
+            game.city()
+                .route_to(&region, farm.offset(-1, 0), farm, false)
+                .is_none()
+        );
         assert!(game.act(Action::Hand(farm)).is_err());
 
         game.act(Action::Grab(region.sources[0].tile, PAW_LIMIT))
@@ -5192,6 +5252,32 @@ mod tests {
         assert!(game.act(Action::Build(Building::House, target, 0)).is_err());
         assert_eq!(game.city().stock, remaining);
         assert_eq!(game.city().count(Building::House), 1);
+    }
+
+    #[test]
+    fn local_building_checks_preserve_the_full_routes_on_different_shores() {
+        for biome in [Biome::Valley, Biome::Aegean] {
+            let game = Game::start(Mode::Sandbox(biome));
+            let city = game.city();
+            let region = game.region();
+            let kind = Building::Field;
+            let sites = region
+                .bounds
+                .tiles()
+                .filter(|tile| tile.within(region.depot, 10))
+                .filter(|&tile| kind.tiles(tile).all(|cell| city.walkable(region, cell)))
+                .filter(|&tile| city.footprint_has_detour(region, kind, tile))
+                .take(12);
+            let mut count = 0;
+            for tile in sites {
+                assert!(
+                    city.footprint_keeps_routes(region, kind, tile),
+                    "{biome:?} · {tile:?}"
+                );
+                count += 1;
+            }
+            assert_eq!(count, 12);
+        }
     }
 
     #[test]

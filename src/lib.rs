@@ -118,6 +118,7 @@ pub fn main() {
                     view::highlight_guide,
                     view::highlight_carry,
                     art::style_creature,
+                    art::meadow_detail,
                     life::update,
                     view::gates.after(view::animate),
                     view::aim,
