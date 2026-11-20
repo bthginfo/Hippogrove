@@ -39,6 +39,8 @@ const GUIDE: u32 = 256;
 const WHEEL: u32 = 512;
 const MAP: u32 = 1024;
 const MIRACLES: u32 = 2048;
+const OBJECTIVE: u32 = 4096;
+const CONTEXT: u32 = 8192;
 
 #[derive(Clone, Copy, Default)]
 struct Pad {
@@ -191,6 +193,8 @@ fn read_pad(gamepads: &Query<&Gamepad>) -> Pad {
             (GamepadButton::LeftTrigger, WHEEL),
             (GamepadButton::Select, MAP),
             (GamepadButton::North, MIRACLES),
+            (GamepadButton::LeftThumb, OBJECTIVE),
+            (GamepadButton::RightThumb, CONTEXT),
         ];
         let axis = |axis| pad.get(axis).unwrap_or(0.);
         Pad {
@@ -232,15 +236,21 @@ impl Drag {
         (over_ui, pressed): (bool, Option<UiAction>),
         play: &mut Play,
         game: &Game,
+        camera: &Camera,
+        pose: &GlobalTransform,
         now: f32,
     ) -> Self {
+        let world_hand = !over_ui
+            && play.panel == Panel::Closed
+            && play.tool == Tool::Hand
+            && select(play, game, camera, pose, position);
         Self {
             start: position,
             last: position,
             over_ui,
             pressed,
             dragging: false,
-            grab: pressed == Some(UiAction::Confirm) && play.start_grab(game, now),
+            grab: (world_hand || pressed == Some(UiAction::Confirm)) && play.start_grab(game, now),
         }
     }
 }
@@ -318,11 +328,17 @@ fn ground_point(
         .and_then(|ray| terrain::ray_contact(game.region(), ray, game.city().bridge_fixed))
 }
 
-fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform, screen: Vec2) {
+fn select(
+    play: &mut Play,
+    game: &Game,
+    camera: &Camera,
+    pose: &GlobalTransform,
+    screen: Vec2,
+) -> bool {
     let region = game.region();
     let city = game.city();
     let Some(point) = ground_point(game, camera, pose, screen) else {
-        return;
+        return false;
     };
     let mut tile = Tile::from_world(point);
     if play.tool == Tool::Build {
@@ -371,6 +387,11 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
                     hippo.tile(),
                     hippo.world() + Vec3::Y * (0.86 * game.campaign.gifts.creature.scale()),
                 );
+            }
+            if city.held.is_none() {
+                for walker in city.walkers.iter().filter(|w| !w.hippo && !w.guard) {
+                    consider(walker.tile(), walker.world() + Vec3::Y * 0.66);
+                }
             }
             for area in &region.areas {
                 consider(area.center, area.center.world() + Vec3::Y * 0.56);
@@ -439,7 +460,9 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
             play.grab = None;
         }
         play.aim = tile;
+        return true;
     }
+    false
 }
 
 fn drag(gesture: &mut Drag, position: Vec2, play: &mut Play, view: &mut CameraRig, height: f32) {
@@ -473,9 +496,14 @@ fn release(
     if gesture.grab {
         if !gesture.dragging
             && gesture.start.distance(position) <= 15.
-            && action == Some(UiAction::Confirm)
+            && (action == Some(UiAction::Confirm) || (!gesture.over_ui && !over_ui))
         {
-            play.finish_grab(game, view, now);
+            if gesture.over_ui || play.grab.is_some_and(|hold| now - hold.started >= 0.36) {
+                play.finish_grab(game, view, now);
+            } else {
+                play.grab = None;
+                play.inspect_world(game, now);
+            }
         } else {
             play.grab = None;
         }
@@ -486,6 +514,8 @@ fn release(
             if let Some(action) = action.filter(|action| Some(*action) == gesture.pressed) {
                 play.activate(action, game, view, now);
             }
+        } else if !over_ui && play.panel == Panel::Context {
+            play.activate(UiAction::Cancel, game, view, now);
         } else if !over_ui && play.panel == Panel::Closed {
             let city = game.city();
             let region = game.region();
@@ -516,9 +546,12 @@ fn release(
                     .is_ok_and(|tip| tip.distance(position) <= 19.)
             {
                 play.aim = city.walkers[0].tile();
+                play.inspect_world(game, now);
                 return;
             }
-            select(play, game, camera, pose, position);
+            if select(play, game, camera, pose, position) {
+                play.inspect_world(game, now);
+            }
         }
     }
 }
@@ -596,7 +629,7 @@ pub fn collect(
                 if controls.fingers.len() == 1 {
                     controls.touch = Some((
                         event.id,
-                        Drag::new(event.position, hit, &mut play, &game, now),
+                        Drag::new(event.position, hit, &mut play, &game, camera, pose, now),
                     ));
                 } else {
                     if controls.fingers.len() == 2 {
@@ -691,6 +724,8 @@ pub fn collect(
                     hud::hit(&areas, cursor, scale),
                     &mut play,
                     &game,
+                    camera,
+                    pose,
                     now,
                 ));
             } else if let Some(gesture) = controls.mouse.take() {
@@ -840,6 +875,14 @@ pub fn collect(
         }
     }
     if !play.gamepad {
+        return;
+    }
+    if play.panel == Panel::Closed && pressed & CONTEXT != 0 {
+        play.inspect_world(&game, now);
+        return;
+    }
+    if play.panel == Panel::Closed && pressed & OBJECTIVE != 0 {
+        play.activate(UiAction::Guide, &mut game, &mut view, now);
         return;
     }
     if pressed & WHEEL != 0 && matches!(play.panel, Panel::Closed | Panel::Wheel(_)) {

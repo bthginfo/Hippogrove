@@ -58,7 +58,9 @@ static void publish(GCExtendedGamepad *pad) {
         | (pad.rightShoulder.pressed ? 256 : 0)
         | (pad.leftShoulder.pressed ? 512 : 0)
         | (pad.buttonOptions.pressed ? 1024 : 0)
-        | (pad.buttonY.pressed ? 2048 : 0);
+        | (pad.buttonY.pressed ? 2048 : 0)
+        | (pad.leftThumbstickButton.pressed ? 4096 : 0)
+        | (pad.rightThumbstickButton.pressed ? 8192 : 0);
     hippogrove_controller_state(pad.leftThumbstick.xAxis.value, pad.leftThumbstick.yAxis.value,
         pad.rightThumbstick.xAxis.value, pad.rightThumbstick.yAxis.value,
         pad.rightTrigger.value - pad.leftTrigger.value, buttons, 1);

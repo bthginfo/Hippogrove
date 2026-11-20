@@ -64,7 +64,7 @@ pub(crate) enum Label {
     FaithUse,
     ManaUse,
     Objective,
-    PracticeHint,
+    CampaignHint,
     Quest,
     Notice,
     Confirm,
@@ -121,11 +121,18 @@ pub struct LoadingWorld;
 pub struct PadReticle;
 
 #[derive(Component)]
+pub struct ObjectPopup;
+
+#[derive(Component)]
+pub struct WorldReceipt;
+
+#[derive(Component)]
 pub(crate) struct CatalogPortrait;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Layout {
     region: usize,
+    lesson: Option<(crate::practice::Step, UiAction)>,
     mode: Mode,
     tool: Tool,
     option: usize,
@@ -221,6 +228,26 @@ pub fn setup(
                 Visibility::Inherited,
             ));
         });
+    commands.spawn((
+        WorldReceipt,
+        Text::new(""),
+        TextFont {
+            font: hud.bold.clone(),
+            font_size: 14.,
+            ..default()
+        },
+        TextColor(rgb(LIGHT)),
+        Node {
+            position_type: PositionType::Absolute,
+            max_width: Val::Px(248.),
+            padding: UiRect::axes(Val::Px(7.), Val::Px(3.)),
+            ..default()
+        },
+        BackgroundColor(rgb(DARK)),
+        BorderRadius::all(Val::Px(7.)),
+        GlobalZIndex(18),
+        Visibility::Hidden,
+    ));
     hud.serif = assets.load("embedded://fonts/DMSerifText-Regular.ttf");
     hud.icons = assets.load("embedded://ui/atlas.png");
     hud.atlas = atlases.add(TextureAtlasLayout::from_grid(
@@ -305,6 +332,130 @@ pub fn pad_reticle(
     } else {
         visible.set_if_neq(Visibility::Hidden);
     }
+}
+
+pub fn world_labels(
+    game: Res<Game>,
+    play: Res<Play>,
+    time: Res<Time>,
+    scale: Res<UiScale>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::view::WorldCamera>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut popups: Query<(&mut Node, &ComputedNode), With<ObjectPopup>>,
+    receipt: Single<
+        (&mut Text, &mut Node, &ComputedNode, &mut Visibility),
+        (With<WorldReceipt>, Without<ObjectPopup>),
+    >,
+) {
+    let (camera, pose) = *camera;
+    let [left, top, right, bottom] = crate::controls::safe_insets(&window).map(f32::from);
+    let margin = Vec2::new(left, top) / scale.0;
+    let available = (Vec2::new(
+        window.width() - left - right,
+        window.height() - top - bottom,
+    ) / scale.0)
+        .max(Vec2::ONE);
+    if let Ok((mut node, size)) = popups.single_mut() {
+        let size = size.size() * size.inverse_scale_factor();
+        let point = crate::controls::aim_on_screen(&play, &game, camera, pose)
+            .map_or(available * 0.5, |point| point / scale.0 - margin);
+        let x = if point.x + size.x + 20. <= available.x {
+            point.x + 14.
+        } else {
+            point.x - size.x - 14.
+        };
+        node.left = Val::Px(x.clamp(5., (available.x - size.x - 5.).max(5.)));
+        node.top =
+            Val::Px((point.y - size.y * 0.48).clamp(5., (available.y - size.y - 5.).max(5.)));
+    }
+    let (mut text, mut node, size, mut visibility) = receipt.into_inner();
+    let now = time.elapsed_secs();
+    if let Some((tile, at, message)) = play
+        .receipt
+        .as_ref()
+        .filter(|(_, at, _)| now - at < 2.3 && play.panel == Panel::Closed)
+    {
+        let point = crate::terrain::on_ground(game.region(), tile.world()) + Vec3::Y * 1.5;
+        if let Ok(point) = camera.world_to_viewport(pose, point) {
+            let point = point / scale.0;
+            let width = size.size().x * size.inverse_scale_factor();
+            node.left = Val::Px((point.x - width * 0.5).clamp(
+                margin.x + 4.,
+                (margin.x + available.x - width - 4.).max(margin.x + 4.),
+            ));
+            node.top = Val::Px((point.y - 17. - (now - at) * 7.).max(margin.y));
+            if text.0 != *message {
+                text.0.clone_from(message);
+            }
+            visibility.set_if_neq(Visibility::Visible);
+            return;
+        }
+    }
+    visibility.set_if_neq(Visibility::Hidden);
+}
+
+fn object_popup(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play) {
+    let Some(menu) = &play.object_menu else {
+        return;
+    };
+    parent
+        .spawn((
+            ObjectPopup,
+            HitArea,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(228.),
+                padding: UiRect::all(Val::Px(7.)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.),
+                border: UiRect::all(Val::Px(2.)),
+                ..default()
+            },
+            BackgroundColor(rgb(DARK)),
+            BorderColor(rgb(BRASS)),
+            BorderRadius::all(Val::Px(12.)),
+        ))
+        .with_children(|card| {
+            card.spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(3.),
+                ..default()
+            })
+            .with_children(|header| {
+                text(header, hud, &menu.title, 16., GOLD);
+                styled_button(
+                    header,
+                    hud,
+                    "×",
+                    UiAction::Cancel,
+                    false,
+                    false,
+                    ButtonStyle {
+                        compact: true,
+                        height: Some(40.),
+                        ..default()
+                    },
+                );
+            });
+            text(card, hud, &menu.detail, 13., SUBTLE);
+            for (i, choice) in menu.choices.iter().enumerate() {
+                styled_button(
+                    card,
+                    hud,
+                    &choice.label,
+                    choice.action,
+                    false,
+                    i == 0,
+                    ButtonStyle {
+                        compact: true,
+                        height: Some(43.),
+                        icon: Some(choice.icon),
+                        ..default()
+                    },
+                );
+            }
+        });
 }
 
 fn chart(region: &Region) -> Image {
@@ -781,7 +932,7 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                                 );
                             }
                         });
-                    if !game.mode.sandbox() {
+                    if !game.mode.sandbox() && game.mode != Mode::Tutorial {
                         styled_button(
                             right,
                             hud,
@@ -790,8 +941,7 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                             false,
                             false,
                             ButtonStyle {
-                                caption: (game.mode == Mode::Tutorial)
-                                    .then_some(Label::PracticeHint),
+                                caption: Some(Label::CampaignHint),
                                 ..quick
                             },
                         );
@@ -834,6 +984,133 @@ fn feedback_toast(parent: &mut ChildSpawnerCommands, hud: &Hud, mut node: Node, 
             let image = glyph(toast, hud, 11, 22.);
             toast.commands().entity(image).insert(FeedbackIcon);
             label(toast, hud, Label::Notice, 14., LIGHT);
+        });
+}
+
+fn lesson_bar(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    step: crate::practice::Step,
+    action: UiAction,
+    layout: Layout,
+) {
+    use crate::practice::Step;
+    let (index, title) = step.chapter();
+    let waiting = matches!(step, Step::Grow | Step::Delivery);
+    let icon = match step {
+        Step::House => 6,
+        Step::Field | Step::Harvest | Step::Grow => 2,
+        Step::Rain => 9,
+        Step::SendHippo | Step::Delivery | Step::Pet => 8,
+        _ => 5,
+    };
+    let edge = if layout.short { 8. } else { EDGE };
+    parent
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(edge),
+            right: Val::Px(edge),
+            bottom: Val::Px(edge),
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_children(|anchor| {
+            anchor
+                .spawn((
+                    HitArea,
+                    Node {
+                        width: Val::Percent(100.),
+                        max_width: Val::Px(660.),
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::axes(Val::Px(13.), Val::Px(8.)),
+                        row_gap: Val::Px(5.),
+                        border: UiRect::all(Val::Px(1.)),
+                        ..default()
+                    },
+                    BackgroundColor(rgb(DARK)),
+                    BorderColor(rgb(BRASS)),
+                    BorderRadius::all(Val::Px(13.)),
+                ))
+                .with_children(|card| {
+                    card.spawn(Node {
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.),
+                        ..default()
+                    })
+                    .with_children(|heading| {
+                        glyph(heading, hud, icon, 23.);
+                        text(heading, hud, &format!("Übung {index}/8"), 14., GOLD);
+                        text(
+                            heading,
+                            hud,
+                            title,
+                            if layout.short { 17. } else { 21. },
+                            LIGHT,
+                        );
+                    });
+                    let instruction = text(
+                        card,
+                        hud,
+                        step.instruction(action, layout.gamepad),
+                        16.,
+                        LIGHT,
+                    );
+                    card.commands()
+                        .entity(instruction)
+                        .insert(TextLayout::new_with_justify(JustifyText::Left));
+                    card.spawn(Node {
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.),
+                        ..default()
+                    })
+                    .with_children(|buttons| {
+                        let name = match action {
+                            UiAction::QuickWheel(Wheel::Build) => "Baurad öffnen",
+                            UiAction::QuickWheel(Wheel::Miracles) => "Wunderrad öffnen",
+                            UiAction::QuickWheel(Wheel::Hippo) => "Nilpferdrad öffnen",
+                            UiAction::Tool(_) => "Pfote nehmen",
+                            UiAction::Guide if waiting => "Zuschauen",
+                            UiAction::Guide => "Ziel zeigen",
+                            _ => "Ausführen",
+                        };
+                        let name = if layout.gamepad {
+                            format!("A  {name}")
+                        } else {
+                            name.into()
+                        };
+                        let style = ButtonStyle {
+                            compact: true,
+                            height: Some(44.),
+                            ..default()
+                        };
+                        styled_button(buttons, hud, &name, action, false, true, style);
+                        if action != UiAction::Guide {
+                            styled_button(
+                                buttons,
+                                hud,
+                                "Ziel zeigen",
+                                UiAction::Guide,
+                                false,
+                                false,
+                                style,
+                            );
+                        }
+                        if matches!(step, Step::House | Step::Field) && action == UiAction::Confirm
+                        {
+                            text(
+                                buttons,
+                                hud,
+                                if layout.gamepad {
+                                    "Steuerkreuz versetzt"
+                                } else {
+                                    "Bauplatz antippen"
+                                },
+                                13.,
+                                SUBTLE,
+                            );
+                        }
+                    });
+                });
         });
 }
 
@@ -1006,9 +1283,9 @@ fn placement_bar(
                                 actions,
                                 hud,
                                 if layout.gamepad && layout.short {
-                                    "Feldweise mit\nSteuerkreuz"
+                                    "Kreuz versetzt\nL3 zum Ziel"
                                 } else if layout.gamepad {
-                                    "Steuerkreuz versetzt feldweise"
+                                    "Steuerkreuz versetzt · L3 zum Ziel"
                                 } else if cfg!(any(target_os = "ios", target_os = "android")) {
                                     "Tippe auf den Bauplatz"
                                 } else {
@@ -1087,15 +1364,30 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                             quick,
                         );
                     }
-                    styled_button(
-                        command,
-                        hud,
-                        "Zum Ziel",
-                        UiAction::Guide,
-                        false,
-                        false,
-                        quick,
-                    );
+                    if !layout.gamepad && layout.compact {
+                        styled_button(
+                            command,
+                            hud,
+                            "Aktionen",
+                            UiAction::ToggleWheel,
+                            false,
+                            false,
+                            ButtonStyle {
+                                icon: Some(12),
+                                ..quick
+                            },
+                        );
+                    } else if !layout.gamepad {
+                        styled_button(
+                            command,
+                            hud,
+                            "Zum Ziel",
+                            UiAction::Guide,
+                            false,
+                            false,
+                            quick,
+                        );
+                    }
                     styled_button(
                         command,
                         hud,
@@ -1110,32 +1402,34 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                     );
                 });
 
-            let mut dock = column_grid(Tool::ALL.len() as u16);
-            dock.max_width = Val::Px(512.);
-            dock.padding = UiRect::all(Val::Px(4.));
-            dock.border = UiRect::all(Val::Px(1.));
-            dock.column_gap = Val::Px(4.);
-            hud_root
-                .spawn((
-                    HitArea,
-                    dock,
-                    BackgroundColor(rgb(DARK)),
-                    BorderColor(rgb(BRASS)),
-                    BorderRadius::all(Val::Px(13.)),
-                ))
-                .with_children(|tools| {
-                    for tool in Tool::ALL {
-                        styled_button(
-                            tools,
-                            hud,
-                            tool.name(),
-                            UiAction::Tool(tool),
-                            play.tool == tool,
-                            false,
-                            quick,
-                        );
-                    }
-                });
+            if !layout.gamepad && !layout.compact {
+                let mut dock = column_grid(Tool::ALL.len() as u16);
+                dock.max_width = Val::Px(512.);
+                dock.padding = UiRect::all(Val::Px(4.));
+                dock.border = UiRect::all(Val::Px(1.));
+                dock.column_gap = Val::Px(4.);
+                hud_root
+                    .spawn((
+                        HitArea,
+                        dock,
+                        BackgroundColor(rgb(DARK)),
+                        BorderColor(rgb(BRASS)),
+                        BorderRadius::all(Val::Px(13.)),
+                    ))
+                    .with_children(|tools| {
+                        for tool in Tool::ALL {
+                            styled_button(
+                                tools,
+                                hud,
+                                tool.name(),
+                                UiAction::Tool(tool),
+                                play.tool == tool,
+                                false,
+                                quick,
+                            );
+                        }
+                    });
+            }
             if layout.gamepad {
                 gamepad_legend(
                     hud_root,
@@ -1153,7 +1447,8 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                                 "Werkzeugziel"
                             },
                         ),
-                        ("↑", None, "Auftrag"),
+                        ("L3", None, "Ziel"),
+                        ("R3", None, "Objekt"),
                     ],
                 );
             }
@@ -1246,8 +1541,73 @@ fn modal_header(
         });
 }
 
+fn island_heading(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    biome: Biome,
+    title: &str,
+    line: &str,
+    short: bool,
+) {
+    let height = if short { 59. } else { 88. };
+    parent
+        .spawn((
+            Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(12.),
+                padding: UiRect::all(Val::Px(5.)),
+                ..default()
+            },
+            BackgroundColor(rgb(DARK)),
+            BorderRadius::all(Val::Px(12.)),
+        ))
+        .with_children(|banner| {
+            banner.spawn((
+                ImageNode::from_atlas_image(
+                    hud.world_art.clone(),
+                    TextureAtlas {
+                        layout: hud.world_cards.clone(),
+                        index: biome as usize,
+                    },
+                ),
+                Node {
+                    width: Val::Px(height * 1.19),
+                    height: Val::Px(height),
+                    flex_shrink: 0.,
+                    ..default()
+                },
+                BorderRadius::all(Val::Px(8.)),
+            ));
+            banner
+                .spawn(Node {
+                    min_width: Val::Px(0.),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Start,
+                    ..default()
+                })
+                .with_children(|copy| {
+                    for (value, size, color) in [
+                        (line, if short { 13. } else { 15. }, GOLD),
+                        (title, if short { 22. } else { 30. }, LIGHT),
+                    ] {
+                        let e = text(copy, hud, value, size, color);
+                        copy.commands()
+                            .entity(e)
+                            .insert(TextLayout::new_with_justify(JustifyText::Left));
+                    }
+                });
+        });
+}
+
 fn main_menu(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: bool) {
-    panel_heading(parent, hud, "Hippogrove", short);
+    island_heading(
+        parent,
+        hud,
+        game.region().kind,
+        "Hippogrove",
+        "Dein Dorf, dein Nilpferd und deine Wunder",
+        short,
+    );
     let style = ButtonStyle {
         compact: short,
         ..default()
@@ -1319,7 +1679,7 @@ fn main_menu(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
         text(
             parent,
             hud,
-            "Schließe das Tutorial ab, um die Kampagnen freizuschalten.",
+            "Begleite dein Nilpferd auf der Übungsinsel. Danach beginnt deine Kampagne.",
             15.,
             MUTED,
         );
@@ -1424,16 +1784,17 @@ fn controls_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, gamepad: bool, s
                 "Alle Aktionen · Bauen · Wunder",
             ),
             ("RB/R1", "Nilpferd oder Werkzeugziel"),
+            ("L3 · R3", "Zum Auftragsziel · Objektaktionen"),
             ("Steuerkreuz", "Menüs · ↑ Auftrag · Bauplatz versetzen"),
             ("A / Kreuz · B / Kreis", "Bestätigen · Zurück"),
             ("Start", "Pause und Hauptmenü"),
         ]
     } else if cfg!(any(target_os = "android", target_os = "ios")) {
         &[
-            ("Antippen", "Ziel oder Knopf wählen"),
+            ("Objekt antippen", "Aktionen direkt am Objekt öffnen"),
             ("Ziehen", "Kamera schwenken"),
             ("Zwei Finger · + / −", "Zoomen"),
-            ("Greifen halten", "Bis zu 18 Einheiten aufnehmen"),
+            ("Quelle gedrückt halten", "Bis zu 18 Einheiten aufnehmen"),
         ]
     } else {
         &[
@@ -1654,12 +2015,133 @@ fn map_chart(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
         });
 }
 
+fn quest_journal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout) {
+    let city = game.city();
+    let region = game.region();
+    island_heading(
+        parent,
+        hud,
+        region.kind,
+        city.quest_title(region),
+        &format!("{} · Hauptauftrag", region.name),
+        layout.short,
+    );
+    label(
+        parent,
+        hud,
+        Label::Objective,
+        if layout.short { 14. } else { 17. },
+        INK,
+    );
+    if city.quest == Quest::Shelter && !region.tutorial {
+        parent
+            .spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(9.),
+                ..default()
+            })
+            .with_children(|items| {
+                for (icon, name, done) in [
+                    (
+                        0,
+                        "Lieferung",
+                        city.hand_deliveries > 0 && !city.waiting_for_first_delivery(),
+                    ),
+                    (6, "Hütte", city.count(Building::House) > 0),
+                    (12, "Lager", city.count(Building::Store) > 0),
+                    (8, "Nilpferd", city.hippo_deliveries > 0),
+                ] {
+                    items
+                        .spawn((
+                            Node {
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(3.),
+                                padding: UiRect::all(Val::Px(3.)),
+                                ..default()
+                            },
+                            BackgroundColor(rgb(if done { JADE } else { SUBTLE })),
+                            BorderRadius::all(Val::Px(5.)),
+                        ))
+                        .with_children(|item| {
+                            glyph(item, hud, icon, 15.);
+                            text(item, hud, &format!("{name} {}/1", u8::from(done)), 13., INK);
+                        });
+                }
+            });
+    }
+    let compact = ButtonStyle {
+        compact: true,
+        height: Some(44.),
+        ..default()
+    };
+    parent.spawn(row()).with_children(|actions| {
+        styled_button(
+            actions,
+            hud,
+            "Zum Auftragsziel",
+            UiAction::Guide,
+            false,
+            true,
+            ButtonStyle {
+                icon: Some(14),
+                ..compact
+            },
+        );
+        if !region.tutorial && (layout.side_quest != SideQuest::Complete || city.local_finished) {
+            let name = match layout.side_quest {
+                SideQuest::Available => "Bitte aus dem Dorf",
+                SideQuest::Ready => "Belohnung abholen",
+                SideQuest::Active => "Nebenauftrag",
+                SideQuest::Complete => "Erfüllte Bitte",
+            };
+            styled_button(
+                actions,
+                hud,
+                name,
+                UiAction::Panel(Panel::SideQuest),
+                false,
+                false,
+                ButtonStyle {
+                    icon: Some(11),
+                    ..compact
+                },
+            );
+        }
+    });
+    if !layout.short {
+        if let Some(choice) = city.opening_choice() {
+            text(
+                parent,
+                hud,
+                match choice {
+                    FirstDelivery::Village => "Miras Familie hat ein Dach am Schrein.",
+                    FirstDelivery::Farm => "Joras Hof ist wieder gedeckt.",
+                },
+                15.,
+                MUTED,
+            );
+        }
+        label(parent, hud, Label::Raid, 15., MUTED);
+        if !region.tutorial {
+            label(parent, hud, Label::Rival, 16., MUTED);
+        }
+    }
+}
+
 fn side_quest_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout) {
+    let (title, _, _) = game.city().local_quest(game.region());
+    let status = match layout.side_quest {
+        SideQuest::Available => "Neue Bitte",
+        SideQuest::Active => "Angenommen",
+        SideQuest::Ready => "Belohnung bereit",
+        SideQuest::Complete => "Erfüllt",
+    };
+    island_heading(parent, hud, game.region().kind, title, status, layout.short);
     label(
         parent,
         hud,
         Label::LocalQuest,
-        if layout.short { 16. } else { 20. },
+        if layout.short { 14. } else { 18. },
         INK,
     );
     if let Some((name, action)) = match layout.side_quest {
@@ -1676,7 +2158,7 @@ fn side_quest_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, l
         );
         button(parent, hud, name, UiAction::Do(action), false, true);
     } else {
-        if game.region().quests.is_some() && layout.side_quest == SideQuest::Active {
+        if layout.side_quest == SideQuest::Active {
             button(parent, hud, "Zum Ziel", UiAction::Guide, false, true);
         }
         if game.city().next_raid(game.region()).is_some() {
@@ -2933,7 +3415,17 @@ fn selection_wheel(
             text(
                 wheel_root,
                 hud,
-                wheel.title(),
+                &layout
+                    .lesson
+                    .and_then(|(step, _)| step.wheel())
+                    .filter(|(expected, _)| *expected == wheel)
+                    .and_then(|(_, choice)| {
+                        wheel.entries().iter().find(|entry| entry.action == choice)
+                    })
+                    .map_or_else(
+                        || wheel.title().into(),
+                        |entry| format!("{} · Wähle {}", wheel.title(), entry.name),
+                    ),
                 if layout.short { 23. } else { 30. },
                 LIGHT,
             );
@@ -3044,7 +3536,7 @@ fn selection_wheel(
                 if layout.gamepad {
                     "Stick oder Steuerkreuz · A/Kreuz wählen · B/Kreis zurück"
                 } else {
-                    "Pfeile wählen · Enter bestätigt · Esc zurück"
+                    "Symbol antippen · Pfeile und Enter auf der Tastatur"
                 },
                 13.,
                 LIGHT,
@@ -3060,6 +3552,10 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             && matches!(
                 play.panel,
                 Panel::MainMenu
+                    | Panel::Graduation
+                    | Panel::Briefing
+                    | Panel::SideQuest
+                    | Panel::Quests
                     | Panel::Map
                     | Panel::Menu
                     | Panel::Spells
@@ -3081,7 +3577,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             },
             BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
-            if !matches!(play.panel, Panel::MainMenu | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection) {
+            if !matches!(play.panel, Panel::MainMenu | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection | Panel::Briefing | Panel::Graduation) {
                 let actions = if play.panel == Panel::Menu {
                     [("Hauptmenü", UiAction::MainMenu, false), ("Fortsetzen", UiAction::Resume, true)]
                 } else {
@@ -3101,6 +3597,28 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 }, layout.short, &actions);
             }
             match play.panel {
+                Panel::Briefing => {
+                    island_heading(box_node, hud, region.kind, city.quest_title(region), &region.name, layout.short);
+                    let message = if city.waiting_for_first_delivery() {
+                        "Zwei Dächer sind beschädigt. Nimm sechs Holz am markierten Holzstoß. Danach entscheidest du, ob du Mira im Dorf oder Jora am Fluss hilfst.".to_owned()
+                    } else {
+                        city.objective(region).1
+                    };
+                    text(box_node, hud, &message, 16., MUTED);
+                    text(box_node, hud, if layout.gamepad {
+                        "L3 zeigt dein Auftragsziel. Mit A führst du die Aktion dort aus."
+                    } else {
+                        "„Zum Ziel“ zeigt den Ort und wählt das Werkzeug. Unten bestätigst du die Aktion."
+                    }, 15., INK);
+                    button(box_node, hud, "Zum ersten Ziel", UiAction::Resume, false, true);
+                }
+                Panel::Graduation => {
+                    island_heading(box_node, hud, region.kind, "Deine Insel ist versorgt", "Übungsinsel · 8 von 8", layout.short);
+                    text(box_node, hud, "Dein Dorf hat ein Dach und Nahrung. Dein Nilpferd holt Vorräte.", 17., INK);
+                    text(box_node, hud, "Im Weidental entscheidest du, welche Familie zuerst ein Dach bekommt.", 16., MUTED);
+                    button(box_node, hud, "Ins Weidental", UiAction::SelectMode(Mode::Campaign(Biome::Valley)), false, true);
+                    button(box_node, hud, "Andere Insel wählen", UiAction::Panel(Panel::Modes), false, false);
+                }
                 Panel::MainMenu => main_menu(box_node, hud, game, layout.short),
                 Panel::Menu => menu_panel(box_node,hud,game,layout.short),
                 Panel::Controls => controls_panel(box_node, hud, play.gamepad, layout.short),
@@ -3147,42 +3665,15 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     });
                     text(box_node,hud,"Aufträge geben Talentpunkte. Das Nilpferd lernt mit Lob nach erledigter Arbeit. Wache auf Rang 2, Feldpflege auf Rang 3.",17.,INK);
                 }
-                Panel::Quests => {
-                    box_node.spawn(row()).with_children(|active| {
-                        panel_heading(active,hud,city.quest_title(region),layout.short);
-                        button(active,hud,"Zum Ziel",UiAction::Guide,false,true);
-                    });
-                    label(box_node,hud,Label::Objective,16.,INK);
-                    if let Some(choice) = city.opening_choice() {
-                        let delivery = match choice {
-                            FirstDelivery::Village => "Erste Lieferung · Miras Familie am Schrein",
-                            FirstDelivery::Farm => "Erste Lieferung · Joras Dach ist repariert",
-                        };
-                        text(box_node, hud, delivery, 14., MUTED);
-                    }
-                    label(box_node,hud,Label::Raid,15.,MUTED);
-                    if !layout.short && !region.tutorial {
-                        text(box_node,hud,&region.lore,16.,MUTED);
-                        label(box_node,hud,Label::Rival,16.,MUTED);
-                    }
-                    if layout.side_quest != SideQuest::Complete || city.local_finished {
-                        let name = match layout.side_quest {
-                            SideQuest::Available => "! Nebenauftrag",
-                            SideQuest::Ready => "? Belohnung abholen",
-                            SideQuest::Active => "Nebenauftrag ansehen",
-                            SideQuest::Complete => "Nebenauftrag erfüllt",
-                        };
-                        button(box_node,hud,name,UiAction::Panel(Panel::SideQuest),false,false);
-                    }
-                }
+                Panel::Quests => quest_journal(box_node, hud, game, layout),
                 Panel::FirstDelivery => first_delivery_panel(box_node, hud, game, layout.short),
-                Panel::Closed | Panel::Story | Panel::Wheel(_) => {}
+                Panel::Closed | Panel::Context | Panel::Story | Panel::Wheel(_) => {}
             }
             // The same feedback is visible while purchasing a talent or choosing a chapter.
             if !matches!(play.panel, Panel::MainMenu | Panel::Controls | Panel::Map | Panel::FirstDelivery | Panel::Modes | Panel::Catalog | Panel::Inspection) && !layout.narrow_modal {
                 feedback_toast(box_node, hud, Node::default(), false);
             }
-            if layout.gamepad && !layout.narrow_modal && !matches!(play.panel, Panel::Controls | Panel::Catalog | Panel::Inspection) {
+            if layout.gamepad && !layout.narrow_modal && !matches!(play.panel, Panel::Controls | Panel::Catalog | Panel::Inspection | Panel::Quests | Panel::SideQuest | Panel::Graduation | Panel::Briefing) {
                 text(box_node, hud, "Stick oder Steuerkreuz · A wählen · B zurück", 12., MUTED);
             }
         });
@@ -3220,6 +3711,9 @@ pub fn layout(
     }
     let key = Layout {
         region: game.campaign.active,
+        lesson: play
+            .practice_step
+            .map(|step| (step, step.next_action(&play, &game))),
         mode: game.mode,
         tool: play.tool,
         option: play.option,
@@ -3315,11 +3809,15 @@ pub fn layout(
             .with_children(|safe_root| {
                 if play.panel == Panel::Closed {
                     top(safe_root, &hud, &game, key);
-                    if play.tool == Tool::Build {
+                    if let Some((step, action)) = key.lesson {
+                        lesson_bar(safe_root, &hud, step, action, key);
+                    } else if play.tool == Tool::Build {
                         placement_bar(safe_root, &hud, &play, key, game.region().kind);
                     } else {
                         bottom(safe_root, &hud, &play, key);
                     }
+                } else if play.panel == Panel::Context {
+                    object_popup(safe_root, &hud, &play);
                 } else if play.panel == Panel::Story {
                     cutscene(safe_root, &hud, key);
                 } else if let Panel::Wheel(wheel) = play.panel {
@@ -3508,16 +4006,17 @@ pub(crate) fn update(
                     stock_text(FARM_REWARD)
                 )
             }
-            Label::PracticeHint => {
-                let step = crate::practice::Step::current(city);
-                match (play.gamepad, step) {
-                    (true, crate::practice::Step::Grab) => "A halten greift bis zu 18 Holz.",
-                    (true, crate::practice::Step::House) => "A baut · LB/L1 zeigt Baupläne",
-                    (true, crate::practice::Step::Rain) => "A wirkt Regen · LB/L1 zeigt Wunder",
-                    _ => step.hint(),
+            Label::CampaignHint
+                if city.first_delivery_ready(region)
+                    && city.first_delivery_at(region, play.aim).is_some() =>
+            {
+                if play.gamepad {
+                    format!("A · {}", target.label)
+                } else {
+                    format!("Unten „{}“ antippen", target.label)
                 }
-                .into()
             }
+            Label::CampaignHint => city.campaign_hint(region, play.gamepad),
             Label::Creature => format!(
                 "{} · Rang {} · {:.0}% Kraft · {}",
                 growth.description(),
@@ -3608,13 +4107,21 @@ pub(crate) fn update(
             Label::Subtitle => play
                 .story
                 .map_or_else(String::new, |story| story.caption(region).into()),
-            Label::Quest => city.objective(region).0.into(),
+            Label::Quest => format!("Zum Ziel · {}", city.objective(region).0),
             Label::Notice => {
                 if notice_active {
                     play.notice.clone()
                 } else {
                     String::new()
                 }
+            }
+            Label::Confirm if play.practice_step.is_some() && play.grab.is_some() => {
+                let hold = play.grab.unwrap();
+                format!(
+                    "Loslassen · {}/{}",
+                    hold.amount(time.elapsed_secs()),
+                    hold.limit()
+                )
             }
             Label::Confirm if play.gamepad => format!("A  {}", target.label),
             Label::Confirm => target.label.clone(),
@@ -3684,14 +4191,7 @@ pub(crate) fn update(
                     None => format!("Widerstand {}", state.resolve),
                 }
             }
-            Label::LocalQuest => {
-                let (title, goal, _) = city.local_quest(region);
-                if city.local_finished {
-                    format!("{title} · erfüllt")
-                } else {
-                    format!("{title}\n{goal}")
-                }
-            }
+            Label::LocalQuest => city.local_quest(region).1,
         };
         if text.0 != value {
             text.0 = value;

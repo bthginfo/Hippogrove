@@ -1,0 +1,242 @@
+use crate::{
+    game::{Action, Building, Crop, Game, Miracle},
+    play::{Panel, Play, Target, Tool, UiAction},
+    wheel::Wheel,
+};
+
+pub struct Choice {
+    pub label: String,
+    pub action: UiAction,
+    pub icon: usize,
+}
+
+impl Choice {
+    fn new(label: impl Into<String>, action: UiAction, icon: usize) -> Self {
+        Self {
+            label: label.into(),
+            action,
+            icon,
+        }
+    }
+}
+
+pub struct ObjectMenu {
+    pub title: String,
+    pub detail: String,
+    pub choices: Vec<Choice>,
+}
+
+impl ObjectMenu {
+    pub fn at(play: &Play, game: &Game, now: f32) -> Self {
+        let city = game.city();
+        let region = game.region();
+        let tile = play.aim;
+        let mut target = Target::default();
+        target.refresh(play, game, now);
+        let mut menu = Self {
+            title: String::new(),
+            detail: target.detail,
+            choices: Vec::new(),
+        };
+        let guide = Choice::new("Auftragsziel zeigen", UiAction::Guide, 14);
+        let primary = Choice::new(target.label, UiAction::Confirm, 5);
+        let source = region.source_at(tile);
+        let site = city.building_at(tile);
+        let family = city
+            .walkers
+            .iter()
+            .any(|walker| !walker.hippo && !walker.guard && walker.tile() == tile);
+        if let Some(step) = play.practice_step {
+            let action = step.next_action(play, game);
+            menu.title = step.chapter().1.into();
+            if step == crate::practice::Step::Grab && action == UiAction::Confirm {
+                menu.title = source
+                    .map_or("Holzstoß", |i| {
+                        region.kind.material(region.sources[i].material)
+                    })
+                    .into();
+                menu.detail =
+                    "Ein Bündel bringt bis zu 6 Holz. Halten direkt am Holzstoß greift bis zu 18."
+                        .into();
+            } else {
+                menu.detail = step.instruction(action, play.gamepad).into();
+            }
+            menu.choices.push(match action {
+                UiAction::Confirm => primary,
+                UiAction::QuickWheel(wheel) => {
+                    Choice::new(format!("{} öffnen", wheel.title()), action, 12)
+                }
+                UiAction::Tool(_) => Choice::new("Pfote nehmen", action, 5),
+                _ => guide,
+            });
+            return menu;
+        }
+        if play.tool != Tool::Hand {
+            menu.title = play.tool.choice_name(play.option).into();
+            if target.legal {
+                menu.choices.push(primary);
+            }
+            if play.tool == Tool::Build {
+                menu.choices
+                    .push(Choice::new("Drehen", UiAction::Rotate, 15));
+                menu.choices
+                    .push(Choice::new("Freien Platz finden", UiAction::ToolTarget, 14));
+            }
+        } else if let Some(bundle) = city.held {
+            menu.title = format!(
+                "{} {} in der Pfote",
+                bundle.count,
+                region.kind.material(region.sources[bundle.source].material)
+            );
+            if target.legal {
+                menu.choices.push(primary);
+            } else {
+                menu.choices.push(Choice::new(
+                    "Zum Lager",
+                    UiAction::Focus(city.nearest_store(region, tile)),
+                    14,
+                ));
+            }
+        } else if play.target(game) == Action::Pet {
+            menu.title = "Dein Nilpferd".into();
+            menu.detail = format!("{} · {:.0} % Kraft", city.creature_status(), city.energy);
+            if city.pet_ready() {
+                menu.choices
+                    .push(Choice::new("Streicheln", UiAction::Do(Action::Pet), 8));
+            }
+            if city.lesson.is_some() {
+                menu.choices.push(Choice::new(
+                    "Für die Arbeit loben",
+                    UiAction::Do(Action::Praise),
+                    13,
+                ));
+            }
+            menu.choices.push(Choice::new(
+                "Befehle öffnen",
+                UiAction::QuickWheel(Wheel::Hippo),
+                8,
+            ));
+        } else if let Some(i) = source {
+            let material = region.sources[i].material;
+            menu.title = region.kind.material(material).into();
+            if target.legal {
+                menu.detail = format!("{} verfügbar · Halten greift bis zu 18", city.nodes[i]);
+            }
+            if target.legal {
+                menu.choices.push(Choice::new(
+                    "Bündel greifen",
+                    UiAction::Do(Action::Hand(tile)),
+                    material.index(),
+                ));
+                menu.choices.push(Choice::new(
+                    "Nilpferd sammeln lassen",
+                    UiAction::Do(Action::Assign(tile, true)),
+                    8,
+                ));
+            }
+        } else if let Some(site) = site {
+            menu.title = site.kind.name().into();
+            if city.influence(region, tile) && site.kind == Building::Field {
+                match site.crop {
+                    Crop::Dry => menu.choices.push(Choice::new(
+                        format!("Regen · {:.0} Kraft", Miracle::Rain.cost()),
+                        UiAction::Do(Action::Cast(Miracle::Rain, tile)),
+                        9,
+                    )),
+                    Crop::Ripe => menu.choices.push(Choice::new(
+                        "Ernte einbringen",
+                        UiAction::Do(Action::Hand(tile)),
+                        2,
+                    )),
+                    Crop::Growing(_) => {}
+                }
+            }
+            menu.choices
+                .push(Choice::new("Gebäudedetails", UiAction::Inspect, 12));
+        } else if target.legal {
+            menu.title = primary.label.clone();
+            menu.choices.push(primary);
+        } else if family {
+            menu.title = "Stimme aus dem Dorf".into();
+            menu.detail = city.objective(region).0.into();
+            menu.choices.push(Choice::new(
+                "Bitte ansehen",
+                UiAction::Panel(Panel::Quests),
+                11,
+            ));
+        } else if city.influence(region, tile) && city.walkable(region, tile) {
+            menu.title = "Dorfgrund".into();
+            menu.detail = "Wähle einen Bauplan für die Vorschau.".into();
+            menu.choices.push(Choice::new(
+                "Hier bauen",
+                UiAction::QuickWheel(Wheel::Build),
+                6,
+            ));
+        } else {
+            menu.title = "Landschaft".into();
+            menu.detail = "Hier erreicht die Pfote keinen Gegenstand.".into();
+        }
+        if play.tool == Tool::Hand
+            && city.held.is_none()
+            && (site.is_some_and(|site| site.kind == Building::House)
+                || (family
+                    && site.is_none()
+                    && source.is_none()
+                    && play.target(game) == Action::Hand(tile)))
+        {
+            if let Err(reason) = city.meal_ready(region, tile) {
+                menu.detail = format!("{} · {reason}", menu.detail);
+            } else {
+                menu.choices.push(Choice::new(
+                    "Essen teilen · 3 Nahrung",
+                    UiAction::Do(Action::ShareMeal(tile)),
+                    2,
+                ));
+            }
+        }
+        if menu.choices.is_empty() {
+            menu.choices.push(guide);
+        }
+        menu
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{modes::Mode, play::CameraRig, region::Biome};
+
+    #[test]
+    fn dry_field_offers_rain_then_harvest_in_the_same_world_menu() {
+        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        game.campaign.intro_seen = true;
+        let tile = game
+            .region()
+            .bounds
+            .tiles()
+            .find(|&tile| game.building_plan(Building::Field, tile).is_ok())
+            .unwrap();
+        game.act(Action::Build(Building::Field, tile, 0)).unwrap();
+        let mut play = Play::new(&game);
+        let mut view = CameraRig::new(&game);
+        play.aim = tile;
+        play.inspect_world(&game, 1.);
+        assert_eq!(play.panel, Panel::Context);
+        let rain = UiAction::Do(Action::Cast(Miracle::Rain, tile));
+        assert_eq!(play.focus, Some(rain));
+        let mana = game.city().mana;
+        assert!(play.activate(rain, &mut game, &mut view, 1.));
+        assert_eq!(play.panel, Panel::Closed);
+        assert!(game.city().mana < mana);
+        for _ in 0..960 {
+            game.step(1. / 24.);
+        }
+        play.inspect_world(&game, 42.);
+        let harvest = UiAction::Do(Action::Hand(tile));
+        assert_eq!(play.focus, Some(harvest));
+        let before = game.city().stock[2];
+        assert!(play.activate(harvest, &mut game, &mut view, 42.));
+        assert!(game.city().stock[2] > before);
+        assert!(play.receipt.as_ref().unwrap().2.contains("Glauben"));
+    }
+}

@@ -140,7 +140,7 @@ impl Goal {
         }
     }
 
-    fn progress(self, city: &Settlement, region: &Region) -> String {
+    pub fn progress(self, city: &Settlement, region: &Region) -> String {
         let label = match self {
             Self::Harvests { .. } => "Ernten".into(),
             Self::Reserve { material, .. } => region.kind.material(material).into(),

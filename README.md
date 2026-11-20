@@ -2,11 +2,11 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-**[Hippogrove 1.2.1 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/bfaf4b2d87026e1aa43a14fd54a4c240a3e52262/Hippogrove-1.2.1.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.2.1) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/bfaf4b2d87026e1aa43a14fd54a4c240a3e52262/Hippogrove-1.2.1.apk.sha256)
+**[Hippogrove 1.3.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/939c379dfefa35a79f6259b7a2563e98aca29240/Hippogrove-1.3.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.3.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/939c379dfefa35a79f6259b7a2563e98aca29240/Hippogrove-1.3.0.apk.sha256)
 
-Version 1.2.1 behebt einen Startabsturz unter Android und lässt sich direkt über 1.2.0 installieren.
+Version 1.3.0 bringt Objektaktionen, acht geführte Übungen, ein Auftragsbuch und eigene Musik für jede Landschaft. Du kannst die Standalone-App über 1.2.0 oder 1.2.1 installieren und deinen Spielstand weiterspielen.
 
-Die signierte Standalone-App braucht Android 8 oder neuer und Vulkan. Die APK unterstützt ARM64 und x86_64. Die App lässt sich parallel zu älteren Hippogrove-Versionen installieren und hat ihren eigenen Spielstand.
+Die signierte Standalone-App braucht Android 8 oder neuer und Vulkan. Die APK unterstützt ARM64 und x86_64. Die frühere Playtest-App und die Standalone-App haben eigene Spielstände.
 
 Hippogrove spielt sich im Querformat per Touch oder mit angeschlossenem Controller. Fünf Themenkampagnen haben je drei Kapitel. In Europa, im nordischen Fjord, auf ostasiatischen Terrassen, am afrikanisch inspirierten See und in der griechischen Ägäis stiftest du Bündnisse oder gewinnst Siedlungen mit Wundern und Wachen. Für jede Landschaft gibt es auch **Freies Bauen** mit offenen Brücken, allen Plänen und einem eigenen Spielstand. [Kampagnen und Sandbox](docs/V1.md#kampagnen-und-freies-bauen)
 
@@ -16,7 +16,11 @@ Hippogrove spielt sich im Querformat per Touch oder mit angeschlossenem Controll
 
 Öffne die heruntergeladene APK auf deinem Android-Gerät und installiere sie. In der App-Übersicht findest du das Spiel unter **Hippogrove**. [Alle Veröffentlichungen](https://github.com/bthginfo/Hippogrove/releases)
 
-Das Spiel startet im **Hauptmenü**. Über **Tutorial** erreichst du die Übungsinsel und kannst sie später erneut spielen. Der Marker zeigt dir Holz, Sammelplatz, Bauplatz, Feld und Nilpferd. Tippe auf **Greifen**, um bis zu sechs Einheiten aufzuheben, oder halte den Knopf für bis zu 18. Lass los, wenn die gewünschte Menge angezeigt wird. **Zum Ziel** führt zum nächsten offenen Auftrag und wählt das passende Werkzeug. Nach der Übung öffnet sich die Kampagnenauswahl. Aus einer Partie führt **Menü → Hauptmenü** zurück zur Auswahl. **Spiel fortsetzen** lädt deine laufende Partie.
+Wähle im Hauptmenü **Tutorial**. Auf der Übungsinsel führen acht Etappen vom ersten Holzbündel bis zur Ernte und zur Pflege deines Nilpferds. Ein Marker bleibt an deinem Ziel. Du öffnest das Baurad, wählst selbst eine Hütte und bestätigst erst danach den Bau. Nach der Übung kannst du direkt ins Weidental reisen oder eine andere Kampagne wählen. Der erste Auftrag wartet, bis du **Zum ersten Ziel** wählst. Über **Menü → Hauptmenü** kannst du die Partie verlassen und später mit **Spiel fortsetzen** wieder einsteigen.
+
+Tippe in der Welt auf ein Objekt oder drücke am Controller **R3**. Der Holzstoß bietet ein Bündel für deine Pfote und einen Sammelauftrag für dein Nilpferd. Halte direkt auf dem Holz oder auf **Greifen**, um bis zu 18 Einheiten zu nehmen. Ein trockenes Feld bietet Regen an, ein reifes Feld die Ernte. Bei einer Familie oder Hütte kannst du einmal pro Spieltag drei Nahrung teilen. Das bringt zwei Glauben und hebt die Stimmung des Dorfes für diesen Tag. Kosten und Erträge erscheinen am Ort der Aktion.
+
+![Objektmenü am Holzstoß mit den Aktionen Bündel greifen und Nilpferd sammeln lassen](docs/objektmenue-weidental.jpg)
 
 Im Hauptmenü erreichst du unter **Ton** den **Testton** und kannst Musik, Umgebung und Effekte einzeln schalten oder gemeinsam einschalten. Der Testton nutzt die Medienlautstärke deines Geräts.
 
@@ -38,12 +42,12 @@ Auf den neuen Inseln bringen Rivale und Kreatur eine eigene Bedrohung mit. Ivens
 
 Jedes Kapitel hat eigene Bitten und einen Nebenauftrag. Im Weidenland versorgst du Mühlen und Höfe, im Fjord sicherst du Winterquartiere und auf den Terrassen bringst du mehrere Reisernten ein. Am See verbinden neue Wege die Brunnen und Märkte. In der Ägäis produzierst du Öl und richtest ein Theater für das Fest der Winde ein. Das Auftragsfenster zeigt den Fortschritt jedes Ziels. Schon besuchte Kapitel aus älteren Spielständen behalten ihre Aufträge.
 
-Wähle oben rechts den aktuellen Auftrag, um seine Details zu öffnen. Ein `!` auf der Karte kennzeichnet einen verfügbaren Nebenauftrag, ein `?` eine abholbare Belohnung. Der goldene Knopf zeigt die Aktion am ausgewählten Ziel. **Nilpferd** öffnet die Befehle zum Sammeln, Herbeirufen und zur Pflege. Das **Zauberbuch** zeigt die Voraussetzungen für Wunder. Der Fokusrahmen zeigt im Menü, welche Aktion du per Controller oder Tastatur bestätigst.
+Tippe oben rechts auf **Zum Ziel** oder drücke **L3**, um Ort und Werkzeug für den aktuellen Auftrag zu finden. Unter **Menü → Aufträge** stehen die Aufgaben, ihr Fortschritt und die Bitten aus dem Dorf. Ein `!` auf der Karte kennzeichnet einen verfügbaren Nebenauftrag, ein `?` eine abholbare Belohnung. Der goldene Knopf zeigt die Aktion am ausgewählten Ziel. **Nilpferd** öffnet die Befehle zum Sammeln, Herbeirufen und zur Pflege. Das **Zauberbuch** zeigt die Voraussetzungen für Wunder. Der Fokusrahmen zeigt im Menü, welche Aktion du per Controller oder Tastatur bestätigst.
 
 | Steuerung | Kamera und Ziel | Aktionen |
 | --- | --- | --- |
-| Touch | Boden ziehen, mit zwei Fingern schwenken, mit der Geste oder **+** und **−** zoomen, Ziel antippen | Werkzeugleiste und Bestätigung |
-| Controller | Linker Stick bewegt den Zielpunkt, rechter Stick schwenkt, Trigger zoomen | **LB/L1** öffnet das Auswahlrad, **X/Quadrat** das Baurad, **Y/Dreieck** das Wunderrad und **RB/R1** mit der Hand das Nilpferdrad. Stick oder Steuerkreuz wählen, **A/Kreuz** bestätigt, **B/Kreis** geht zurück. Beim Platzieren versetzt das Steuerkreuz den Plan feldweise, **X/Quadrat** dreht und **RB/R1** sucht einen freien Platz. **↑** zeigt außerhalb der Platzierung den Auftrag und **Start** öffnet das Spielmenü. **Select/Options** öffnet die Landkarte. |
+| Touch | Boden ziehen, mit zwei Fingern schwenken, mit der Geste oder **+** und **−** zoomen, Ziel antippen | Objekt für sein Kontextmenü antippen, Quelle zum Greifen halten, **Aktionen** für das Auswahlrad |
+| Controller | Linker Stick bewegt den Zielpunkt, rechter Stick schwenkt, Trigger zoomen | **LB/L1** öffnet das Auswahlrad, **X/Quadrat** das Baurad, **Y/Dreieck** das Wunderrad und **RB/R1** mit der Hand das Nilpferdrad. Stick oder Steuerkreuz wählen, **A/Kreuz** bestätigt, **B/Kreis** geht zurück. Beim Platzieren versetzt das Steuerkreuz den Plan feldweise, **X/Quadrat** dreht und **RB/R1** sucht einen freien Platz. **L3** zeigt das Auftragsziel auch beim Bauen. **R3** öffnet das Objektmenü. **Start** öffnet das Spielmenü. **Select/Options** öffnet die Landkarte. |
 | Rechner | Maus zum Antippen und Ziehen, Mausrad oder **+** und **−** zum Zoomen, WASD zum Schwenken | Leertaste fürs Auswahlrad, 1–6 für Werkzeuge, E für die Aktion oder zum Halten beim Greifen, R zum Drehen, G für das Auftragsziel, H für das Werkzeugziel, M für die Landkarte, Tab für Kapitel, Q für Aufträge, P für Fortschritt, B fürs Baubuch und T für Forschung, I für Vorräte und F fürs Hauptmenü. Pfeiltasten und Enter bedienen Menüs. F12 speichert ein Spielbild. |
 
 Das Spiel blendet die passenden Tasten an den Werkzeugen und bei der Bauvorschau ein. Die Übersicht steht im Spielmenü unter **Steuerung**.
@@ -89,10 +93,10 @@ Die Blender-Quelle liegt in `art/Hippogrove.blend`. `blender -b -P art/build_sce
 
 Die Karten reichen bis 178 × 140 Felder. Gebirgsketten, Täler, dichte Haine, Felsformationen und modellierte Küsten machen die Landschaft lesbar. Beim Sammeln kippen Bäume, Stein bricht in Splitter und Früchte lösen sich vom Strauch. Bevy stimmt Sonnenwinkel, Fülllicht, Dunst und Schatten auf die jeweilige Welt ab. Das Höhenprofil bestimmt gleichzeitig, wo Figuren laufen, wo Regen auftrifft und welchen Bodenpunkt die Wolkenpfote auswählt. Acht Vegetations-, Siedlungs- und Rohstoffmodelle stammen aus Waldwinkel 1.1.0. [Licht, Wetter und Herkunft der Modelle](docs/V1.md#gelände-licht-wetter-und-physik)
 
-Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus Waldwinkel 1.5. Die Instrumentalspur „Between the Olives“ wird mit `art/build_music.py` erzeugt. Musik, Umgebung und Effekte lassen sich im Spielmenü unter **Ton** einzeln schalten. [Waldwinkel 1.5](https://github.com/bthginfo/waldwinkel/tree/8a98a76a2921690b533015e3f57fadccc2c66b24)
+Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus Waldwinkel 1.5. Die sechs Originalstücke umfassen „Die kleine Bucht“ für Titel und Tutorial sowie je eine eigene Besetzung und Bearbeitung für die fünf Landschaften. Beim Inselwechsel blendet die Musik über. Zum Rendern nutzt `art/build_music.py` FluidSynth, NumPy, pyFluidSynth, FFmpeg und die Instrumente von GeneralUser GS 2.0.3. Musik, Umgebung und Effekte lassen sich im Spielmenü unter **Ton** einzeln schalten. [Waldwinkel 1.5](https://github.com/bthginfo/waldwinkel/tree/8a98a76a2921690b533015e3f57fadccc2c66b24) · [Instrumentenbank und Lizenz](https://github.com/mrbumpy409/GeneralUser-GS/blob/684543d5e5efaef08d02be50dcda8d552478fa60/documentation/LICENSE.txt)
 
 ## Geprüfter Stand
 
-Alle 33 Rust-Tests für 1.2.1 waren erfolgreich. Der Spieldurchlauf mit virtuellem Gamepad umfasste Tutorial, Kampagneneinstieg, Baubuch und Ausbau. Im Android-15-Emulator wurde 1.2.1 über 1.2.0 installiert und bis ins Hauptmenü gestartet. Der APK-Download und seine Signatur wurden geprüft. Der Lauf auf physischen Android-Geräten steht aus.
+Alle 35 Rust-Tests für 1.3.0 waren erfolgreich. Mit einem frischen Spielstand und virtuellem Gamepad wurden Tutorial, Kontextmenüs, der Einstieg ins Weidental, Joras Lieferung, Hütte, Lager und Auftragsbuch durchgespielt. Der Eingabetest mit der Maus prüfte Antippen, Ziehen und langes Greifen direkt am Holzstoß. Im Android-15-Emulator wurde 1.3.0 über die signierte 1.2.1 installiert. Das Spiel erreichte das Hauptmenü und die Übungsinsel. Der Test auf einem physischen Galaxy Tab S9 FE+ steht aus.
 
 Die Rust-Tests spielen den Friedensweg durch die 15 Themenkapitel sowie die fünf Kapitel der Chronik und den Kampfweg im Weidental. Sie prüfen auch die Forschungs- und Produktionsketten, Geburten, Patrouillen, Wunder, die Menüführung und die Übernahme älterer Spielstände. [Spielaufnahmen und Prüfungen für 1.0](docs/V1.md) · [Stadtentwicklung](docs/Stadtentwicklung.md)

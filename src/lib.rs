@@ -1,6 +1,7 @@
 mod art;
 mod atmosphere;
 mod civic;
+mod context;
 mod controls;
 mod game;
 mod growth;
@@ -134,7 +135,7 @@ pub fn main() {
                 view::ready_to_show,
                 hud::layout,
                 hud::update,
-                hud::pad_reticle,
+                (hud::pad_reticle, hud::world_labels),
                 hud::camera_fade,
                 save::checkpoint,
                 screenshot,
@@ -222,6 +223,11 @@ fn embed_assets(app: &App) {
         embed!("models/waldwinkel/furniture_harbor_lantern.glb"),
         embed!("models/waldwinkel/watch_fern.glb"),
         embed!("audio/grove.ogg"),
+        embed!("audio/cove.ogg"),
+        embed!("audio/fjord.ogg"),
+        embed!("audio/terraces.ogg"),
+        embed!("audio/lake.ogg"),
+        embed!("audio/aegean.ogg"),
         embed!("audio/axe_cut.wav"),
         embed!("audio/stone_break.wav"),
         embed!("audio/harvest_sound.wav"),

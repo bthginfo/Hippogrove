@@ -4,7 +4,8 @@ use bevy::prelude::Vec2;
 use ndk_sys::*;
 
 use super::{
-    DOWN, EAST, GUIDE, LEFT, MAP, MENU, MIRACLES, RIGHT, ROTATE, SOUTH, UP, WHEEL, native_pad,
+    CONTEXT, DOWN, EAST, GUIDE, LEFT, MAP, MENU, MIRACLES, OBJECTIVE, RIGHT, ROTATE, SOUTH, UP,
+    WHEEL, native_pad,
 };
 
 struct Controller {
@@ -53,6 +54,8 @@ fn key_bit(code: u32) -> Option<u32> {
         AKEYCODE_BUTTON_SELECT => MAP,
         AKEYCODE_BUTTON_X => ROTATE,
         AKEYCODE_BUTTON_Y => MIRACLES,
+        AKEYCODE_BUTTON_THUMBL => OBJECTIVE,
+        AKEYCODE_BUTTON_THUMBR => CONTEXT,
         AKEYCODE_BUTTON_R1 => GUIDE,
         AKEYCODE_BUTTON_L1 => WHEEL,
         _ => return None,

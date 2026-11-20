@@ -108,10 +108,13 @@ pub struct Playback {
     warned: bool,
 }
 
+const MUSIC_TRACKS: usize = 1 + Biome::ALL.len();
+const BED_COUNT: usize = MUSIC_TRACKS + 3;
+
 struct Output {
     _stream: OutputStream,
     handle: OutputStreamHandle,
-    beds: [Option<Sink>; 4],
+    beds: [Option<Sink>; BED_COUNT],
     effects: Vec<Sink>,
     callbacks: Arc<AtomicUsize>,
     seen_callbacks: usize,
@@ -181,14 +184,14 @@ impl Playback {
 
 impl Output {
     fn track(&self, clip: &AudioSource, volume: f32, pitch: f32, looping: bool) -> Option<Sink> {
-        let data = Decoder::new(Cursor::new(clip.clone())).ok()?;
+        let data = Cursor::new(clip.clone());
         let sink = Sink::try_new(&self.handle).ok()?;
         sink.set_volume(volume);
         sink.set_speed(pitch);
         if looping {
-            sink.append(data.repeat_infinite());
+            sink.append(Decoder::new_looped(data).ok()?);
         } else {
-            sink.append(data);
+            sink.append(Decoder::new(data).ok()?);
         }
         Some(sink)
     }
@@ -196,7 +199,7 @@ impl Output {
 
 #[derive(Resource)]
 pub struct Sound {
-    beds: [Handle<AudioSource>; 4],
+    beds: [Handle<AudioSource>; BED_COUNT],
     wood: Handle<AudioSource>,
     stone: Handle<AudioSource>,
     food: Handle<AudioSource>,
@@ -241,8 +244,18 @@ fn source(assets: &AssetServer, file: &str) -> Handle<AudioSource> {
 
 pub fn setup(mut commands: Commands, assets: Res<AssetServer>) {
     commands.insert_resource(Sound {
-        beds: ["grove.ogg", "fernwind.wav", "coast.wav", "rain_wood.wav"]
-            .map(|file| source(&assets, file)),
+        beds: [
+            "cove.ogg",
+            "grove.ogg",
+            "fjord.ogg",
+            "terraces.ogg",
+            "lake.ogg",
+            "aegean.ogg",
+            "fernwind.wav",
+            "coast.wav",
+            "rain_wood.wav",
+        ]
+        .map(|file| source(&assets, file)),
         wood: source(&assets, "axe_cut.wav"),
         stone: source(&assets, "stone_break.wav"),
         food: source(&assets, "harvest_sound.wav"),
@@ -376,6 +389,11 @@ pub fn update(
     let alert = (city.rival_active(region)
         && city.next_raid(region).is_some_and(|seconds| seconds <= 10.))
     .then_some((game.mode, game.campaign.active));
+    let score = if play.at_title() || region.tutorial {
+        0
+    } else {
+        1 + region.kind as usize
+    };
     let music = if play.story.is_some() {
         0.31
     } else if alert.is_some() {
@@ -390,13 +408,15 @@ pub fn update(
             1.
         };
     let fade = 1. - (-2.3 * time.delta_secs().min(0.13)).exp();
-    let levels = [
-        (Bus::Music, music),
-        (Bus::Ambient, ambient * (1. - coast * 0.72) * 0.20),
-        (Bus::Ambient, ambient * coast * 0.27),
-        (Bus::Ambient, if rain { ambient * 0.28 } else { 0. }),
+    let music_levels =
+        (0..MUSIC_TRACKS).map(|track| (Bus::Music, if track == score { music } else { 0. }));
+    let ambience = [
+        ambient * (1. - coast * 0.72) * 0.20,
+        ambient * coast * 0.27,
+        if rain { ambient * 0.28 } else { 0. },
     ];
-    for (index, (bus, level)) in levels.into_iter().enumerate() {
+    let levels = music_levels.chain(ambience.map(|gain| (Bus::Ambient, gain)));
+    for (index, (bus, level)) in levels.enumerate() {
         let wanted = if play.mix.enabled(bus) {
             level * 1.82
         } else {
@@ -410,9 +430,14 @@ pub fn update(
         if let Some(sink) = &output.beds[index] {
             let volume = sink.volume();
             if (volume - wanted).abs() > 0.0003 {
-                sink.set_volume(volume.lerp(wanted, fade));
+                let blend = if bus == Bus::Music && play.mix.enabled(bus) {
+                    1. - (-1.05 * time.delta_secs().min(0.13)).exp()
+                } else {
+                    fade
+                };
+                sink.set_volume(volume.lerp(wanted, blend));
             } else if wanted == 0. {
-                sink.set_volume(0.);
+                output.beds[index] = None;
             }
         }
     }

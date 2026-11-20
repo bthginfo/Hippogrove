@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::civic::{Civic, Goods, Research, Tech, goods_text};
 use crate::growth::{CreatureGrowth, Reputation, Tone};
 use crate::modes::Mode;
-use crate::quests::QuestStep;
+use crate::quests::{Goal, QuestStep};
 use crate::region::{
     AREA_COUNT, AREA_RADIUS, Biome, CELL, DistrictNeed, Material, Region, Tile, Weather,
     WorldLayout,
@@ -510,6 +510,7 @@ pub enum Action {
     Assign(Tile, bool),
     AssignArea(usize, Material, bool),
     CancelArea(usize, Material),
+    ShareMeal(Tile),
     AcceptLocal,
     FinishLocal,
     RecallHelpers,
@@ -640,6 +641,7 @@ pub struct Society {
     pub goods: Goods,
     pub morale: u16,
     pub births: u16,
+    meal_day: Option<u32>,
 }
 
 impl Default for Society {
@@ -648,6 +650,7 @@ impl Default for Society {
             goods: [0; 3],
             morale: 58,
             births: 0,
+            meal_day: None,
         }
     }
 }
@@ -1716,6 +1719,27 @@ impl Settlement {
         })
     }
 
+    pub fn meal_ready(&self, region: &Region, tile: Tile) -> Result<(), &'static str> {
+        if !self.influence(region, tile)
+            || !(self
+                .building_at(tile)
+                .is_some_and(|site| site.kind == Building::House)
+                || self
+                    .walkers
+                    .iter()
+                    .any(|walker| !walker.hippo && !walker.guard && walker.tile() == tile))
+        {
+            return Err("Teile das Essen an einer Hütte oder bei einer Familie.");
+        }
+        if self.society.meal_day == Some((self.weather_time / DAY_LENGTH) as u32) {
+            return Err("Heute hat das Dorf schon gemeinsam gegessen.");
+        }
+        if self.stock[2] < 3 {
+            return Err("Ein gemeinsames Essen kostet drei Nahrung.");
+        }
+        Ok(())
+    }
+
     pub fn day_phase(&self) -> DayPhase {
         let phase = self.weather_time.rem_euclid(DAY_LENGTH);
         if phase < 34. {
@@ -2341,6 +2365,9 @@ impl Settlement {
             .collect();
         active.sort_by_key(|(kind, _, _)| *kind as u8);
         let mut morale = if self.stock[2] >= 6 { 60 } else { 49 };
+        if self.society.meal_day == Some((self.weather_time / DAY_LENGTH) as u32) {
+            morale += 8;
+        }
         match self.reputation.tone() {
             Tone::Gentle if self.stock[2] >= 6 => {
                 morale += 7;
@@ -3410,6 +3437,92 @@ impl Settlement {
         }
     }
 
+    pub fn missing_for(&self, kind: Building) -> Option<Material> {
+        Material::ALL.into_iter().find(|material| {
+            let i = material.index();
+            self.stock[i] < kind.price()[i]
+        })
+    }
+
+    pub fn campaign_hint(&self, region: &Region, pad: bool) -> String {
+        let point = if pad {
+            "L3 zeigt das Ziel"
+        } else {
+            "„Zum Ziel“ antippen"
+        };
+        if self.first_delivery_ready(region) {
+            return "Wähle Mira oder Jora und liefere das Holz.".into();
+        }
+        if self.quest == Quest::Shelter {
+            let next = if self.count(Building::House) == 0 {
+                Building::House
+            } else {
+                Building::Store
+            };
+            if self.held.is_none()
+                && self.hand_deliveries > 0
+                && self.count(next) == 0
+                && let Some(material) = self.missing_for(next)
+            {
+                return format!("Erst {} holen · {point}", region.kind.material(material));
+            }
+            return match (
+                self.held.is_some(),
+                self.hand_deliveries,
+                self.count(Building::House),
+                self.count(Building::Store),
+            ) {
+                (true, _, _, _) => format!("Zum Sammelplatz · {point}"),
+                (_, 0, _, _) if pad => "Am Holzstoß A halten und loslassen.".into(),
+                (_, 0, _, _) => "Am Holzstoß unten „Greifen“ halten.".into(),
+                (_, _, 0, _) if pad => "X → Hütte wählen · A baut".into(),
+                (_, _, 0, _) => "Bauen → Hütte → Platzieren".into(),
+                (_, _, _, 0) if pad => "X → Lager wählen · A baut".into(),
+                (_, _, _, 0) => "Bauen → Lager → Platzieren".into(),
+                _ => format!("Nilpferd → Sammeln · {point}"),
+            };
+        }
+        if let Some(goal) = self
+            .quest_step(region)
+            .and_then(|step| step.pending(self, region))
+        {
+            let progress = goal.progress(self, region);
+            let verb = match goal {
+                crate::quests::Goal::Harvests { .. } if self.count(Building::Field) == 0 => {
+                    "Feld bauen"
+                }
+                crate::quests::Goal::Harvests { .. }
+                    if self.buildings.iter().any(|field| {
+                        matches!(field.crop, Crop::Ripe) && field.kind == Building::Field
+                    }) =>
+                {
+                    "Mit der Pfote ernten"
+                }
+                crate::quests::Goal::Harvests { .. }
+                    if self.buildings.iter().any(|field| {
+                        matches!(field.crop, Crop::Growing(_)) && field.kind == Building::Field
+                    }) =>
+                {
+                    "Saat reift"
+                }
+                crate::quests::Goal::Harvests { .. } => "Regen aufs Feld",
+                crate::quests::Goal::HippoDeliveries { .. } => "Nilpferd → Sammeln",
+                crate::quests::Goal::Reserve { .. } if self.held.is_some() => "Bündel ablegen",
+                crate::quests::Goal::Reserve { .. } => "Bündel greifen",
+                _ => return progress,
+            };
+            return format!("{progress} · {verb}");
+        }
+        match self.quest {
+            Quest::Fields if self.count(Building::Field) == 0 => "Bauen → Feld".into(),
+            Quest::Fields => "Trockenes Feld beregnen, reife Saat ernten.".into(),
+            Quest::Bridge if !self.bridge_fixed => format!("Zum Übergang · {point}"),
+            Quest::Districts => "Nachbardörfer auf der Karte öffnen.".into(),
+            Quest::Complete => "Karte öffnen und weiterreisen.".into(),
+            _ => point.into(),
+        }
+    }
+
     pub fn objective(&self, region: &Region) -> (&'static str, String) {
         if region.tutorial {
             let (title, hint) = crate::practice::Step::current(self).text();
@@ -3550,6 +3663,90 @@ impl Settlement {
         }
     }
 
+    fn local_requirements(&self, region: &Region) -> (&'static str, [Goal; 2]) {
+        let build = |kind, count, roadside, upgraded| Goal::Building {
+            kind,
+            count,
+            roadside,
+            upgraded,
+        };
+        if region.chapter() > 0 {
+            let name = if region.chapter() == 1 {
+                "Das Handwerk der Region"
+            } else {
+                "Das Erbe des Landes"
+            };
+            return (
+                name,
+                [
+                    build(
+                        Building::Civic(Civic::regional(region.kind)),
+                        1,
+                        true,
+                        false,
+                    ),
+                    Goal::Camps {
+                        count: region.chapter() as u16,
+                    },
+                ],
+            );
+        }
+        match region.kind {
+            Biome::Valley => (
+                "Der Weidengarten",
+                [
+                    build(Building::Well, 1, true, false),
+                    Goal::Harvests { count: 3 },
+                ],
+            ),
+            Biome::Fjord => (
+                "Für den ersten Frost",
+                [
+                    build(Building::Granary, 1, true, false),
+                    Goal::Reserve {
+                        material: Material::Wood,
+                        count: 20,
+                    },
+                ],
+            ),
+            Biome::Terraces => (
+                "Saatgut aus den Terrassen",
+                [
+                    build(Building::Field, 2, false, true),
+                    Goal::Harvests { count: 4 },
+                ],
+            ),
+            Biome::Lake => (
+                "Vorrat für die Trockenzeit",
+                [
+                    build(Building::Well, 2, true, false),
+                    Goal::Reserve {
+                        material: Material::Food,
+                        count: 23,
+                    },
+                ],
+            ),
+            Biome::Aegean => (
+                "Fest der Winde",
+                [
+                    build(Building::Civic(Civic::Theater), 1, true, false),
+                    build(Building::Civic(Civic::Oracle), 1, true, false),
+                ],
+            ),
+        }
+    }
+
+    pub fn local_next(&self, region: &Region) -> Option<Goal> {
+        if let Some(quests) = region.quests {
+            quests.side.pending(self, region)
+        } else {
+            self.local_requirements(region)
+                .1
+                .into_iter()
+                .find(|goal| !goal.met(self, region))
+        }
+    }
+
     pub fn local_quest(&self, region: &Region) -> (&'static str, String, bool) {
         if let Some(quests) = region.quests {
             let step = &quests.side;
@@ -3559,94 +3756,12 @@ impl Settlement {
                 step.pending(self, region).is_none(),
             );
         }
-        if region.chapter() > 0 {
-            let hall = Civic::regional(region.kind);
-            let crafted = self.service(region, hall);
-            let camps = self.camps.iter().filter(|&&active| active).count();
-            return (
-                if region.chapter() == 1 {
-                    "Das Handwerk der Region"
-                } else {
-                    "Das Erbe des Landes"
-                },
-                format!(
-                    "{} am Weg ({}/1) und Sammellager ({}/{})",
-                    hall.spec().name,
-                    u8::from(crafted),
-                    camps,
-                    region.chapter()
-                ),
-                crafted && camps >= region.chapter(),
-            );
-        }
-        let service_count = |kind| {
-            self.buildings
-                .iter()
-                .filter(|site| site.kind == kind && self.connected(region, site))
-                .count()
-        };
-        let wells = service_count(Building::Well);
-        match region.kind {
-            Biome::Valley => (
-                "Der Weidengarten",
-                format!(
-                    "Brunnen am Weg ({}/1), Ernten ({}/3)",
-                    wells.min(1),
-                    self.harvests.min(3)
-                ),
-                wells >= 1 && self.harvests >= 3,
-            ),
-            Biome::Fjord => {
-                let granaries = service_count(Building::Granary);
-                (
-                    "Für den ersten Frost",
-                    format!(
-                        "Speicher am Weg ({}/1), Holzvorrat ({}/20)",
-                        granaries.min(1),
-                        self.stock[0].min(20)
-                    ),
-                    granaries >= 1 && self.stock[0] >= 20,
-                )
-            }
-            Biome::Terraces => {
-                let fields = self
-                    .buildings
-                    .iter()
-                    .filter(|site| site.kind == Building::Field && site.upgraded)
-                    .count();
-                (
-                    "Saatgut aus den Terrassen",
-                    format!(
-                        "Ausgebaute Felder ({}/2), Ernten ({}/4)",
-                        fields.min(2),
-                        self.harvests.min(4)
-                    ),
-                    fields >= 2 && self.harvests >= 4,
-                )
-            }
-            Biome::Lake => (
-                "Vorrat für die Trockenzeit",
-                format!(
-                    "Brunnen am Weg ({}/2), Nahrungsvorrat ({}/23)",
-                    wells.min(2),
-                    self.stock[2].min(23)
-                ),
-                wells >= 2 && self.stock[2] >= 23,
-            ),
-            Biome::Aegean => {
-                let theater = self.service(region, Civic::Theater);
-                let oracle = self.service(region, Civic::Oracle);
-                (
-                    "Fest der Winde",
-                    format!(
-                        "Theater am Weg ({}/1), Orakel am Weg ({}/1)",
-                        u8::from(theater),
-                        u8::from(oracle)
-                    ),
-                    theater && oracle,
-                )
-            }
-        }
+        let (title, goals) = self.local_requirements(region);
+        (
+            title,
+            goals.map(|goal| goal.progress(self, region)).join(" · "),
+            goals.iter().all(|goal| goal.met(self, region)),
+        )
     }
 }
 
@@ -4062,6 +4177,14 @@ impl Game {
             Action::MoveHippo(tile) => settlement.move_hippo(region, tile),
             Action::Watch(tile) => settlement.watch(region, tile, *gifts),
             Action::Tend(tile) => settlement.tend(region, tile, *gifts),
+            Action::ShareMeal(tile) => {
+                settlement.meal_ready(region, tile)?;
+                settlement.stock[2] -= 3;
+                settlement.faith = settlement.faith.saturating_add(2);
+                settlement.society.morale = (settlement.society.morale + 8).min(100);
+                settlement.society.meal_day = Some((settlement.weather_time / DAY_LENGTH) as u32);
+                Ok("Das Dorf teilt deine Gabe. Heute steigt die Stimmung um 8.".into())
+            }
             Action::Pet => settlement.pet(),
             Action::Feed => settlement.feed(),
             Action::Rest => {
@@ -4130,6 +4253,7 @@ impl Game {
         }?;
         let (city_change, creature_change) = match action {
             Action::Pet => (0, 3),
+            Action::ShareMeal(_) => (3, 1),
             Action::Praise | Action::Feed => (0, 2),
             Action::Give => (8, 5),
             Action::Settle(district)
@@ -4303,6 +4427,24 @@ mod tests {
     }
 
     #[test]
+    fn sharing_a_meal_spends_food_once_per_day_even_after_loading() {
+        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        game.campaign.settlements[0].as_mut().unwrap().stock[2] = 6;
+        let tile = game.city().walkers[1].tile();
+        let (stock, faith) = (game.city().stock, game.city().faith);
+        game.act(Action::ShareMeal(tile)).unwrap();
+        assert_eq!(game.city().stock[2], stock[2] - 3);
+        assert_eq!(game.city().faith, faith + 2);
+        let saved = serde_json::to_vec(&game.saved_games()).unwrap();
+        let mut game = Game::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
+        assert!(game.act(Action::ShareMeal(tile)).is_err());
+        assert_eq!(game.city().stock[2], stock[2] - 3);
+        game.campaign.settlements[0].as_mut().unwrap().weather_time += DAY_LENGTH;
+        game.act(Action::ShareMeal(tile)).unwrap();
+        assert_eq!(game.city().stock[2], 0);
+    }
+
+    #[test]
     fn the_practice_island_teaches_the_main_actions_before_play() {
         use crate::practice::Step;
 
@@ -4327,6 +4469,15 @@ mod tests {
         for step in [Step::Drop, Step::House, Step::Field, Step::Rain] {
             assert_eq!(Step::current(game.city()), step);
             play.observe_practice(&game, &mut view, 3.);
+            if let Some((wheel, choice)) = step.wheel() {
+                let before = game.city().stock;
+                play.activate(UiAction::Confirm, &mut game, &mut view, 3.);
+                assert_eq!(play.panel, Panel::Wheel(wheel));
+                assert_eq!(play.focus, Some(choice));
+                play.activate(choice, &mut game, &mut view, 3.);
+                assert_eq!(play.panel, Panel::Closed);
+                assert_eq!(before, game.city().stock);
+            }
             assert!(
                 play.activate(UiAction::Confirm, &mut game, &mut view, 3.),
                 "{step:?} · {}",
@@ -4342,6 +4493,9 @@ mod tests {
         assert!(play.activate(UiAction::Confirm, &mut game, &mut view, 24.));
         assert_eq!(Step::current(game.city()), Step::SendHippo);
         play.observe_practice(&game, &mut view, 25.);
+        play.activate(UiAction::Confirm, &mut game, &mut view, 25.);
+        let order = play.focus.expect("recommended gathering order");
+        play.activate(order, &mut game, &mut view, 25.);
         assert!(play.activate(UiAction::Confirm, &mut game, &mut view, 25.));
         for _ in 0..720 {
             game.step(1. / 24.);
@@ -4354,7 +4508,7 @@ mod tests {
         assert!(play.activate(UiAction::Confirm, &mut game, &mut view, 56.));
         play.observe_practice(&game, &mut view, 57.);
         assert!(game.campaign_complete());
-        assert_eq!(play.panel, Panel::Modes);
+        assert_eq!(play.panel, Panel::Graduation);
         game.switch_mode(campaign).unwrap();
         assert_eq!(game.mode, campaign);
         assert!(game.has_save(Mode::Tutorial));

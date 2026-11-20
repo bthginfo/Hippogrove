@@ -1,6 +1,8 @@
 use crate::{
     game::{Building, Crop, Game, Quest, Settlement},
+    play::{Play, Tool, UiAction},
     region::{Region, Tile},
+    wheel::Wheel,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,19 +21,86 @@ pub enum Step {
 }
 
 impl Step {
-    pub fn hint(self) -> &'static str {
+    pub fn chapter(self) -> (u8, &'static str) {
         match self {
-            Self::Grab => "Halten greift bis zu 18 Holz.",
-            Self::Drop => "Zum markierten Sammelplatz.",
-            Self::House => "Bestätige den freien Bauplatz.",
-            Self::Field => "Baue am markierten Platz.",
-            Self::Rain => "Der Regenkreis trifft das Feld.",
-            Self::Grow => "Die Saat reift von allein.",
-            Self::Harvest => "Wähle die reife Saat mit der Pfote.",
-            Self::SendHippo => "Bestätige Sammeln an der Quelle.",
-            Self::Delivery => "Es bringt das Bündel zum Lager.",
-            Self::Pet => "Wähle das Nilpferd mit der Pfote.",
-            Self::Complete => "Jetzt ist die Kampagne offen.",
+            Self::Grab => (1, "Holz für ein erstes Dach"),
+            Self::Drop => (2, "Vom Wald ins Dorf"),
+            Self::House => (3, "Ein Zuhause am Ufer"),
+            Self::Field => (4, "Ein Beet für die Küche"),
+            Self::Rain | Self::Grow => (5, "Wasser für die Saat"),
+            Self::Harvest => (6, "Die erste Ernte"),
+            Self::SendHippo | Self::Delivery => (7, "Ein Auftrag für zwei"),
+            Self::Pet | Self::Complete => (8, "Danke, kleines Nilpferd"),
+        }
+    }
+
+    pub fn wheel(self) -> Option<(Wheel, UiAction)> {
+        match self {
+            Self::House => Some((Wheel::Build, UiAction::SelectBuilding(Building::House))),
+            Self::Field => Some((Wheel::Build, UiAction::SelectBuilding(Building::Field))),
+            Self::Rain => Some((Wheel::Miracles, UiAction::Order(Tool::Miracles, 0))),
+            Self::SendHippo => Some((Wheel::Hippo, UiAction::Order(Tool::Hippo, 0))),
+            _ => None,
+        }
+    }
+
+    pub fn next_action(self, play: &Play, game: &Game) -> UiAction {
+        if let Some((wheel, choice)) = self.wheel() {
+            let equipped = match choice {
+                UiAction::SelectBuilding(kind) => {
+                    play.tool == Tool::Build && play.building() == kind
+                }
+                UiAction::Order(tool, option) => play.tool == tool && play.option == option,
+                _ => false,
+            };
+            if !equipped {
+                return UiAction::QuickWheel(wheel);
+            }
+        } else if matches!(self, Self::Grow | Self::Delivery | Self::Complete) {
+            return UiAction::Guide;
+        } else if play.tool != Tool::Hand {
+            return UiAction::Tool(Tool::Hand);
+        }
+        // A player may place the hut or field on any legal plot. Other lessons teach a
+        // particular interaction, so recover the target if the pointer has wandered.
+        if play.lesson_target(game) != Some(play.aim)
+            && !(matches!(self, Self::House | Self::Field)
+                && game.building_plan(play.building(), play.aim).is_ok())
+        {
+            return UiAction::Guide;
+        }
+        UiAction::Confirm
+    }
+
+    pub fn instruction(self, action: UiAction, pad: bool) -> &'static str {
+        match action {
+            UiAction::QuickWheel(Wheel::Build) if self == Self::Field => {
+                "Öffne das Baurad und wähle das Feld."
+            }
+            UiAction::QuickWheel(Wheel::Build) => "Öffne das Baurad und wähle die Hütte.",
+            UiAction::QuickWheel(Wheel::Miracles) => "Öffne das Wunderrad und wähle Regen.",
+            UiAction::QuickWheel(Wheel::Hippo) => "Öffne das Nilpferdrad und wähle Sammeln.",
+            UiAction::Tool(_) => "Nimm die Pfote, um das Ziel zu berühren.",
+            UiAction::Guide if !matches!(self, Self::Grow | Self::Delivery | Self::Complete) => {
+                "Mit „Ziel zeigen“ findest du zur Markierung zurück."
+            }
+            _ => match self {
+                Self::Grab if pad => "Halte A am Holzstoß. Lass los, um das Holz zu nehmen.",
+                Self::Grab => {
+                    "Halte den markierten Holzstoß oder unten „Greifen“. Lass zum Aufheben los."
+                }
+                Self::Drop => "Der Sammelplatz ist markiert. Lege dort dein Bündel ab.",
+                Self::House => "Der Umriss zeigt, wo die Hütte stehen wird. Bestätige den Bau.",
+                Self::Field => "Bestätige das Beet auf der freien Wiese am Dorfweg.",
+                Self::Rain => "Der Regenkreis liegt über dem Beet. Lass es regnen.",
+                Self::Grow if pad => "Die Saat wächst. Schau dich mit dem rechten Stick um.",
+                Self::Grow => "Die Saat wächst. Ziehe die Insel, um dich umzusehen.",
+                Self::Harvest => "Das Beet ist reif. Sammle die Nahrung für dein Dorf ein.",
+                Self::SendHippo => "Die Quelle ist markiert. Schicke dein Nilpferd zum Sammeln.",
+                Self::Delivery => "Dein Nilpferd sammelt und trägt das Bündel selbst ins Dorf.",
+                Self::Pet => "Dein Nilpferd hat geliefert. Streichle es zur Belohnung.",
+                Self::Complete => "Deine erste Kampagne ist bereit.",
+            },
         }
     }
 

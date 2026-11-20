@@ -1554,10 +1554,11 @@ pub fn highlight_guide(
 ) {
     let (mut pose, mut visible) = marker.into_inner();
     let now = time.elapsed_secs();
-    if let Some((tile, until)) = play
-        .guide_marker
-        .filter(|(_, until)| now < *until && play.panel == Panel::Closed)
-    {
+    let target = play
+        .lesson_target(&game)
+        .map(|tile| (tile, f32::INFINITY))
+        .or_else(|| play.guide_marker.filter(|(_, until)| now < *until));
+    if let Some((tile, until)) = target.filter(|_| play.panel == Panel::Closed) {
         let ground = terrain::on_ground(game.region(), tile.world());
         let scale = (view.rendered_height / 25.).clamp(0.8, 2.6);
         let pulse = (now * 6.).sin() * 0.15;
