@@ -4,9 +4,13 @@ use crate::{
     civic::Civic,
     game::{Building, Settlement},
     region::{Biome, CELL, Material, Region, Tile},
+    terrain::{self, hash},
 };
 
+mod landscapes;
 mod settlement_models;
+
+pub use landscapes::{LandscapeProp, landscape};
 
 pub fn rgb(hex: u32) -> Color {
     Color::srgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -41,13 +45,12 @@ pub struct Art {
     cone: Handle<Mesh>,
     pub roof: Handle<Mesh>,
     pub curved_roof: Handle<Mesh>,
+    pub masonry: Handle<Mesh>,
     pub ring: Handle<Mesh>,
     pub plan_corners: Handle<Mesh>,
     pub plan_cross: Handle<Mesh>,
-    pub grass: Handle<StandardMaterial>,
     pub leaf: [Handle<StandardMaterial>; 3],
     pub evergreen: [Handle<StandardMaterial>; 3],
-    pub moss: Handle<StandardMaterial>,
     pub clay: Handle<StandardMaterial>,
     pub timber: Handle<StandardMaterial>,
     pub plank: Handle<StandardMaterial>,
@@ -78,6 +81,9 @@ pub struct Art {
     pub safe_zone: Handle<StandardMaterial>,
     pub shadow: Handle<StandardMaterial>,
     pub ground: Handle<StandardMaterial>,
+    water: Handle<StandardMaterial>,
+    foam: Handle<StandardMaterial>,
+    pub waldwinkel: WoodlandKit,
     pub hippo_model: Handle<Scene>,
 }
 
@@ -94,10 +100,10 @@ impl Art {
             cone: meshes.add(Cone::new(0.5, 1.).mesh().resolution(8)),
             roof: meshes.add(roof_mesh(false)),
             curved_roof: meshes.add(roof_mesh(true)),
+            masonry: meshes.add(masonry_mesh()),
             ring: meshes.add(ring_mesh()),
             plan_corners: meshes.add(plan_corners()),
             plan_cross: meshes.add(plan_cross()),
-            grass: paint(mats, 0x91a251),
             leaf: [
                 paint(mats, 0x9ca74c),
                 paint(mats, 0xadb359),
@@ -108,7 +114,6 @@ impl Art {
                 paint(mats, 0x697e48),
                 paint(mats, 0x81914e),
             ],
-            moss: paint(mats, 0xa9ad62),
             clay: paint(mats, 0xa57856),
             timber: paint(mats, 0x8c5736),
             plank: paint(mats, 0xc59762),
@@ -149,9 +154,63 @@ impl Art {
                 perceptual_roughness: 0.96,
                 ..default()
             }),
+            water: mats.add(StandardMaterial {
+                perceptual_roughness: 0.51,
+                reflectance: 0.24,
+                ..default()
+            }),
+            foam: mats.add(StandardMaterial {
+                unlit: true,
+                alpha_mode: AlphaMode::Blend,
+                cull_mode: None,
+                ..default()
+            }),
+            waldwinkel: WoodlandKit::load(assets),
             hippo_model: assets.load("embedded://models/hippo.glb#Scene0"),
         }
     }
+}
+
+pub struct WoodlandKit {
+    conifer: Handle<Scene>,
+    rock: Handle<Scene>,
+    mushroom: Handle<Scene>,
+    reed: Handle<Scene>,
+    shell: Handle<Scene>,
+    pub crop: Handle<Scene>,
+    lamp: Handle<Scene>,
+    fern: Handle<Scene>,
+}
+
+impl WoodlandKit {
+    fn load(assets: &AssetServer) -> Self {
+        let scene = |stem| assets.load(format!("embedded://models/waldwinkel/{stem}.glb#Scene0"));
+        Self {
+            conifer: scene("wood_tree"),
+            rock: scene("resource_rock"),
+            mushroom: scene("find_mushroom"),
+            reed: scene("find_marsh_herb"),
+            shell: scene("find_shell"),
+            crop: scene("crop_strawberry"),
+            lamp: scene("furniture_copper_lamp"),
+            fern: scene("furniture_fern"),
+        }
+    }
+}
+
+pub fn place_scene(
+    parent: &mut ChildSpawnerCommands,
+    model: &Handle<Scene>,
+    position: Vec3,
+    scale: f32,
+    yaw: f32,
+) {
+    parent.spawn((
+        SceneRoot(model.clone()),
+        Transform::from_translation(position)
+            .with_scale(Vec3::splat(scale))
+            .with_rotation(Quat::from_rotation_y(yaw)),
+    ));
 }
 
 pub fn part(
@@ -233,6 +292,17 @@ impl Geometry {
         );
     }
 
+    fn ground_box(&mut self, region: &Region, p: Vec3, half_x: f32, half_z: f32, color: Color) {
+        let [a, b, c, d] = [
+            (-half_x, -half_z),
+            (-half_x, half_z),
+            (half_x, half_z),
+            (half_x, -half_z),
+        ]
+        .map(|(x, z)| terrain::on_ground(region, p + Vec3::new(x, 0., z)) + Vec3::Y * p.y);
+        self.quad(a, b, c, d, color);
+    }
+
     pub fn mesh(self) -> Mesh {
         Mesh::new(
             PrimitiveTopology::TriangleList,
@@ -268,6 +338,40 @@ fn roof_mesh(curved: bool) -> Mesh {
             Vec3::new(right, top, -0.5),
             Color::WHITE,
         );
+        let rows = ((right - left) * 10.).ceil() as usize;
+        for row in 0..rows {
+            let x0 = left.lerp(right, row as f32 / rows as f32 + 0.024);
+            let x1 = left.lerp(right, (row as f32 + 1.) / rows as f32 - 0.018);
+            let y0 = bottom.lerp(top, (x0 - left) / (right - left)) + 0.014;
+            let y1 = bottom.lerp(top, (x1 - left) / (right - left)) + 0.025;
+            let stagger = (row % 2) as f32 * 0.058;
+            for column in 0..10 {
+                let offset = -0.547 + column as f32 * 0.111 + stagger;
+                let z0 = offset.max(-0.499);
+                let z1 = (offset + 0.106).min(0.499);
+                if z1 <= z0 {
+                    continue;
+                }
+                let shade =
+                    rgb([0xe5d8c9, 0xf9f0e7, 0xeedfd0, 0xf3e7d8][(row * 13 + column * 7) % 4]);
+                let ridge = (z0 + z1) * 0.5;
+                let uplift = if curved { 0.012 } else { 0.025 };
+                geometry.quad(
+                    Vec3::new(x0, y0, z0),
+                    Vec3::new(x0, y0 + uplift, ridge),
+                    Vec3::new(x1, y1 + uplift, ridge),
+                    Vec3::new(x1, y1, z0),
+                    shade,
+                );
+                geometry.quad(
+                    Vec3::new(x0, y0 + uplift, ridge),
+                    Vec3::new(x0, y0, z1),
+                    Vec3::new(x1, y1, z1),
+                    Vec3::new(x1, y1 + uplift, ridge),
+                    shade,
+                );
+            }
+        }
         geometry.tri(
             Vec3::new(left, bottom, 0.5),
             Vec3::new(left, -0.04, 0.5),
@@ -296,6 +400,44 @@ fn roof_mesh(curved: bool) -> Mesh {
     geometry.mesh()
 }
 
+fn masonry_mesh() -> Mesh {
+    let mut geometry = Geometry::default();
+    let bricks = [0xfaf5e8, 0xe9ddca, 0xfff9e9, 0xf5ead7, 0xf2e6d5];
+    for course in 0..5 {
+        for index in 0..5 {
+            let start = -0.619 + index as f32 * 0.25 + (course % 2) as f32 * 0.118;
+            let x0 = start.max(-0.499);
+            let x1 = (start + 0.242).min(0.499);
+            let y0 = -0.499 + course as f32 * 0.2;
+            let y1 = y0 + 0.193;
+            let color = rgb(bricks[(course * 7 + index * 3) % bricks.len()]);
+            geometry.quad(
+                Vec3::new(x0, y0, 0.5),
+                Vec3::new(x1, y0, 0.5),
+                Vec3::new(x1, y1, 0.5),
+                Vec3::new(x0, y1, 0.5),
+                color,
+            );
+        }
+    }
+    geometry.mesh()
+}
+
+pub fn stonework(parent: &mut ChildSpawnerCommands, art: &Art, at: Vec3, size: Vec3) {
+    for side in 0..4 {
+        let angle = side as f32 * std::f32::consts::FRAC_PI_2;
+        let size = if side % 2 == 0 { size } else { size.zyx() };
+        part(
+            parent,
+            &art.masonry,
+            &art.limestone,
+            at,
+            size + Vec3::Z * 0.012,
+            Quat::from_rotation_y(angle),
+        );
+    }
+}
+
 fn ring_mesh() -> Mesh {
     let mut geometry = Geometry::default();
     for index in 0..48 {
@@ -306,6 +448,26 @@ fn ring_mesh() -> Mesh {
             point(index, 1.),
             point(index + 1, 1.),
             point(index + 1, 0.93),
+            Color::WHITE,
+        );
+    }
+    geometry.mesh()
+}
+
+pub fn surface_ring(region: &Region, center: Vec3, radius: f32, bridge_fixed: bool) -> Mesh {
+    let mut geometry = Geometry::default();
+    for index in 0..64 {
+        let point = |i, width: f32| {
+            let angle = i as f32 * std::f32::consts::TAU / 64.;
+            let point = center + Vec3::new(angle.sin(), 0., angle.cos()) * width;
+            point.with_y(terrain::actor_height(region, point, bridge_fixed) + 0.065)
+        };
+        let inner = radius - (radius * 0.09).clamp(0.08, 0.21);
+        geometry.quad(
+            point(index, inner),
+            point(index, radius),
+            point(index + 1, radius),
+            point(index + 1, inner),
             Color::WHITE,
         );
     }
@@ -357,249 +519,11 @@ fn plan_cross() -> Mesh {
     geometry.mesh()
 }
 
-fn hash(x: i16, z: i16, salt: u32) -> u32 {
-    let n = (x as u32).wrapping_mul(1973) ^ (z as u32).wrapping_mul(9277) ^ salt;
-    let n = (n ^ (n >> 16)).wrapping_mul(0x45d9f3b);
-    n ^ (n >> 16)
-}
-
-fn relief(region: &Region, x: i16, z: i16) -> f32 {
-    let tile = Tile(x, z);
-    if [
-        tile,
-        tile.offset(-1, 0),
-        tile.offset(0, -1),
-        tile.offset(-1, -1),
-    ]
-    .into_iter()
-    .any(|p| region.water(p))
-    {
-        return 0.;
-    }
-    let point = Vec2::new(f32::from(x) - 0.5, f32::from(z) - 0.5);
-    let wave = (point.x * 0.118 + point.y * 0.68).sin() * (point.y * 0.22 - point.x * 0.39).cos();
-    let scale = match region.kind {
-        Biome::Valley => 0.96,
-        Biome::Fjord => 1.92,
-        Biome::Terraces => 1.36,
-        Biome::Lake => 1.24,
-        Biome::Aegean => 1.12,
-    };
-    let mut height: f32 = 0.;
-    for &(center, radius) in &region.highlands {
-        let radius = f32::from(radius);
-        let offset = point - Vec2::new(f32::from(center.0), f32::from(center.1));
-        let distance = offset.length() / radius;
-        if distance < 1. {
-            let slope = 1. - distance;
-            let turbulence = 0.82 + wave * 0.12 + offset.x * 0.042;
-            let profile = if region.kind == Biome::Terraces {
-                (slope * 4.).floor() * 0.205 + slope * 0.18
-            } else {
-                slope.sqrt() * slope.powf(0.38)
-            };
-            height = height.max(scale * radius * profile * turbulence);
-        }
-    }
-    let outside = (region.bounds.0.1 - z)
-        .max(region.bounds.0.0 - x)
-        .max(x - region.bounds.1.0);
-    if outside > 0 && region.kind != Biome::Aegean {
-        let roll = ((point.x * 0.32 + point.y * 0.45).sin()
-            + (point.x * 0.11 - point.y * 0.27).cos())
-            * 0.28;
-        height = height.max(f32::from(outside) * scale * (0.68 + roll));
-    }
-    height
-}
-
-pub fn landscape(region: &Region) -> Mesh {
-    let (land, path, water): (&[u32], &[u32], &[u32]) = match region.kind {
-        Biome::Valley => (
-            &[0xaab96d, 0x99aa61, 0xb0b974, 0xa3b569],
-            &[0xcbb383, 0xd0b889, 0xc5aa78],
-            &[0x54a39f, 0x56a9a7, 0x519f9f, 0x5aada8],
-        ),
-        Biome::Fjord => (
-            &[0x939b74, 0x9fa280, 0x889578, 0xabb39c],
-            &[0xbab3a2, 0xc3b8a6, 0xb6ad9e],
-            &[0x4c8195, 0x5890a1, 0x487b8a, 0x6ba2ac],
-        ),
-        Biome::Terraces => (
-            &[0xa2ae5d, 0xaab459, 0x98a654, 0xa8b46a],
-            &[0xc2a874, 0xd3ba84, 0xc7af82],
-            &[0x4f9b90, 0x5fa99a, 0x70b4a1, 0x4b978c],
-        ),
-        Biome::Lake => (
-            &[0xc3a36f, 0xcbab77, 0xc1a477, 0xc9ae7d],
-            &[0xd9b88c, 0xccb083, 0xc6a97f],
-            &[0x53a8a5, 0x60b3ad, 0x489b9d, 0x6cbab0],
-        ),
-        Biome::Aegean => (
-            &[0xb9b47a, 0xa9b66a, 0xc7bc89, 0xa4ae70],
-            &[0xe8d6b3, 0xdbc5a5, 0xe7cfaa],
-            &[0x2c94b3, 0x389eb4, 0x2d88a9, 0x4aaab8],
-        ),
-    };
-    let mut ground = Geometry::default();
-    let half = CELL * 0.5;
-    for tile in region.bounds.padded(7).tiles() {
-        let Tile(x, z) = tile;
-        let wet = region.water(tile);
-        let road = !wet && region.road(tile);
-        let meadow = if wet {
-            water
-        } else if road {
-            path
-        } else {
-            land
-        };
-        let center = tile.world() + Vec3::Y * if wet { -0.26 } else { 0. };
-        let beach = region.kind == Biome::Aegean
-            && !wet
-            && tile
-                .neighbors()
-                .into_iter()
-                .any(|neighbor| region.water(neighbor));
-        let corner = |dx: i16, dz: i16| {
-            let dx_offset = (hash(x + dx, z + dz, 90) % 21) as f32 * 0.018 - 0.18;
-            let dz_offset = (hash(x + dx, z + dz, 47) % 21) as f32 * 0.018 - 0.18;
-            center
-                + Vec3::new(
-                    f32::from(2 * dx - 1) * half + dx_offset,
-                    if wet {
-                        0.
-                    } else {
-                        relief(region, x + dx, z + dz)
-                    },
-                    f32::from(2 * dz - 1) * half + dz_offset,
-                )
-        };
-        let corners = [corner(0, 0), corner(0, 1), corner(1, 1), corner(1, 0)];
-        if !wet && !road {
-            let grass = |i: usize, dx: i16, dz: i16| {
-                let corner = tile.offset(dx, dz);
-                let seed = hash(corner.0.div_euclid(6), corner.1.div_euclid(5), 21);
-                let color = rgb(land[seed as usize % land.len()]);
-                let neighbor = rgb(land[(seed as usize + 1) % land.len()]);
-                let mixing =
-                    ((corners[i].x * 0.14).sin() * (corners[i].z * 0.13).cos() + 1.) * 0.35;
-                let base = if beach {
-                    rgb(0xdac79c)
-                } else {
-                    color.mix(&neighbor, mixing)
-                };
-                let y = corners[i].y;
-                let cliff = match region.kind {
-                    Biome::Valley => rgb(0x9b9279),
-                    Biome::Fjord => rgb(0x8a98a9),
-                    Biome::Terraces => rgb(0x7f9854),
-                    Biome::Lake => rgb(0xce9267),
-                    Biome::Aegean => rgb(0xd2bfa5),
-                };
-                let color = base.mix(&cliff, ((y - 0.55) / 2.2).clamp(0., 0.96));
-                if region.kind == Biome::Fjord {
-                    color.mix(&rgb(0xe6e8e4), ((y - 3.8) / 2.5).clamp(0., 0.95))
-                } else {
-                    color
-                }
-            };
-            let [a, b, c, d] = corners;
-            let [ca, cb, cc, cd] = [
-                grass(0, 0, 0),
-                grass(1, 0, 1),
-                grass(2, 1, 1),
-                grass(3, 1, 0),
-            ];
-            if (x + z).rem_euclid(2) == 0 {
-                ground.tri_colors([a, b, c], [ca, cb, cc]);
-                ground.tri_colors([a, c, d], [ca, cc, cd]);
-            } else {
-                ground.tri_colors([b, c, d], [cb, cc, cd]);
-                ground.tri_colors([b, d, a], [cb, cd, ca]);
-            }
-        } else {
-            let seed = hash(x, z, 28) as usize;
-            ground.quad(
-                corners[0],
-                corners[1],
-                corners[2],
-                corners[3],
-                rgb(meadow[seed % meadow.len()]),
-            );
-        }
-        if !wet {
-            for (adjacent, left, right) in [
-                (tile.offset(-1, 0), 0, 1),
-                (tile.offset(0, 1), 1, 2),
-                (tile.offset(1, 0), 2, 3),
-                (tile.offset(0, -1), 3, 0),
-            ] {
-                if region.water(adjacent) {
-                    let a = corners[left];
-                    let b = corners[right];
-                    let bank = if region.kind == Biome::Aegean {
-                        0xd5bba1
-                    } else {
-                        0x9a876b
-                    };
-                    ground.quad(b, a, a - Vec3::Y * 0.27, b - Vec3::Y * 0.27, rgb(bank));
-                }
-            }
-        }
-        if road {
-            for (ox, oz, width) in [
-                (-0.36, -0.30, 0.20),
-                (0.23, -0.08, 0.24),
-                (-0.14, 0.43, 0.26),
-            ] {
-                ground.flat_box(
-                    center + Vec3::new(ox, 0.018, oz),
-                    width,
-                    0.13,
-                    rgb(0xd1b98f),
-                );
-            }
-        }
-    }
-    ground.mesh()
-}
-
-fn conifer(parent: &mut ChildSpawnerCommands, art: &Art, p: Vec3, scale: f32, snow: bool) {
-    part(
-        parent,
-        &art.cylinder,
-        &art.timber,
-        p + Vec3::Y * scale * 0.48,
-        Vec3::new(0.35, 0.97, 0.35) * scale,
-        Quat::IDENTITY,
-    );
-    for (index, (height, width)) in [(1.24, 1.70), (1.90, 1.37), (2.57, 0.97)]
-        .into_iter()
-        .enumerate()
-    {
-        part(
-            parent,
-            &art.cone,
-            &art.evergreen[index],
-            p + Vec3::Y * height * scale,
-            Vec3::new(width, 1.32, width) * scale,
-            Quat::from_rotation_y(index as f32 * 0.38),
-        );
-    }
-    if snow {
-        part(
-            parent,
-            &art.cone,
-            &art.white,
-            p + Vec3::Y * 2.82 * scale,
-            Vec3::new(0.68, 0.95, 0.68) * scale,
-            Quat::from_rotation_y(0.64),
-        );
-    }
-}
-
 fn broadleaf(parent: &mut ChildSpawnerCommands, art: &Art, p: Vec3, scale: f32, biome: Biome) {
+    if biome == Biome::Aegean {
+        olive_tree(parent, art, p, scale);
+        return;
+    }
     part(
         parent,
         &art.cylinder,
@@ -619,8 +543,6 @@ fn broadleaf(parent: &mut ChildSpawnerCommands, art: &Art, p: Vec3, scale: f32, 
         };
         let spread = if biome == Biome::Lake {
             Vec3::new(1.9, 0.63, 1.45)
-        } else if biome == Biome::Aegean {
-            Vec3::new(1.49, 0.82, 1.24)
         } else {
             Vec3::new(1.55, 1.54, 1.35)
         };
@@ -648,142 +570,43 @@ fn broadleaf(parent: &mut ChildSpawnerCommands, art: &Art, p: Vec3, scale: f32, 
     }
 }
 
-pub fn scenery(parent: &mut ChildSpawnerCommands, art: &Art, region: &Region) {
-    for tile in region.bounds.padded(5).tiles() {
-        let Tile(x, z) = tile;
-        let p = tile.world() + Vec3::Y * relief(region, x, z);
-        let choice = hash(x, z, 93);
-        let near_water = tile.neighbors().into_iter().any(|q| region.water(q));
-        if region.water(tile) {
-            let divisor = if region.kind == Biome::Aegean && !near_water {
-                53
-            } else {
-                11
-            };
-            if choice % divisor == 0 && !region.bridge_cell(tile) {
-                block(
-                    parent,
-                    art,
-                    &art.ripple,
-                    p + Vec3::Y * -0.245,
-                    Vec3::new(0.70, 0.01, 0.035),
-                );
-                if choice % 3 == 0 {
-                    let (surface, y, size) = match region.kind {
-                        Biome::Fjord => (&art.white, -0.20, Vec3::new(0.72, 0.14, 0.44)),
-                        Biome::Terraces => (&art.leaf[0], -0.24, Vec3::new(0.46, 0.07, 0.38)),
-                        Biome::Aegean => (&art.ripple, -0.25, Vec3::new(0.88, 0.035, 0.12)),
-                        _ => (&art.leaf[2], -0.24, Vec3::new(0.27, 0.06, 0.23)),
-                    };
-                    mound(parent, art, surface, p + Vec3::Y * y, size);
-                    if region.kind == Biome::Terraces {
-                        mound(
-                            parent,
-                            art,
-                            &art.berry,
-                            p + Vec3::Y * -0.18,
-                            Vec3::new(0.16, 0.16, 0.16),
-                        );
-                    }
-                }
-            }
-            continue;
-        }
-        if region.rocky(tile) {
-            continue;
-        }
-        if near_water && !region.road(tile) && choice % 4 == 0 {
-            mound(
-                parent,
-                art,
-                if region.kind == Biome::Aegean {
-                    &art.limestone
-                } else {
-                    &art.warm_stone
-                },
-                p + Vec3::Y * 0.11,
-                Vec3::new(1.15, 0.45, 0.69),
-            );
-        }
-        let playable = tile.within(region.start, 8)
-            || tile.within(region.frontier, 9)
-            || tile.within(region.rival_shrine, 7)
-            || region
-                .districts
-                .iter()
-                .any(|district| tile.within(district.center, 9));
-        let inner = tile.within(region.start, 24);
-        if !playable
-            && !near_water
-            && !region.road(tile)
-            && choice % if inner { 6 } else { 23 } == 0
-        {
-            let scale = 0.58 + (choice % 39) as f32 * 0.023;
-            if region.kind == Biome::Aegean && hash(x, z, 57) % 4 == 0 {
-                part(
-                    parent,
-                    &art.cone,
-                    &art.evergreen[0],
-                    p + Vec3::Y * 1.32 * scale,
-                    Vec3::new(0.65, 2.64, 0.63) * scale,
-                    Quat::IDENTITY,
-                );
-                mound(
-                    parent,
-                    art,
-                    &art.evergreen[1],
-                    p + Vec3::new(0.07, 1.01 * scale, 0.04),
-                    Vec3::new(0.72, 1.69, 0.61) * scale,
-                );
-            } else if region.kind == Biome::Lake
-                || (region.kind != Biome::Fjord && hash(x, z, 69) % 5 != 0)
-            {
-                broadleaf(parent, art, p, scale, region.kind);
-            } else {
-                conifer(parent, art, p, scale, region.kind == Biome::Fjord);
-            }
-        } else if !playable && !region.road(tile) && choice % if inner { 9 } else { 29 } == 0 {
-            mound(
-                parent,
-                art,
-                &art.stone,
-                p + Vec3::Y * 0.23,
-                Vec3::new(1.39, 0.9, 0.94),
-            );
-            if region.kind == Biome::Fjord {
-                mound(
-                    parent,
-                    art,
-                    &art.white,
-                    p + Vec3::Y * 0.54,
-                    Vec3::new(0.98, 0.31, 0.77),
-                );
-            }
-        } else if !region.road(tile)
-            && !region.fixed_structure(tile)
-            && region.source_at(tile).is_none()
-            && choice % if inner { 7 } else { 37 } == 0
-        {
-            let plant = p + Vec3::new(0.55, 0.10, 0.60);
-            let size = if near_water { 0.53 } else { 0.18 };
-            part(
-                parent,
-                &art.cone,
-                &art.grass,
-                plant,
-                Vec3::new(0.17, size, 0.13),
-                Quat::from_rotation_z(0.2),
-            );
-            if choice % 3 == 0 {
-                mound(
-                    parent,
-                    art,
-                    &art.amber,
-                    plant + Vec3::Y * size * 0.43,
-                    Vec3::splat(0.085),
-                );
-            }
-        }
+fn olive_tree(parent: &mut ChildSpawnerCommands, art: &Art, at: Vec3, scale: f32) {
+    for (a, b, width) in [
+        ([0., -0.09, 0.], [-0.14, 0.93, 0.01], 0.37),
+        ([-0.14, 0.72, 0.01], [0.15, 1.51, 0.01], 0.27),
+        ([-0.13, 0.87, 0.07], [-0.70, 1.64, 0.29], 0.21),
+        ([0.07, 1.27, 0.05], [0.64, 1.73, -0.19], 0.16),
+        ([-0.19, 1.20, 0.03], [-0.27, 1.81, -0.48], 0.14),
+    ] {
+        let a = Vec3::from(a);
+        let b = Vec3::from(b);
+        let axis = b - a;
+        part(
+            parent,
+            &art.cylinder,
+            &art.timber,
+            at + (a + b) * scale * 0.5,
+            Vec3::new(width, axis.length(), width) * scale,
+            Quat::from_rotation_arc(Vec3::Y, axis.normalize()),
+        );
+    }
+    for (i, (x, y, z, width)) in [
+        (-0.68, 1.78, 0.24, 1.21),
+        (0.58, 1.84, -0.19, 1.34),
+        (-0.24, 1.97, -0.47, 1.07),
+        (0.16, 2.09, 0.12, 1.26),
+        (-0.15, 1.68, 0.49, 0.90),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        mound(
+            parent,
+            art,
+            &art.leaf[i % art.leaf.len()],
+            at + Vec3::new(x, y, z) * scale,
+            Vec3::new(width, 0.56 + (i % 2) as f32 * 0.16, width * 0.80) * scale,
+        );
     }
 }
 
@@ -814,19 +637,7 @@ pub fn resources(parent: &mut ChildSpawnerCommands, art: &Art, material: Materia
             }
         }
         Material::Stone => {
-            for (x, y, z, scale) in [
-                (0.05, 0.31, 0., 1.),
-                (-0.36, 0.14, 0.32, 0.55),
-                (0.40, 0.16, 0.35, 0.49),
-            ] {
-                mound(
-                    parent,
-                    art,
-                    &art.stone,
-                    Vec3::new(x, y, z),
-                    Vec3::new(0.79, 0.67, 0.77) * scale,
-                );
-            }
+            place_scene(parent, &art.waldwinkel.rock, Vec3::ZERO, 0.78, 0.3);
         }
         Material::Food => {
             mound(
@@ -1114,6 +925,14 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
         Vec3::Y * (0.26 + h * 0.5),
         Vec3::new(width, h, length),
     );
+    if biome == Biome::Aegean {
+        stonework(
+            parent,
+            art,
+            Vec3::Y * (0.26 + h * 0.5),
+            Vec3::new(width, h, length),
+        );
+    }
     let roof_height = if biome == Biome::Fjord { 1.75 } else { 1.26 };
     let roof_shape = if biome == Biome::Terraces {
         &art.curved_roof
@@ -1169,6 +988,29 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
         Vec3::new(0., 0.45, face + 0.22),
         Vec3::new(0.93, 0.19, 0.51),
     );
+    if kind == Building::House {
+        block(
+            parent,
+            art,
+            &art.warm_stone,
+            Vec3::new(0., 0.14, face + 0.32),
+            Vec3::new(1.20, 0.26, 0.65),
+        );
+        place_scene(
+            parent,
+            &art.waldwinkel.lamp,
+            Vec3::new(-0.91, 0.30, face + 0.21),
+            0.44,
+            0.3,
+        );
+        place_scene(
+            parent,
+            &art.waldwinkel.fern,
+            Vec3::new(0.91, 0.20, face + 0.28),
+            0.48,
+            2.5,
+        );
+    }
     if kind == Building::Store || kind == Building::Granary {
         block(
             parent,
@@ -1450,14 +1292,15 @@ pub fn paved_roads(city: &Settlement, region: &Region) -> Mesh {
     let pavers = [rgb(0xd9c5a3), rgb(0xdccaa7), rgb(0xc7b395), rgb(0xc9b69c)];
     for &tile in &city.roads {
         let p = tile.world() + Vec3::Y * 0.031;
-        ground.flat_box(p, 0.49, 0.49, dirt);
+        ground.ground_box(region, p, 0.49, 0.49, dirt);
         for next in tile
             .neighbors()
             .into_iter()
             .filter(|&next| city.road_at(region, next))
         {
             let delta = (next.world() - tile.world()).normalize();
-            ground.flat_box(
+            ground.ground_box(
+                region,
                 p + delta * 0.56,
                 0.39 - delta.x.abs() * 0.08,
                 0.39 - delta.z.abs() * 0.08,
@@ -1469,7 +1312,8 @@ pub fn paved_roads(city: &Settlement, region: &Region) -> Mesh {
             .enumerate()
         {
             let seed = hash(tile.0, tile.1, i as u32);
-            ground.flat_box(
+            ground.ground_box(
+                region,
                 p + Vec3::new(x, 0.014, z),
                 0.19 + (seed % 4) as f32 * 0.013,
                 0.17,
@@ -1488,6 +1332,14 @@ pub fn bridge(
     fixed: bool,
 ) {
     let start = Tile(column, region.river_at(column)).world();
+    let deck = |z, depth: f32| {
+        let local = Tile::coordinates(Vec3::new(start.x, 0., z));
+        Vec3::new(
+            start.x,
+            terrain::bridge_height(region, column, local.y) - depth * 0.5,
+            z,
+        )
+    };
     if region.kind == Biome::Aegean {
         let steps = region.river_span(column) * 3 + 2;
         for i in 0..steps {
@@ -1495,7 +1347,7 @@ pub fn bridge(
                 continue;
             }
             let z = start.z - CELL / 2. + f32::from(i) * CELL / 3.;
-            let at = Vec3::new(start.x, 0.085, z);
+            let at = deck(z, 0.17);
             block(
                 parent,
                 art,
@@ -1543,7 +1395,7 @@ pub fn bridge(
             continue;
         }
         let z = start.z - CELL * 0.5 + f32::from(index) * CELL / 6.;
-        let pos = Vec3::new(start.x, 0.09, z);
+        let pos = deck(z, 0.15);
         block(
             parent,
             art,
@@ -1594,7 +1446,8 @@ pub fn influence_mesh(city: &Settlement, region: &Region) -> Mesh {
             let base = tile.world() + direction * CELL * 0.5 + Vec3::Y * 0.054;
             let axis = Vec3::new(direction.z, 0., direction.x);
             for offset in [-0.47, 0., 0.47] {
-                mesh.flat_box(
+                mesh.ground_box(
+                    region,
                     base + axis * offset,
                     if direction.x != 0. { 0.046 } else { 0.15 },
                     if direction.z != 0. { 0.046 } else { 0.15 },

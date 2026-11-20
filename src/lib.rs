@@ -1,4 +1,5 @@
 mod art;
+mod atmosphere;
 mod civic;
 mod controls;
 mod game;
@@ -6,6 +7,7 @@ mod hud;
 mod play;
 mod region;
 mod save;
+mod terrain;
 mod view;
 
 use bevy::{
@@ -84,7 +86,7 @@ pub fn main() {
                     view::props,
                     view::animate,
                     view::aim,
-                    view::weather,
+                    atmosphere::update,
                     view::magic,
                 ),
                 hud::layout,
@@ -141,24 +143,25 @@ fn embed_assets(app: &App) {
     use std::path::Path;
 
     let assets = app.world().resource::<EmbeddedAssetRegistry>();
-    let files: [(&str, &[u8]); 5] = [
-        (
-            "fonts/DMSans-Bold.ttf",
-            include_bytes!("../assets/fonts/DMSans-Bold.ttf"),
-        ),
-        (
-            "fonts/DMSans-Medium.ttf",
-            include_bytes!("../assets/fonts/DMSans-Medium.ttf"),
-        ),
-        (
-            "fonts/DMSerifText-Regular.ttf",
-            include_bytes!("../assets/fonts/DMSerifText-Regular.ttf"),
-        ),
-        (
-            "models/hippo.glb",
-            include_bytes!("../assets/models/hippo.glb"),
-        ),
-        ("ui/atlas.png", include_bytes!("../assets/ui/atlas.png")),
+    macro_rules! embed {
+        ($file:literal) => {
+            ($file, include_bytes!(concat!("../assets/", $file)) as &[u8])
+        };
+    }
+    let files = [
+        embed!("fonts/DMSans-Bold.ttf"),
+        embed!("fonts/DMSans-Medium.ttf"),
+        embed!("fonts/DMSerifText-Regular.ttf"),
+        embed!("models/hippo.glb"),
+        embed!("ui/atlas.png"),
+        embed!("models/waldwinkel/wood_tree.glb"),
+        embed!("models/waldwinkel/resource_rock.glb"),
+        embed!("models/waldwinkel/find_mushroom.glb"),
+        embed!("models/waldwinkel/find_marsh_herb.glb"),
+        embed!("models/waldwinkel/find_shell.glb"),
+        embed!("models/waldwinkel/crop_strawberry.glb"),
+        embed!("models/waldwinkel/furniture_copper_lamp.glb"),
+        embed!("models/waldwinkel/furniture_fern.glb"),
     ];
     for (name, data) in files {
         assets.insert_asset(Path::new("assets").join(name), Path::new(name), data);

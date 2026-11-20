@@ -22,6 +22,7 @@ use crate::{
     hud::{self, HitTest},
     play::{CameraRig, Panel, Play, Tool, UiAction},
     region::{CELL, Tile},
+    terrain,
     view::WorldCamera,
 };
 
@@ -230,19 +231,17 @@ pub struct Controls {
     resume_pad: bool,
 }
 
-fn unproject(camera: &Camera, pose: &GlobalTransform, screen: Vec2) -> Option<Vec3> {
-    let ray = camera.viewport_to_world(pose, screen).ok()?;
-    let distance = -ray.origin.y / ray.direction.y;
-    (distance.is_finite() && distance >= 0.).then(|| ray.get_point(distance))
-}
-
 fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform, screen: Vec2) {
-    let Some(point) = unproject(camera, pose, screen) else {
+    let region = game.region();
+    let city = game.city();
+    let Some(point) = camera
+        .viewport_to_world(pose, screen)
+        .ok()
+        .and_then(|ray| terrain::ray_contact(region, ray, city.bridge_fixed))
+    else {
         return;
     };
     let mut tile = Tile::from_world(point);
-    let region = game.region();
-    let city = game.city();
     if play.tool == Tool::Build {
         if play.building() == Building::Shrine && tile.within(region.frontier, 1) {
             tile = region.frontier;
@@ -253,7 +252,8 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
             .map_or(19., |other| other.distance(screen));
         let mut best = (world_scale * 0.58).clamp(9., 30.);
         let mut consider = |candidate: Tile, p: Vec3| {
-            if let Ok(projected) = camera.world_to_viewport(pose, p) {
+            let y = terrain::actor_height(region, p, city.bridge_fixed);
+            if let Ok(projected) = camera.world_to_viewport(pose, p + Vec3::Y * y) {
                 let distance = projected.distance(screen);
                 if distance < best {
                     best = distance;
@@ -625,8 +625,16 @@ pub fn collect(
     let right = deadzone(pad.right);
     if pressed != 0 || left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13 {
         if !play.gamepad {
+            let aim = play.aim.world();
             play.pointer = camera
-                .world_to_viewport(pose, play.aim.world())
+                .world_to_viewport(
+                    pose,
+                    aim.with_y(terrain::actor_height(
+                        game.region(),
+                        aim,
+                        game.city().bridge_fixed,
+                    )),
+                )
                 .ok()
                 .or(Some(size * 0.5));
             play.gamepad = true;
