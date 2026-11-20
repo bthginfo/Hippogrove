@@ -1,4 +1,5 @@
 mod art;
+mod civic;
 mod controls;
 mod game;
 mod hud;

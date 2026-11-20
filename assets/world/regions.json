@@ -29,7 +29,7 @@
   {
     "name": "Kiefernbucht", "kind": "Fjord",
     "subtitle": "Vorräte vor dem Frost",
-    "lore": "Dunkle Kiefern säumen den Fjord. Die Leute am alten Anleger teilen ihr Feuer erst, wenn der Vorrat für die kalten Nächte reicht.",
+    "lore": "Dunkle Kiefern säumen den Fjord. In den Langhäusern erzählen die Leute von Freyjas Fahrt durch den Winterhimmel. Die Fischer teilen ihr Feuer, sobald der Vorrat für den Frost reicht.",
     "rival": "Anleger vom Frostkamm", "crossing": "Fjordanleger",
     "request": "Brennholz für den Frost",
     "gift": ["Wood", 16], "rebuild": [8, 6, 0], "renown": 22, "faith": 15,
@@ -108,6 +108,34 @@
     "districts": [
       {"name":"Akazienrast","center":[-15,34],"need":"Shelter","gift":[8,0,11],"story":"Am Ende des trockenen Ufers suchen die Reisenden ein geräumiges, ausgebautes Haus mit Schatten."},
       {"name":"Schilfkrone","center":[49,-7],"need":"Water","gift":[2,9,3],"story":"Die Hüter am offenen See wollen Wasser für die nächste Trockenzeit sichern."}
+    ]
+  },
+  {
+    "name": "Ägäisbogen", "kind": "Aegean",
+    "subtitle": "Die Stimme der Oliveninseln",
+    "lore": "Am Kai erzählt man, wie Aiolos die Winde hütete. Das Orakel am Morgenhang hat Stille versprochen. Die Leute bereiten trotzdem ein Fest für die Winde vor.",
+    "rival": "Morgenhang", "crossing": "Doppelmole",
+    "request": "Oliven und Brot für das erste Fest",
+    "gift": ["Food", 18], "rebuild": [9, 12, 0], "renown": 24, "faith": 19,
+    "bounds": [[-40,-40],[77,54]], "crossings": [-11,50],
+    "highlands": [[[-27,27],5],[[4,-24],6],[[41,-19],7],[[65,33],5],[[30,47],5]],
+    "start": [22,20], "depot": [20,21], "frontier": [23,15],
+    "rival_shrine": [23,4], "cross_x": 22, "river": 9, "water_width": 5,
+    "initial": [15, 9, 7], "guards": [[22,8],[24,8],[26,7],[20,7]],
+    "starter_plots": [[23,20],[18,18],[25,20]],
+    "sources": [
+      {"tile":[17,21],"material":"Wood","stock":56}, {"tile":[27,18],"material":"Wood","stock":65},
+      {"tile":[22,24],"material":"Stone","stock":56}, {"tile":[18,24],"material":"Stone","stock":53},
+      {"tile":[25,25],"material":"Food","stock":43}, {"tile":[18,22],"material":"Food","stock":42},
+      {"tile":[17,16],"material":"Wood","stock":60}, {"tile":[27,16],"material":"Stone","stock":62},
+      {"tile":[19,5],"material":"Wood","stock":66}, {"tile":[28,6],"material":"Stone","stock":71},
+      {"tile":[-19,-5],"material":"Wood","stock":83}, {"tile":[-12,-12],"material":"Stone","stock":90},
+      {"tile":[-15,-15],"material":"Food","stock":101}, {"tile":[48,27],"material":"Wood","stock":91},
+      {"tile":[57,28],"material":"Stone","stock":96}, {"tile":[55,34],"material":"Food","stock":102}
+    ],
+    "districts": [
+      {"name":"Olivenhafen","center":[-15,-8],"need":"Trade","gift":[5,0,13],"story":"Die Ölmühlen stehen. Händler aus Morgenhang bringen erst Amphoren, wenn ein Markt am Kai ihre Waren annimmt."},
+      {"name":"Sternenstufen","center":[53,29],"need":"Water","gift":[4,10,0],"story":"Hinter den Kalkstufen üben die Kinder Lieder für die Winde. Ein Brunnen hält den Ort für die ganze Insel offen."}
     ]
   }
 ]

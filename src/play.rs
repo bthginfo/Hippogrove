@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::{
+    civic::{Branch, Civic, Goods, Tech},
     game::{Action, Building, Crop, Game, Miracle, Quest, stock_text},
     region::Tile,
 };
@@ -43,7 +44,8 @@ impl Tool {
 
     pub fn choices(self) -> usize {
         match self {
-            Self::Build => Building::ALL.len(),
+            Self::Build => Building::CATALOG_SIZE,
+            Self::Helpers => 3,
             Self::Miracles => Miracle::ALL.len(),
             Self::Hippo => 6,
             Self::Plan => 2,
@@ -53,7 +55,8 @@ impl Tool {
 
     pub fn choice_name(self, index: usize) -> &'static str {
         match self {
-            Self::Build => Building::ALL[index].name(),
+            Self::Build => Building::from_index(index).name(),
+            Self::Helpers => ["Sammeln", "Ausbilden", "Patrouille"][index],
             Self::Miracles => Miracle::ALL[index].name(),
             Self::Hippo => ["Sammeln", "Wache", "Feldpflege", "Loben", "Snack", "Pause"][index],
             Self::Plan => ["Wege", "Ausbau"][index],
@@ -70,6 +73,9 @@ pub enum Panel {
     Map,
     Progress,
     Quests,
+    Catalog,
+    Research,
+    Inspection,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,6 +90,11 @@ pub enum UiAction {
     Focus(Tile),
     Landscape,
     ToggleObjective,
+    Catalog(Option<Branch>),
+    CatalogPage(usize),
+    SelectBuilding(Building),
+    ResearchBranch(Branch),
+    SelectTech(Tech),
     Do(Action),
 }
 
@@ -96,6 +107,9 @@ pub struct Play {
     pub rotation: u8,
     pub road_anchor: Option<Tile>,
     pub objective_expanded: bool,
+    pub catalog_branch: Option<Branch>,
+    pub catalog_page: usize,
+    pub tech: Tech,
     pub focus: Option<UiAction>,
     pub notice: String,
     pub notice_until: f32,
@@ -117,6 +131,9 @@ impl Play {
             rotation: 0,
             road_anchor: None,
             objective_expanded: true,
+            catalog_branch: None,
+            catalog_page: 0,
+            tech: Tech::Foundations,
             focus: None,
             notice: String::new(),
             notice_until: 0.,
@@ -130,7 +147,7 @@ impl Play {
     }
 
     pub fn building(&self) -> Building {
-        Building::ALL[self.option.min(Building::ALL.len() - 1)]
+        Building::from_index(self.option.min(Building::CATALOG_SIZE - 1))
     }
 
     pub fn miracle(&self) -> Miracle {
@@ -171,6 +188,8 @@ impl Play {
             }
             Tool::Hand => Action::Hand(self.aim),
             Tool::Build => Action::Build(self.building(), self.aim, self.rotation),
+            Tool::Helpers if self.option == 1 => Action::Muster(self.aim),
+            Tool::Helpers if self.option == 2 => Action::Patrol(self.aim),
             Tool::Helpers => Action::Assign(self.aim, false),
             Tool::Hippo if self.option == 1 => Action::Watch(self.aim),
             Tool::Hippo if self.option == 2 => Action::Tend(self.aim),
@@ -189,6 +208,11 @@ impl Play {
         let region = game.region();
         match self.tool {
             Tool::Build if self.building() == Building::Shrine => region.frontier,
+            Tool::Helpers if self.option == 1 => city
+                .buildings
+                .iter()
+                .find(|site| site.kind == Building::Civic(Civic::Barracks))
+                .map_or(region.start, |site| site.tile),
             Tool::Hand if city.held.is_some() => region.depot,
             Tool::Miracles if self.miracle() == Miracle::Mend => city.walkers[0].tile(),
             Tool::Miracles if self.miracle().offensive() && city.quest == Quest::Bridge => region
@@ -233,6 +257,36 @@ impl Play {
         match action {
             UiAction::Tool(tool) => self.tool(tool),
             UiAction::Choice(i) => self.choose(i),
+            UiAction::Catalog(branch) => {
+                self.panel = Panel::Catalog;
+                self.catalog_branch = branch;
+                self.catalog_page = 0;
+                self.focus = None;
+            }
+            UiAction::CatalogPage(index) => self.catalog_page = index,
+            UiAction::SelectBuilding(kind) => {
+                if let Some(civic) = kind.civic() {
+                    let tech = civic.spec().unlock;
+                    if !game.campaign.research.knows(tech) {
+                        self.tech = tech;
+                        self.panel = Panel::Research;
+                        self.focus = None;
+                        return false;
+                    }
+                }
+                self.tool(Tool::Build);
+                self.choose(kind.index());
+                self.panel = Panel::Closed;
+                self.focus = None;
+            }
+            UiAction::SelectTech(tech) => {
+                self.tech = tech;
+                self.panel = Panel::Research;
+            }
+            UiAction::ResearchBranch(branch) => {
+                self.tech = branch.topics()[0];
+                self.panel = Panel::Research;
+            }
             UiAction::Confirm
                 if self.panel == Panel::Closed
                     && self.tool == Tool::Plan
@@ -250,6 +304,17 @@ impl Play {
                 }
             }
             UiAction::Confirm if self.panel == Panel::Closed => {
+                if self.target(game) == Action::Hand(self.aim)
+                    && game.city().held.is_none()
+                    && game
+                        .city()
+                        .building_at(self.aim)
+                        .is_some_and(|site| site.kind != Building::Field)
+                {
+                    self.panel = Panel::Inspection;
+                    self.focus = None;
+                    return false;
+                }
                 return self.execute(self.target(game), game, view, now);
             }
             UiAction::Confirm => {}
@@ -338,6 +403,7 @@ pub struct CameraRig {
     pub height: f32,
     min: Vec3,
     max: Vec3,
+    max_height: f32,
 }
 
 impl CameraRig {
@@ -348,11 +414,16 @@ impl CameraRig {
             height: 22.,
             min: region.bounds.0.world(),
             max: region.bounds.1.world(),
+            max_height: if region.kind == crate::region::Biome::Aegean {
+                149.
+            } else {
+                106.
+            },
         }
     }
 
     pub fn zoom(&mut self, change: f32) {
-        self.height = (self.height * (-change).exp()).clamp(11., 106.);
+        self.height = (self.height * (-change).exp()).clamp(11., self.max_height);
     }
 
     pub fn focus(&mut self, tile: Tile) {
@@ -362,7 +433,7 @@ impl CameraRig {
 
     pub fn landscape(&mut self) {
         self.target = (self.min + self.max) * 0.5;
-        self.height = 106.;
+        self.height = self.max_height;
     }
 
     pub fn pan(&mut self, dx: f32, dy: f32) {
@@ -388,6 +459,7 @@ struct PlacementKey {
     kind: Building,
     tile: Tile,
     stock: [u16; 3],
+    goods: Goods,
     faith: u16,
     quest: Quest,
     count: usize,
@@ -411,6 +483,7 @@ impl Target {
                     kind,
                     tile,
                     stock: city.stock,
+                    goods: city.society.goods,
                     faith: city.faith,
                     quest: city.quest,
                     count: city.buildings.len(),
@@ -423,7 +496,7 @@ impl Target {
                     .as_ref()
                     .is_none_or(|(previous, _)| *previous != key)
                 {
-                    self.placement = Some((key, city.placement(region, kind, tile)));
+                    self.placement = Some((key, game.building_plan(kind, tile)));
                 }
                 let result = &self.placement.as_ref().unwrap().1;
                 self.legal = result.is_ok();
@@ -431,7 +504,7 @@ impl Target {
                     .as_ref()
                     .err()
                     .cloned()
-                    .unwrap_or_else(|| stock_text(kind.price()));
+                    .unwrap_or_else(|| kind.cost_text());
                 format!("{} bauen", kind.name())
             }
             Action::Cast(spell, tile) => {
@@ -524,6 +597,26 @@ impl Target {
                 };
                 "Wache halten".into()
             }
+            Action::Muster(tile) => {
+                let plan = city.muster_plan(region, tile);
+                self.legal = plan.is_ok();
+                self.detail = plan
+                    .err()
+                    .unwrap_or_else(|| "3 Nahrung · 1 Werkzeug".into());
+                "Wache ausbilden".into()
+            }
+            Action::Patrol(tile) => {
+                self.legal = city.garrison() > 0
+                    && city.influence(region, tile)
+                    && city.walkable(region, tile);
+                self.detail = if city.garrison() == 0 {
+                    "Bilde zuerst eine Wache im Wachhaus aus."
+                } else {
+                    "Patrouillen schützen Vorräte und senken den Widerstand in der Nähe."
+                }
+                .into();
+                "Patrouille schicken".into()
+            }
             Action::Tend(tile) => {
                 self.legal = game.campaign.gifts.training >= 3
                     && city
@@ -598,6 +691,24 @@ impl Target {
                     Crop::Ripe => "Die Ernte ist bereit".into(),
                 };
                 "Ernten".into()
+            }
+            Action::Hand(_) if city.building_at(tile).is_some() => {
+                let site = city.building_at(tile).unwrap();
+                self.detail = site.kind.civic().map_or_else(
+                    || site.kind.name().to_string(),
+                    |kind| {
+                        format!(
+                            "{} · {}",
+                            kind.spec().name,
+                            if city.connected(region, site) {
+                                "Am Weg"
+                            } else {
+                                "Ohne Weganschluss"
+                            }
+                        )
+                    },
+                );
+                "Gebäude ansehen".into()
             }
             _ => {
                 self.legal = false;

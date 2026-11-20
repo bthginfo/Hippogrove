@@ -114,6 +114,7 @@ pub enum Biome {
     Fjord,
     Terraces,
     Lake,
+    Aegean,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,6 +124,7 @@ pub enum Weather {
     Snow,
     Mist,
     Drought,
+    Breeze,
 }
 
 impl Weather {
@@ -133,6 +135,7 @@ impl Weather {
             Self::Snow => "Schneefall",
             Self::Mist => "Flussnebel",
             Self::Drought => "Trockenzeit",
+            Self::Breeze => "Seebrise",
         }
     }
 }
@@ -204,6 +207,7 @@ impl Region {
             Biome::Fjord => 63.,
             Biome::Terraces => 47.,
             Biome::Lake => 70.,
+            Biome::Aegean => 83.,
         };
         if (time + offset).rem_euclid(118.) < 65. {
             return Weather::Clear;
@@ -213,6 +217,7 @@ impl Region {
             Biome::Fjord => Weather::Snow,
             Biome::Terraces => Weather::Mist,
             Biome::Lake => Weather::Drought,
+            Biome::Aegean => Weather::Breeze,
         }
     }
 
@@ -227,12 +232,30 @@ impl Region {
                 Biome::Fjord => (delta.abs() / 7).min(2),
                 Biome::Terraces => -(delta / 5).clamp(-2, 2),
                 Biome::Lake => -(delta.abs() / 6).min(2),
+                Biome::Aegean => (delta / 8).clamp(-3, 3),
             }
     }
 
     pub fn water(&self, tile: Tile) -> bool {
+        self.in_channel(tile) || (self.kind == Biome::Aegean && !self.on_island(tile))
+    }
+
+    fn in_channel(&self, tile: Tile) -> bool {
         let bank = self.river_at(tile.0);
         (bank..bank + self.river_span(tile.0)).contains(&tile.1)
+    }
+
+    fn on_island(&self, tile: Tile) -> bool {
+        let place = Vec2::new(f32::from(tile.0), f32::from(tile.1));
+        let coast = (place.x * 0.31 + place.y * 0.45).sin() * 0.075;
+        [
+            (Vec2::new(17., -9.), Vec2::new(54., 29.)),
+            (Vec2::new(24., 27.), Vec2::new(52., 29.)),
+            (Vec2::new(-27., 35.), Vec2::new(12., 11.)),
+            (Vec2::new(65., -25.), Vec2::new(14., 10.)),
+        ]
+        .into_iter()
+        .any(|(center, radius)| ((place - center) / radius).length_squared() < 1. + coast)
     }
 
     pub fn rocky(&self, tile: Tile) -> bool {
@@ -249,6 +272,7 @@ impl Region {
                 Biome::Fjord => (outer / 5).min(6),
                 Biome::Terraces => (outer / 19).min(2),
                 Biome::Lake => (outer / 3).min(11),
+                Biome::Aegean => (outer / 10).min(5),
             }
     }
 
@@ -258,6 +282,10 @@ impl Region {
 
     pub fn crossing(&self, tile: Tile) -> bool {
         tile.0 == self.cross_x || self.crossings.contains(&tile.0)
+    }
+
+    pub fn bridge_cell(&self, tile: Tile) -> bool {
+        self.crossing(tile) && self.in_channel(tile)
     }
 
     pub fn district_at(&self, tile: Tile) -> Option<usize> {

@@ -1,11 +1,16 @@
-use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy::{
+    asset::RenderAssetUsages,
+    prelude::*,
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+};
 
 use crate::{
     art::rgb,
-    game::{Action, Game, Outcome, Quest, Settlement, Talent, stock_text},
+    civic::{Branch, Civic, Tech},
+    game::{Action, Building, Game, Outcome, Quest, Settlement, Talent, stock_text},
     play::{Panel, Play, Target, Tool, UiAction},
-    region::{Biome, Material, Tile},
+    region::{Biome, Material, Region, Tile},
 };
 
 const PAPER: u32 = 0xf6eed7;
@@ -58,6 +63,7 @@ pub(crate) enum Label {
     Climate,
     Mana,
     Controls,
+    CityGoods,
 }
 
 #[derive(Component)]
@@ -81,6 +87,11 @@ struct Layout {
     compact: bool,
     short: bool,
     safe: [u16; 4],
+    catalog: Option<Branch>,
+    catalog_page: usize,
+    tech: Tech,
+    research_count: u32,
+    insight: u16,
 }
 
 #[derive(Resource, Default)]
@@ -92,12 +103,15 @@ pub struct Hud {
     serif: Handle<Font>,
     icons: Handle<Image>,
     atlas: Handle<TextureAtlasLayout>,
+    maps: Vec<Handle<Image>>,
 }
 
 pub fn setup(
     mut hud: ResMut<Hud>,
     assets: Res<AssetServer>,
     mut atlases: ResMut<Assets<TextureAtlasLayout>>,
+    mut images: ResMut<Assets<Image>>,
+    game: Res<Game>,
 ) {
     hud.regular = assets.load("embedded://fonts/DMSans-Medium.ttf");
     hud.bold = assets.load("embedded://fonts/DMSans-Bold.ttf");
@@ -110,6 +124,49 @@ pub fn setup(
         None,
         None,
     ));
+    hud.maps = game
+        .regions
+        .iter()
+        .map(|region| images.add(chart(region)))
+        .collect();
+}
+
+fn chart(region: &Region) -> Image {
+    let (land, water): (u32, u32) = match region.kind {
+        Biome::Valley => (0xb7bf80, 0x6daaae),
+        Biome::Fjord => (0xb8c2aa, 0x7ba6b2),
+        Biome::Terraces => (0xaebb76, 0x75b5a3),
+        Biome::Lake => (0xdcc395, 0x65b5af),
+        Biome::Aegean => (0xc1bc80, 0x5497b2),
+    };
+    let pixels = region
+        .bounds
+        .tiles()
+        .flat_map(|tile| {
+            let color = if region.water(tile) {
+                water
+            } else if region.rocky(tile) {
+                0x988f75
+            } else if region.road(tile) {
+                0xe0c69b
+            } else {
+                land
+            };
+            [(color >> 16) as u8, (color >> 8) as u8, color as u8, 255]
+        })
+        .collect();
+    let width = region.bounds.width();
+    Image::new(
+        Extent3d {
+            width: width as u32,
+            height: (region.bounds.len() / width) as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
 }
 
 fn glyph(parent: &mut ChildSpawnerCommands, hud: &Hud, index: usize, size: f32) {
@@ -142,8 +199,21 @@ fn button_glyph(action: UiAction) -> Option<usize> {
         UiAction::Panel(Panel::Journey) => Some(12),
         UiAction::Panel(Panel::Progress) => Some(13),
         UiAction::Panel(Panel::Quests) | UiAction::ToggleObjective => Some(11),
+        UiAction::Panel(Panel::Catalog) => Some(12),
+        UiAction::Panel(Panel::Research) => Some(9),
+        UiAction::ResearchBranch(branch) => Some(branch_glyph(branch)),
+        UiAction::SelectTech(tech) => Some(branch_glyph(tech.branch())),
         UiAction::Guide => Some(14),
         _ => None,
+    }
+}
+
+fn branch_glyph(branch: Branch) -> usize {
+    match branch {
+        Branch::Homes => 6,
+        Branch::Industry => 0,
+        Branch::Culture => 7,
+        Branch::Defense => 11,
     }
 }
 
@@ -540,8 +610,19 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                     } else {
                         4
                     };
-                    let page = (play.option / page_size) * page_size;
-                    for index in page..play.tool.choices().min(page + page_size) {
+                    let (page, next, total) =
+                        if play.tool == Tool::Build && play.option >= Building::ALL.len() {
+                            (play.option, play.option + 1, play.option + 1)
+                        } else {
+                            let total = if play.tool == Tool::Build {
+                                Building::ALL.len()
+                            } else {
+                                play.tool.choices()
+                            };
+                            let page = (play.option / page_size) * page_size;
+                            (page, (page + page_size).min(total), total)
+                        };
+                    for index in page..next {
                         button(
                             options,
                             hud,
@@ -551,12 +632,10 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                             false,
                         );
                     }
-                    if play.tool.choices() > page_size {
-                        let next = if page + page_size < play.tool.choices() {
-                            page + page_size
-                        } else {
-                            0
-                        };
+                    if total > page_size
+                        && !(play.tool == Tool::Build && play.option >= Building::ALL.len())
+                    {
+                        let next = if next < total { next } else { 0 };
                         let category = match play.tool {
                             Tool::Build => match next {
                                 4 => "Versorgung ›",
@@ -568,6 +647,16 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                             _ => "Weitere ›",
                         };
                         button(options, hud, category, UiAction::Choice(next), false, false);
+                    }
+                    if play.tool == Tool::Build {
+                        button(
+                            options,
+                            hud,
+                            "Baubuch",
+                            UiAction::Panel(Panel::Catalog),
+                            false,
+                            false,
+                        );
                     }
                 });
             }
@@ -636,12 +725,6 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
 
 fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: bool) {
     let region = game.region();
-    let (land, water) = match region.kind {
-        Biome::Valley => (0xb7bf80, 0x6daaae),
-        Biome::Fjord => (0xb8c2aa, 0x7ba6b2),
-        Biome::Terraces => (0xaebb76, 0x75b5a3),
-        Biome::Lake => (0xdcc395, 0x65b5af),
-    };
     let position = |tile: Tile| {
         let min = region.bounds.0;
         let max = region.bounds.1;
@@ -658,27 +741,10 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
                 overflow: Overflow::clip(),
                 ..default()
             },
-            BackgroundColor(rgb(land)),
+            ImageNode::new(hud.maps[game.campaign.active].clone()),
             BorderRadius::all(Val::Px(12.)),
         ))
         .with_children(|map| {
-            for column in region.bounds.0.0..=region.bounds.1.0 {
-                let p = position(Tile(column, region.river_at(column)));
-                map.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Percent(p.x),
-                        top: Val::Percent(p.y),
-                        width: Val::Percent(103. / region.bounds.width() as f32),
-                        height: Val::Percent(
-                            100. * f32::from(region.river_span(column))
-                                / (region.bounds.len() / region.bounds.width()) as f32,
-                        ),
-                        ..default()
-                    },
-                    BackgroundColor(rgb(water)),
-                ));
-            }
             for (tile, color) in [
                 (region.start, DARK),
                 (region.rival_shrine, 0x8b5b3f),
@@ -752,6 +818,304 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
     });
 }
 
+fn panel_heading(parent: &mut ChildSpawnerCommands, hud: &Hud, title: &str, short: bool) {
+    text(parent, hud, title, if short { 24. } else { 29. }, INK);
+}
+
+fn catalog_panel(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    game: &Game,
+    play: &Play,
+    short: bool,
+) {
+    parent.spawn(row()).with_children(|header| {
+        panel_heading(header, hud, "Baubuch", short);
+        label(header, hud, Label::CityGoods, 15., MUTED);
+    });
+    parent.spawn(row()).with_children(|tabs| {
+        button(
+            tabs,
+            hud,
+            "Grundbau",
+            UiAction::Catalog(None),
+            play.catalog_branch.is_none(),
+            false,
+        );
+        for branch in Branch::ALL {
+            button(
+                tabs,
+                hud,
+                branch.name(),
+                UiAction::Catalog(Some(branch)),
+                play.catalog_branch == Some(branch),
+                false,
+            );
+        }
+    });
+    let entries: Vec<_> = if let Some(branch) = play.catalog_branch {
+        Civic::ALL
+            .into_iter()
+            .filter(|kind| kind.spec().branch == branch)
+            .map(Building::Civic)
+            .collect()
+    } else {
+        Building::ALL.to_vec()
+    };
+    let size = if short { 2 } else { 3 };
+    let pages = entries.len().div_ceil(size);
+    let index = play.catalog_page.min(pages.saturating_sub(1));
+    let research = game.campaign.research;
+    for &building in entries.iter().skip(index * size).take(size) {
+        let locked = building
+            .civic()
+            .map(|kind| kind.spec().unlock)
+            .filter(|&tech| !research.knows(tech));
+        let name = format!("{} · {}", building.name(), building.cost_text());
+        let action = UiAction::SelectBuilding(building);
+        let purpose = building
+            .civic()
+            .map_or_else(|| building.use_text(), |kind| kind.spec().purpose);
+        parent
+            .spawn(Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(2.),
+                ..default()
+            })
+            .with_children(|card| {
+                button(card, hud, &name, action, false, false);
+                if let Some(tech) = locked {
+                    text(
+                        card,
+                        hud,
+                        &format!("Forschung · {}", tech.name()),
+                        13.,
+                        MUTED,
+                    );
+                } else {
+                    text(card, hud, purpose, 14., MUTED);
+                }
+            });
+    }
+    parent.spawn(row()).with_children(|bottom| {
+        if index > 0 {
+            button(
+                bottom,
+                hud,
+                "Vorherige",
+                UiAction::CatalogPage(index - 1),
+                false,
+                false,
+            );
+        }
+        if index + 1 < pages {
+            button(
+                bottom,
+                hud,
+                "Nächste",
+                UiAction::CatalogPage(index + 1),
+                false,
+                false,
+            );
+        }
+        button(
+            bottom,
+            hud,
+            "Forschung",
+            UiAction::Panel(Panel::Research),
+            false,
+            false,
+        );
+    });
+}
+
+fn research_panel(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    game: &Game,
+    selected: Tech,
+    short: bool,
+) {
+    let current = game.campaign.research;
+    let city_rank = game.city().city_rank();
+    let branch = selected.branch();
+    parent.spawn(row()).with_children(|header| {
+        panel_heading(header, hud, "Forschung", short);
+        text(
+            header,
+            hud,
+            &format!("{} Erkenntnis", current.insight),
+            16.,
+            MUTED,
+        );
+    });
+    parent.spawn(row()).with_children(|tabs| {
+        for line in Branch::ALL {
+            button(
+                tabs,
+                hud,
+                line.name(),
+                UiAction::ResearchBranch(line),
+                line == branch,
+                false,
+            );
+        }
+        button(
+            tabs,
+            hud,
+            "Baubuch",
+            UiAction::Panel(Panel::Catalog),
+            false,
+            false,
+        );
+    });
+    parent
+        .spawn(Node {
+            width: Val::Percent(100.),
+            column_gap: Val::Px(12.),
+            ..default()
+        })
+        .with_children(|pages| {
+            pages
+                .spawn(Node {
+                    width: Val::Percent(49.),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Stretch,
+                    ..default()
+                })
+                .with_children(|topics| {
+                    for (i, tech) in branch.topics().into_iter().enumerate() {
+                        if i > 0 {
+                            topics.spawn((
+                                Node {
+                                    width: Val::Px(3.),
+                                    height: Val::Px(10.),
+                                    align_self: AlignSelf::Center,
+                                    ..default()
+                                },
+                                BackgroundColor(rgb(BRASS)),
+                            ));
+                        }
+                        let mark = if current.knows(tech) {
+                            "Erforscht"
+                        } else if current.available(tech, city_rank).is_ok() {
+                            "Bereit"
+                        } else {
+                            "Gesperrt"
+                        };
+                        button(
+                            topics,
+                            hud,
+                            &format!("{} · {mark}", tech.name()),
+                            UiAction::SelectTech(tech),
+                            selected == tech,
+                            false,
+                        );
+                    }
+                });
+            pages
+                .spawn((
+                    Node {
+                        width: Val::Percent(49.),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(7.),
+                        padding: UiRect::all(Val::Px(10.)),
+                        ..default()
+                    },
+                    BackgroundColor(rgb(0xe7e1c7)),
+                    BorderRadius::all(Val::Px(11.)),
+                ))
+                .with_children(|detail| {
+                    text(
+                        detail,
+                        hud,
+                        selected.name(),
+                        if short { 20. } else { 24. },
+                        INK,
+                    );
+                    let names: Vec<_> = Civic::ALL
+                        .into_iter()
+                        .filter(|kind| kind.spec().unlock == selected)
+                        .map(|kind| kind.spec().name)
+                        .collect();
+                    text(detail, hud, &names.join(" · "), 15., INK);
+                    let status = if current.knows(selected) {
+                        "Erforscht".into()
+                    } else if let Err(error) = current.available(selected, city_rank) {
+                        error
+                    } else {
+                        "Bereit zur Forschung".into()
+                    };
+                    text(detail, hud, &status, 14., MUTED);
+                    if !current.knows(selected) {
+                        button(
+                            detail,
+                            hud,
+                            &format!("Erforschen · {}", selected.price()),
+                            UiAction::Do(Action::Research(selected)),
+                            false,
+                            true,
+                        );
+                    }
+                });
+        });
+}
+
+fn inspection_panel(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    game: &Game,
+    play: &Play,
+    short: bool,
+) {
+    let city = game.city();
+    let region = game.region();
+    if let Some(site) = city.building_at(play.aim) {
+        panel_heading(parent, hud, site.kind.name(), short);
+        let purpose = site
+            .kind
+            .civic()
+            .map_or_else(|| site.kind.use_text(), |kind| kind.spec().purpose);
+        text(parent, hud, purpose, 17., INK);
+        let status = if city.connected(region, site) {
+            "Am Wegenetz"
+        } else {
+            "Ohne Weganschluss"
+        };
+        text(
+            parent,
+            hud,
+            if site.upgraded { "Stufe 2" } else { "Stufe 1" },
+            15.,
+            MUTED,
+        );
+        text(parent, hud, status, 15., MUTED);
+        label(parent, hud, Label::CityGoods, 15., MUTED);
+        parent.spawn(row()).with_children(|actions| {
+            if site.kind.upgrade_price().is_some() && !site.upgraded {
+                button(
+                    actions,
+                    hud,
+                    "Ausbauen",
+                    UiAction::Do(Action::Upgrade(site.tile)),
+                    false,
+                    false,
+                );
+            }
+            if site.kind == Building::Civic(Civic::Barracks) {
+                button(
+                    actions,
+                    hud,
+                    "Wache ausbilden",
+                    UiAction::Do(Action::Muster(site.tile)),
+                    false,
+                    true,
+                );
+            }
+        });
+    }
+}
+
 fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play, layout: Layout) {
     let region = game.region();
     let city = game.city();
@@ -778,17 +1142,24 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             });
             match play.panel {
                 Panel::Journey => {
-                    text(box_node,hud,if game.campaign_complete() { "Die Schreine sind vereint" } else { "Die Schreine am Wasser" },31.,INK);
-                    for (index,candidate) in game.regions.iter().enumerate() {
-                        let result=game.campaign.settlements[index].as_ref().filter(|place| place.quest == Quest::Complete).and_then(|place|place.outcome);
-                        let suffix=if index>game.campaign.unlocked {" · verschlossen"}
-                            else if let Some(outcome)=result { if outcome==Outcome::Alliance {" · Bündnis"} else {" · befreit"} }
-                            else {""};
-                        button(box_node,hud,&format!("{} · {}{suffix}",candidate.name,candidate.subtitle),
-                            UiAction::Do(Action::Travel(index)),index==game.campaign.active,false);
-                    }
+                    panel_heading(box_node,hud,if game.campaign_complete() { "Die Schreine sind vereint" } else { "Die Schreine am Wasser" },layout.short);
+                    box_node.spawn(row()).with_children(|chapters| {
+                        for (index,candidate) in game.regions.iter().enumerate() {
+                            let result=game.campaign.settlements[index].as_ref().filter(|place| place.quest == Quest::Complete).and_then(|place|place.outcome);
+                            let suffix=if index>game.campaign.unlocked {" · verschlossen"}
+                                else if let Some(outcome)=result { if outcome==Outcome::Alliance {" · Bündnis"} else {" · befreit"} }
+                                else {""};
+                            chapters.spawn(Node { width: Val::Percent(48.), flex_direction: FlexDirection::Column, ..default() }).with_children(|card| {
+                                button(card,hud,&format!("{}{suffix}",candidate.name),UiAction::Do(Action::Travel(index)),index==game.campaign.active,false);
+                                if !layout.short { text(card,hud,&candidate.subtitle,14.,MUTED); }
+                            });
+                        }
+                    });
                 }
                 Panel::Map => map_panel(box_node,hud,game,layout.short),
+                Panel::Catalog => catalog_panel(box_node,hud,game,play,layout.short),
+                Panel::Research => research_panel(box_node,hud,game,play.tech,layout.short),
+                Panel::Inspection => inspection_panel(box_node,hud,game,play,layout.short),
                 Panel::Progress => {
                     text(box_node,hud,"Gott, Siedlung und Kreatur",31.,INK);
                     label(box_node,hud,Label::Progress,17.,MUTED);
@@ -796,6 +1167,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                         for talent in Talent::ALL {
                             button(talents,hud,&format!("{} {}/2",talent.name(),game.campaign.gifts.rank(talent)),UiAction::Do(Action::Learn(talent)),false,false);
                         }
+                        button(talents,hud,"Forschung",UiAction::Panel(Panel::Research),false,false);
                         button(talents,hud,"Nilpferd loben",UiAction::Do(Action::Praise),false,false);
                     });
                     text(box_node,hud,"Aufträge geben Talentpunkte. Das Nilpferd lernt mit Lob nach erledigter Arbeit. Wache auf Rang 2, Feldpflege auf Rang 3.",17.,INK);
@@ -854,6 +1226,15 @@ pub fn layout(
         compact: size.x / scale.0 < 920.,
         short: size.y / scale.0 < 490.,
         safe,
+        catalog: play.catalog_branch,
+        catalog_page: play.catalog_page,
+        tech: play.tech,
+        research_count: game.campaign.research.count(),
+        insight: if play.panel == Panel::Research {
+            game.campaign.research.insight
+        } else {
+            0
+        },
     };
     if hud.layout == Some(key) {
         return;
@@ -923,9 +1304,13 @@ pub fn update(
         let value = match tag {
             Label::Stock(material) => city.stock[material.index()].to_string(),
             Label::Faith => city.faith.to_string(),
-            Label::Mana => format!("{:.0}/{:.0}", city.mana, gifts.mana_cap()),
+            Label::Mana => format!("{:.0}/{:.0}", city.mana, city.mana_cap(region, gifts)),
             Label::Objective => city.objective(region),
             Label::Climate => region.weather(city.weather_time).name().into(),
+            Label::CityGoods => format!(
+                "{} Bretter · {} Quader · {} Werkzeug",
+                city.society.goods[0], city.society.goods[1], city.society.goods[2]
+            ),
             Label::Quest => format!(
                 "{} {}",
                 city.quest.name(),
@@ -940,7 +1325,9 @@ pub fn update(
             }
             Label::Confirm => target.label.clone(),
             Label::Controls => {
-                if play.gamepad {
+                if play.gamepad && play.tool == Tool::Build {
+                    "Südtaste · Bauen · Linke Schulter · Baubuch".into()
+                } else if play.gamepad {
                     "Südtaste · Bestätigen".into()
                 } else {
                     String::new()
@@ -954,11 +1341,15 @@ pub fn update(
             ),
             Label::Detail => target.detail.clone(),
             Label::Progress => format!(
-                "{} Talentpunkte · Dorfstufe {} · Ansehen {}\n{} Gläubige · {} Wegfelder · Platz für {} je Vorrat\nNilpferd-Rang {} · {} · {:.0}% Kraft",
+                "{} Talentpunkte · {} Erkenntnis · Dorfstufe {}\n{} von {} Wohnplätzen · {} Geburten · Stimmung {}%\n{} Wachen · {} Wege · Lagerplatz {}\nNilpferd-Rang {} · {} · {:.0}% Kraft",
                 gifts.points,
+                game.campaign.research.insight,
                 city.city_rank(),
-                city.renown(),
-                city.walkers.len().saturating_sub(1),
+                city.inhabitants(),
+                city.housing(),
+                city.society.births,
+                city.society.morale,
+                city.garrison(),
                 city.roads.len(),
                 city.storage_cap(),
                 gifts.training,
@@ -1004,7 +1395,8 @@ pub fn update(
         }
     }
     for mut meter in &mut mana {
-        meter.width = Val::Percent((100. * city.mana / gifts.mana_cap()).clamp(0., 100.));
+        meter.width =
+            Val::Percent((100. * city.mana / city.mana_cap(region, gifts)).clamp(0., 100.));
     }
     for (mut visible, mut surface) in &mut toasts {
         *visible = if !play.notice.is_empty() && time.elapsed_secs() < play.notice_until {
@@ -1021,6 +1413,11 @@ pub fn update(
             UiAction::Confirm => !target.legal,
             UiAction::Do(Action::Travel(index)) => index > game.campaign.unlocked,
             UiAction::Do(Action::Learn(talent)) => gifts.rank(talent) >= 2 || gifts.points == 0,
+            UiAction::Do(Action::Research(tech)) => game
+                .campaign
+                .research
+                .available(tech, city.city_rank())
+                .is_err(),
             _ => false,
         };
         let shade = if unavailable {

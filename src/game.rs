@@ -6,9 +6,10 @@ use std::{
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::civic::{Civic, Goods, Research, Tech, goods_text};
 use crate::region::{Biome, CELL, DistrictNeed, Material, Region, Tile, Weather};
 
-pub const SAVE_VERSION: u32 = 2;
+pub const SAVE_VERSION: u32 = 3;
 const ORIGINAL_SOURCE_COUNT: usize = 10;
 pub const START_RADIUS: i16 = 7;
 pub const FRONTIER_RADIUS: i16 = 8;
@@ -17,7 +18,7 @@ const DISTRICT_RADIUS: i16 = 6;
 const WAYSTONE_FAITH: u16 = 5;
 const WAYSTONE_LIMIT: usize = 24;
 pub const MAX_ROAD_RUN: u16 = 12;
-pub const MAX_WALKERS: usize = 16;
+pub const MAX_WALKERS: usize = 32;
 
 pub type Stock = [u16; 3];
 pub type GameResult = Result<String, String>;
@@ -45,6 +46,7 @@ pub enum Building {
     Market,
     Tower,
     Waystone,
+    Civic(Civic),
 }
 
 impl Building {
@@ -61,6 +63,29 @@ impl Building {
         Self::Waystone,
     ];
 
+    pub const CATALOG_SIZE: usize = Self::ALL.len() + Civic::ALL.len();
+
+    pub fn from_index(index: usize) -> Self {
+        Self::ALL
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| Self::Civic(Civic::ALL[index - Self::ALL.len()]))
+    }
+
+    pub fn index(self) -> usize {
+        (0..Self::CATALOG_SIZE)
+            .position(|index| Self::from_index(index) == self)
+            .unwrap()
+    }
+
+    pub fn civic(self) -> Option<Civic> {
+        if let Self::Civic(kind) = self {
+            Some(kind)
+        } else {
+            None
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::House => "Hütte",
@@ -73,10 +98,14 @@ impl Building {
             Self::Market => "Markt",
             Self::Tower => "Wachturm",
             Self::Waystone => "Grenzstein",
+            Self::Civic(kind) => kind.spec().name,
         }
     }
 
     pub fn size(self) -> i16 {
+        if let Self::Civic(kind) = self {
+            return kind.spec().size;
+        }
         if matches!(
             self,
             Self::Shrine | Self::Well | Self::Tower | Self::Waystone
@@ -99,6 +128,21 @@ impl Building {
             Self::Market => [10, 6, 0],
             Self::Tower => [7, 9, 0],
             Self::Waystone => [3, 5, 0],
+            Self::Civic(kind) => kind.spec().stock,
+        }
+    }
+
+    pub fn goods_price(self) -> Goods {
+        self.civic().map_or([0; 3], |kind| kind.spec().goods)
+    }
+
+    pub fn cost_text(self) -> String {
+        let raw = stock_text(self.price());
+        let refined = goods_text(self.goods_price());
+        if refined.is_empty() {
+            raw
+        } else {
+            format!("{raw} · {refined}")
         }
     }
 
@@ -110,6 +154,10 @@ impl Building {
             Self::Well | Self::Tower => Some([4, 8, 0]),
             Self::Market => Some([10, 6, 4]),
             Self::Shrine | Self::Workshop | Self::Waystone => None,
+            Self::Civic(Civic::Lodge | Civic::Courtyard | Civic::Forge | Civic::Bastion) => {
+                Some([8, 6, 2])
+            }
+            Self::Civic(_) => None,
         }
     }
 
@@ -124,6 +172,10 @@ impl Building {
             Self::Market => "Tauscht Nahrung gegen mehr Baustoffe",
             Self::Tower => "Beschützt einen größeren Umkreis",
             Self::Waystone => "Erweitert deinen Einfluss",
+            Self::Civic(Civic::Lodge | Civic::Courtyard) => "Zwei zusätzliche Wohnplätze",
+            Self::Civic(Civic::Forge) => "Fertigt zwei Werkzeuge je Auftrag",
+            Self::Civic(Civic::Bastion) => "Vergrößert den Schutzbereich",
+            Self::Civic(kind) => kind.spec().purpose,
         }
     }
 
@@ -148,6 +200,7 @@ impl Building {
             Self::Market => 6,
             Self::Tower => 5,
             Self::Waystone => 1,
+            Self::Civic(kind) => 2 + u16::from(kind.spec().unlock.city_rank()),
         }
     }
 }
@@ -366,6 +419,9 @@ pub enum Action {
     Build(Building, Tile, u8),
     Road(Tile, Tile),
     Upgrade(Tile),
+    Research(Tech),
+    Muster(Tile),
+    Patrol(Tile),
     Settle(usize),
     Assign(Tile, bool),
     Watch(Tile),
@@ -404,6 +460,10 @@ pub enum Lesson {
 pub struct Walker {
     pub position: [f32; 2],
     pub hippo: bool,
+    #[serde(default)]
+    pub guard: bool,
+    #[serde(default)]
+    pub childhood: f32,
     pub job: Option<Job>,
     pub bundle: Option<Bundle>,
     pub route: VecDeque<Tile>,
@@ -415,6 +475,8 @@ impl Walker {
         Self {
             position: [f32::from(tile.0), f32::from(tile.1)],
             hippo,
+            guard: false,
+            childhood: 0.,
             job: None,
             bundle: None,
             route: VecDeque::new(),
@@ -441,11 +503,31 @@ impl Walker {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Society {
+    pub goods: Goods,
+    pub morale: u16,
+    pub births: u16,
+}
+
+impl Default for Society {
+    fn default() -> Self {
+        Self {
+            goods: [0; 3],
+            morale: 58,
+            births: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settlement {
     pub stock: Stock,
     pub faith: u16,
     pub mana: f32,
     pub buildings: Vec<BuildingSite>,
+    #[serde(default)]
+    pub society: Society,
     #[serde(default)]
     pub roads: Vec<Tile>,
     #[serde(default)]
@@ -493,6 +575,7 @@ impl Settlement {
             faith: 2,
             mana: 20.,
             buildings: Vec::new(),
+            society: Society::default(),
             roads: Vec::new(),
             districts: [DistrictStatus::default(); 2],
             last_market: 0,
@@ -551,6 +634,31 @@ impl Settlement {
             .count()
     }
 
+    pub fn inhabitants(&self) -> usize {
+        self.walkers
+            .iter()
+            .filter(|walker| !walker.hippo && !walker.guard)
+            .count()
+    }
+
+    pub fn housing(&self) -> usize {
+        2 + self
+            .buildings
+            .iter()
+            .map(|site| match site.kind {
+                Building::House => 1 + usize::from(site.upgraded),
+                Building::Civic(kind) if kind.beds() > 0 => {
+                    kind.beds() + 2 * usize::from(site.upgraded)
+                }
+                _ => 0,
+            })
+            .sum::<usize>()
+    }
+
+    pub fn garrison(&self) -> usize {
+        self.walkers.iter().filter(|walker| walker.guard).count()
+    }
+
     pub fn city_rank(&self) -> u8 {
         if self
             .buildings
@@ -572,15 +680,18 @@ impl Settlement {
     }
 
     pub fn renown(&self) -> u16 {
-        let structures = Building::ALL.iter().fold(0, |renown, &kind| {
-            let count = self.count(kind);
-            renown
-                + if count > 0 {
-                    kind.renown() + (count - 1).min(4) as u16
-                } else {
-                    0
-                }
-        });
+        let structures =
+            (0..Building::CATALOG_SIZE)
+                .map(Building::from_index)
+                .fold(0, |renown, kind| {
+                    let count = self.count(kind);
+                    renown
+                        + if count > 0 {
+                            kind.renown() + (count - 1).min(4) as u16
+                        } else {
+                            0
+                        }
+                });
         let food = self.stock[Material::Food.index()];
         structures
             + (food / 3).min(6)
@@ -642,7 +753,7 @@ impl Settlement {
 
     pub fn walkable(&self, region: &Region, tile: Tile) -> bool {
         region.bounds.contains(tile)
-            && (!region.water(tile) || (self.bridge_fixed && region.crossing(tile)))
+            && (!region.water(tile) || (self.bridge_fixed && region.bridge_cell(tile)))
             && !region.rocky(tile)
             && !region.fixed_structure(tile)
             && region.source_at(tile).is_none()
@@ -654,9 +765,12 @@ impl Settlement {
             || region
                 .district_at(tile)
                 .is_some_and(|index| self.districts[index].outcome.is_some())
-            || self
-                .building_at(tile)
-                .is_some_and(|site| matches!(site.kind, Building::Store | Building::Granary))
+            || self.building_at(tile).is_some_and(|site| {
+                matches!(
+                    site.kind,
+                    Building::Store | Building::Granary | Building::Civic(Civic::Port)
+                )
+            })
     }
 
     pub fn road_at(&self, region: &Region, tile: Tile) -> bool {
@@ -665,6 +779,21 @@ impl Settlement {
 
     pub fn connected(&self, region: &Region, site: &BuildingSite) -> bool {
         site.roadside(|cell| self.road_at(region, cell) && self.walkable(region, cell))
+    }
+
+    fn service(&self, region: &Region, kind: Civic) -> bool {
+        self.buildings
+            .iter()
+            .any(|site| site.kind == Building::Civic(kind) && self.connected(region, site))
+    }
+
+    pub fn mana_cap(&self, region: &Region, gifts: Gifts) -> f32 {
+        gifts.mana_cap()
+            + if self.service(region, Civic::Temple) {
+                14.
+            } else {
+                0.
+            }
     }
 
     pub fn road_plan(
@@ -853,6 +982,20 @@ impl Settlement {
         }
     }
 
+    fn can_buy_goods(&self, goods: Goods) -> bool {
+        self.society
+            .goods
+            .into_iter()
+            .zip(goods)
+            .all(|(owned, price)| owned >= price)
+    }
+
+    fn pay_goods(&mut self, goods: Goods) {
+        for (owned, price) in self.society.goods.iter_mut().zip(goods) {
+            *owned -= price;
+        }
+    }
+
     fn can_deposit(&self, material: Material, count: u16) -> bool {
         self.stock[material.index()].saturating_add(count) <= self.storage_cap()
     }
@@ -894,13 +1037,22 @@ impl Settlement {
             {
                 return Err("Setze den Grenzstein neben einen Weg an der goldenen Grenze.".into());
             }
+            Building::Civic(Civic::Port)
+                if !kind
+                    .tiles(tile)
+                    .flat_map(Tile::neighbors)
+                    .any(|cell| region.water(cell)) =>
+            {
+                return Err("Ein Handelshafen braucht einen Bauplatz am Wasser.".into());
+            }
             _ => {}
         }
         for cell in kind.tiles(tile) {
             if !self.influence(region, cell) {
                 return Err("Der ganze Grundriss muss im Einflussgebiet liegen.".into());
             }
-            if !self.walkable(region, cell)
+            if region.water(cell)
+                || !self.walkable(region, cell)
                 || self.road_at(region, cell)
                 || (cell == region.frontier && kind != Building::Shrine)
                 || self.walkers.iter().any(|walker| walker.tile() == cell)
@@ -908,10 +1060,10 @@ impl Settlement {
                 return Err("Suche freien Boden neben dem Weg.".into());
             }
         }
-        if !self.affordable(kind.price()) {
+        if !self.affordable(kind.price()) || !self.can_buy_goods(kind.goods_price()) {
             return Err(format!(
                 "Es fehlen Baustoffe. Benötigt werden {}.",
-                stock_text(kind.price())
+                kind.cost_text()
             ));
         }
         // Check that the footprint leaves each currently reachable resource accessible.
@@ -955,12 +1107,20 @@ impl Settlement {
                 }
             }
         }
-        for x in bounds.0.0..=bounds.1.0 {
-            let bank = region.river_at(x);
-            for z in bank..bank + region.river_span(x) {
-                let tile = Tile(x, z);
-                if let Some(index) = bounds.index(tile) {
-                    walk[index] &= self.bridge_fixed && region.crossing(tile);
+        if region.kind == Biome::Aegean {
+            for (index, tile) in bounds.tiles().enumerate() {
+                if region.water(tile) {
+                    walk[index] &= self.bridge_fixed && region.bridge_cell(tile);
+                }
+            }
+        } else {
+            for x in bounds.0.0..=bounds.1.0 {
+                let bank = region.river_at(x);
+                for z in bank..bank + region.river_span(x) {
+                    let tile = Tile(x, z);
+                    if let Some(index) = bounds.index(tile) {
+                        walk[index] &= self.bridge_fixed && region.crossing(tile);
+                    }
                 }
             }
         }
@@ -1115,7 +1275,12 @@ impl Settlement {
             .chain(
                 self.buildings
                     .iter()
-                    .filter(|site| matches!(site.kind, Building::Store | Building::Granary))
+                    .filter(|site| {
+                        matches!(
+                            site.kind,
+                            Building::Store | Building::Granary | Building::Civic(Civic::Port)
+                        )
+                    })
                     .flat_map(|site| site.kind.tiles(site.tile)),
             )
             .collect();
@@ -1126,6 +1291,10 @@ impl Settlement {
     }
 
     fn advance_walker(&mut self, walker: &mut Walker, region: &Region, gifts: Gifts, dt: f32) {
+        if walker.childhood > 0. {
+            walker.childhood = (walker.childhood - dt).max(0.);
+            return;
+        }
         if walker.hippo {
             if self.energy <= 9. {
                 self.recovering = true;
@@ -1134,7 +1303,13 @@ impl Settlement {
             self.energy = if moving && !self.recovering {
                 (self.energy - dt * if gifts.training >= 3 { 1.7 } else { 2.6 }).max(0.)
             } else {
-                (self.energy + dt * if self.recovering { 7. } else { 4. }).min(full_energy())
+                let aid = if self.service(region, Civic::Infirmary) {
+                    3.
+                } else {
+                    0.
+                };
+                (self.energy + dt * (aid + if self.recovering { 7. } else { 4. }))
+                    .min(full_energy())
             };
             if self.recovering {
                 self.recovering = self.energy < 38.;
@@ -1151,6 +1326,14 @@ impl Settlement {
             let delta = target - point;
             let speed = if walker.hippo {
                 2.65 + f32::from(gifts.training >= 4) * 0.41
+            } else if walker.guard
+                && self.buildings.iter().any(|site| {
+                    site.kind == Building::Civic(Civic::Beacon)
+                        && step.within(site.tile, 8)
+                        && self.connected(region, site)
+                })
+            {
+                3.15
             } else {
                 2.25
             };
@@ -1226,10 +1409,15 @@ impl Settlement {
                             && state.resolve > 0
                         {
                             state.resolve -= 1;
-                            self.lesson = Some(Lesson::Practiced(Job::Watch(target)));
+                            if walker.hippo {
+                                self.lesson = Some(Lesson::Practiced(Job::Watch(target)));
+                            }
                         }
                     }
-                } else if self.count(Building::Shrine) > 0 && target.within(region.bridge(), 4) {
+                } else if walker.hippo
+                    && self.count(Building::Shrine) > 0
+                    && target.within(region.bridge(), 4)
+                {
                     self.lesson = Some(Lesson::Practiced(Job::Watch(target)));
                 }
                 walker.pause = 10.;
@@ -1259,13 +1447,19 @@ impl Settlement {
         }
     }
 
-    fn tick(&mut self, region: &Region, gifts: Gifts, dt: f32) {
-        let recharge = if self.count(Building::Shrine) > 0 {
+    fn tick(&mut self, region: &Region, gifts: Gifts, dt: f32) -> u16 {
+        let base = if self.count(Building::Shrine) > 0 {
             1.70
         } else {
             1.0
         };
-        self.mana = (self.mana + recharge * dt).min(gifts.mana_cap());
+        let recharge = base
+            + if self.service(region, Civic::Oracle) {
+                0.55
+            } else {
+                0.
+            };
+        self.mana = (self.mana + recharge * dt).min(self.mana_cap(region, gifts));
         self.shield = (self.shield - dt).max(0.);
         self.rainfall = (self.rainfall - dt).max(0.);
         self.weather_time += dt;
@@ -1321,10 +1515,12 @@ impl Settlement {
         self.walkers = walkers;
 
         self.provisions -= dt;
+        let mut insight = 0;
         if self.provisions <= 0. {
             self.provisions = match region.kind {
                 Biome::Fjord => 17.,
                 Biome::Lake => 19.,
+                Biome::Aegean if weather == Weather::Breeze => 20.,
                 _ => 24.,
             };
             let winter_cost = u16::from(
@@ -1339,6 +1535,7 @@ impl Settlement {
                 *food = (*food - (1 + winter_cost + self.walkers.len() as u16 / 7)).max(4);
             }
             self.trade(region);
+            insight = self.civic_life(region, weather);
         }
 
         if self.raid_clock > 0. && self.outcome.is_none() {
@@ -1348,7 +1545,7 @@ impl Settlement {
                 let protected = self.shield > 0.
                     || self.tower_protects(region, region.bridge())
                     || self.walkers.iter().any(|walker| {
-                        walker.hippo
+                        (walker.hippo || walker.guard)
                             && matches!(walker.job, Some(Job::Watch(_)))
                             && walker.tile().within(region.bridge(), 4)
                     });
@@ -1358,6 +1555,137 @@ impl Settlement {
                 }
             }
         }
+        insight
+    }
+
+    fn exchange(&mut self, input: Stock, goods: Goods, output: Stock, product: Goods) -> bool {
+        if !self.affordable(input) || !self.can_buy_goods(goods) {
+            return false;
+        }
+        let stock_cap = self.storage_cap();
+        let goods_cap = 32 + 8 * self.count(Building::Store).min(20) as u16;
+        let next_stock =
+            std::array::from_fn(|index| self.stock[index] - input[index] + output[index]);
+        let next_goods =
+            std::array::from_fn(|index| self.society.goods[index] - goods[index] + product[index]);
+        if next_stock.iter().any(|&quantity| quantity > stock_cap)
+            || next_goods.iter().any(|&quantity| quantity > goods_cap)
+        {
+            return false;
+        }
+        self.stock = next_stock;
+        self.society.goods = next_goods;
+        true
+    }
+
+    fn civic_life(&mut self, region: &Region, weather: Weather) -> u16 {
+        let mut active: Vec<_> = self
+            .buildings
+            .iter()
+            .filter_map(|site| {
+                site.kind
+                    .civic()
+                    .filter(|_| self.connected(region, site))
+                    .map(|kind| (kind, site.tile, site.upgraded))
+            })
+            .collect();
+        active.sort_by_key(|(kind, _, _)| *kind as u8);
+        let mut morale = if self.stock[2] >= 6 { 60 } else { 49 };
+        let mut insight: u16 = 0;
+        for (kind, tile, upgraded) in active {
+            let supplies = self.stock[2] >= 8;
+            match kind {
+                Civic::Courtyard | Civic::Infirmary => morale += 3,
+                Civic::Bath
+                    if self.buildings.iter().any(|site| {
+                        site.kind == Building::Well
+                            && site.tile.within(tile, 6)
+                            && self.connected(region, site)
+                    }) =>
+                {
+                    morale += 9
+                }
+                Civic::Sawmill => {
+                    self.exchange([2, 0, 0], [0; 3], [0; 3], [1, 0, 0]);
+                }
+                Civic::Masonry => {
+                    self.exchange([0, 2, 0], [0; 3], [0; 3], [0, 1, 0]);
+                }
+                Civic::Bakery if self.harvests > 0 => {
+                    self.exchange([1, 0, 1], [0; 3], [0, 0, 4], [0; 3]);
+                }
+                Civic::Forge => {
+                    self.exchange(
+                        [0, 1, 0],
+                        [1, 1, 0],
+                        [0; 3],
+                        [0, 0, 1 + u16::from(upgraded)],
+                    );
+                }
+                Civic::Port => {
+                    let haul = if weather == Weather::Breeze {
+                        [0, 6, 7]
+                    } else {
+                        [0, 4, 5]
+                    };
+                    self.exchange([0; 3], [0, 0, 1], haul, [0; 3]);
+                }
+                Civic::Garden => morale += 5,
+                Civic::Tavern if supplies => {
+                    self.stock[2] -= 1;
+                    morale += 8;
+                }
+                Civic::Hall if supplies && self.affordable([1, 0, 2]) => {
+                    self.pay([1, 0, 2]);
+                    morale += 11;
+                    self.faith = self.faith.saturating_add(3);
+                }
+                Civic::Theater if supplies => {
+                    self.stock[2] -= 1;
+                    morale += 10;
+                    insight = insight.saturating_add(1);
+                }
+                Civic::Archive if self.stock[0] >= 5 => {
+                    self.stock[0] -= 1;
+                    insight = insight.saturating_add(1);
+                }
+                Civic::Temple => self.faith = self.faith.saturating_add(2),
+                _ => {}
+            }
+        }
+        self.society.morale = morale.min(100);
+        self.new_child(region);
+        insight
+    }
+
+    fn new_child(&mut self, region: &Region) {
+        if self.walkers.len() >= MAX_WALKERS
+            || self.inhabitants() >= self.housing()
+            || self.society.morale < 55
+        {
+            return;
+        }
+        let nursery = self.service(region, Civic::Nursery);
+        let food_cost = if nursery { 2 } else { 3 };
+        if self.stock[2] < 4 + food_cost {
+            return;
+        }
+        let Some(arrival) = self
+            .buildings
+            .iter()
+            .filter(|site| {
+                site.kind.civic().is_some_and(|kind| kind.beds() > 0)
+                    && self.connected(region, site)
+            })
+            .find_map(|site| self.entrance(region, site))
+        else {
+            return;
+        };
+        self.stock[2] -= food_cost;
+        let mut child = Walker::new(arrival, false);
+        child.childhood = if nursery { 26. } else { 46. };
+        self.walkers.push(child);
+        self.society.births = self.society.births.saturating_add(1);
     }
 
     fn trade(&mut self, region: &Region) {
@@ -1384,11 +1712,36 @@ impl Settlement {
     }
 
     fn tower_protects(&self, region: &Region, point: Tile) -> bool {
-        self.buildings.iter().any(|site| {
-            site.kind == Building::Tower
-                && self.connected(region, site)
-                && site.tile.within(point, if site.upgraded { 9 } else { 5 })
-        })
+        let fortress = self.buildings.iter().any(|site| {
+            let range = match site.kind {
+                Building::Tower => {
+                    if site.upgraded {
+                        9
+                    } else {
+                        5
+                    }
+                }
+                Building::Civic(Civic::Bastion) => {
+                    if site.upgraded {
+                        14
+                    } else {
+                        10
+                    }
+                }
+                _ => return false,
+            };
+            site.tile.within(point, range) && self.connected(region, site)
+        });
+        fortress
+            || self
+                .buildings
+                .iter()
+                .filter(|site| {
+                    site.kind == Building::Civic(Civic::Palisade) && site.tile.within(point, 5)
+                })
+                .take(3)
+                .count()
+                >= 3
     }
 
     fn hand(&mut self, region: &Region, target: Tile) -> GameResult {
@@ -1457,6 +1810,7 @@ impl Settlement {
     fn build(&mut self, region: &Region, kind: Building, tile: Tile, rotation: u8) -> GameResult {
         self.placement(region, kind, tile)?;
         self.pay(kind.price());
+        self.pay_goods(kind.goods_price());
         self.buildings.push(BuildingSite {
             kind,
             tile,
@@ -1477,22 +1831,30 @@ impl Settlement {
                 .faith
                 .saturating_add(if kind == Building::Shrine { 3 } else { 2 });
         }
-        Ok(format!("{} gebaut", kind.name()))
+        let linked = kind.civic().is_some_and(|civic| civic != Civic::Palisade)
+            && !self.connected(region, self.buildings.last().unwrap());
+        Ok(if linked {
+            format!("{} gebaut · Anschluss an einen Weg fehlt", kind.name())
+        } else {
+            format!("{} gebaut", kind.name())
+        })
     }
 
     fn welcome_resident(&mut self, region: &Region, index: usize) {
         if self.walkers.len() >= MAX_WALKERS {
             return;
         }
-        let site = &self.buildings[index];
-        if let Some(arrival) = site
-            .kind
-            .tiles(site.tile)
-            .flat_map(Tile::neighbors)
-            .find(|&tile| self.walkable(region, tile))
-        {
+        if let Some(arrival) = self.entrance(region, &self.buildings[index]) {
             self.walkers.push(Walker::new(arrival, false));
         }
+    }
+
+    fn entrance(&self, region: &Region, site: &BuildingSite) -> Option<Tile> {
+        site.kind
+            .tiles(site.tile)
+            .flat_map(Tile::neighbors)
+            .filter(|&tile| self.walkable(region, tile))
+            .min_by_key(|&tile| !self.road_at(region, tile))
     }
 
     fn assign(&mut self, region: &Region, tile: Tile, hippo: bool) -> GameResult {
@@ -1502,13 +1864,22 @@ impl Settlement {
         let worker = if hippo {
             0
         } else {
-            let index = self
+            let workers: Vec<_> = self
                 .walkers
                 .iter()
-                .position(|walker| !walker.hippo && walker.job.is_none())
-                .unwrap_or_else(|| 1 + self.next_worker % (self.walkers.len() - 1));
-            self.next_worker = self.next_worker.wrapping_add(1);
-            index
+                .enumerate()
+                .filter(|(_, walker)| !walker.hippo && !walker.guard && walker.childhood <= 0.)
+                .collect();
+            if workers.is_empty() {
+                return Err(
+                    "Es gibt gerade keine erwachsenen Gläubigen für diesen Auftrag.".into(),
+                );
+            }
+            workers
+                .iter()
+                .find(|(_, walker)| walker.job.is_none())
+                .unwrap_or(&workers[self.next_worker % workers.len()])
+                .0
         };
         if self
             .route_to(region, self.walkers[worker].tile(), tile, true)
@@ -1520,6 +1891,9 @@ impl Settlement {
         walker.job = Some(Job::Gather(index));
         walker.route.clear();
         walker.pause = 0.;
+        if !hippo {
+            self.next_worker = self.next_worker.wrapping_add(1);
+        }
         Ok(format!(
             "{} holt {}.",
             if hippo {
@@ -1548,6 +1922,74 @@ impl Settlement {
         hippo.route.clear();
         hippo.pause = 0.;
         Ok("Das Nilpferd hält an dieser Stelle Wache.".into())
+    }
+
+    pub fn muster_plan(&self, region: &Region, tile: Tile) -> Result<Tile, String> {
+        let barracks = self
+            .building_at(tile)
+            .filter(|site| site.kind == Building::Civic(Civic::Barracks))
+            .ok_or("Wähle ein Wachhaus.")?;
+        if !self.connected(region, barracks) {
+            return Err("Das Wachhaus braucht einen Anschluss an einen Weg.".into());
+        }
+        let capacity = self
+            .buildings
+            .iter()
+            .filter(|site| {
+                matches!(site.kind, Building::Civic(Civic::Barracks | Civic::Bastion))
+                    && self.connected(region, site)
+            })
+            .count()
+            * 2;
+        if self.garrison() >= capacity.min(8) || self.walkers.len() >= MAX_WALKERS {
+            return Err("Die Wache ist voll besetzt.".into());
+        }
+        if !self.affordable([0, 0, 3]) || !self.can_buy_goods([0, 0, 1]) {
+            return Err("Eine Wache braucht 3 Nahrung und 1 Werkzeug.".into());
+        }
+        self.entrance(region, barracks)
+            .ok_or_else(|| "Am Wachhaus fehlt ein freier Ausgang.".into())
+    }
+
+    fn muster(&mut self, region: &Region, tile: Tile) -> GameResult {
+        let arrival = self.muster_plan(region, tile)?;
+        self.pay([0, 0, 3]);
+        self.pay_goods([0, 0, 1]);
+        let mut guard = Walker::new(arrival, false);
+        guard.guard = true;
+        guard.job = Some(Job::Watch(arrival));
+        self.walkers.push(guard);
+        Ok("Eine Dorfwache steht bereit. Wähle Gläubige und dann Patrouille.".into())
+    }
+
+    fn patrol(&mut self, region: &Region, tile: Tile) -> GameResult {
+        if !self.influence(region, tile) || !self.walkable(region, tile) {
+            return Err("Wähle einen erreichbaren Wachposten im Einflussgebiet.".into());
+        }
+        let mut choices: Vec<_> = self
+            .walkers
+            .iter()
+            .enumerate()
+            .filter(|(_, walker)| walker.guard)
+            .collect();
+        choices.sort_by_key(|(_, walker)| {
+            (
+                matches!(walker.job, Some(Job::Watch(target)) if walker.tile() != target),
+                walker.tile().distance(tile),
+            )
+        });
+        let (index, route) = choices
+            .into_iter()
+            .find_map(|(index, walker)| {
+                self.route_to(region, walker.tile(), tile, false)
+                    .map(|route| (index, route))
+            })
+            .ok_or("Eine erreichbare Dorfwache aus einem Wachhaus fehlt.")?;
+        let walker = &mut self.walkers[index];
+        walker.job = Some(Job::Watch(tile));
+        walker.route = route;
+        walker.pause = 0.;
+        Ok("Die Dorfwache zieht zum Posten.".into())
     }
 
     fn tend(&mut self, region: &Region, tile: Tile, gifts: Gifts) -> GameResult {
@@ -1935,6 +2377,19 @@ impl Settlement {
                 ),
                 wells >= 2 && self.stock[2] >= 23,
             ),
+            Biome::Aegean => {
+                let theater = self.service(region, Civic::Theater);
+                let oracle = self.service(region, Civic::Oracle);
+                (
+                    "Fest der Winde",
+                    format!(
+                        "Theater am Weg ({}/1), Orakel am Weg ({}/1)",
+                        u8::from(theater),
+                        u8::from(oracle)
+                    ),
+                    theater && oracle,
+                )
+            }
         }
     }
 }
@@ -1945,6 +2400,8 @@ pub struct Campaign {
     pub active: usize,
     pub unlocked: usize,
     pub gifts: Gifts,
+    #[serde(default)]
+    pub research: Research,
     pub settlements: Vec<Option<Settlement>>,
 }
 
@@ -1957,6 +2414,7 @@ impl Campaign {
             active: 0,
             unlocked: 0,
             gifts: Gifts::default(),
+            research: Research::default(),
             settlements,
         }
     }
@@ -1979,6 +2437,34 @@ impl Campaign {
                     );
                     city.regrowth.resize(region.sources.len(), 0.);
                 }
+            }
+        }
+        if matches!(self.version, 1 | 2) {
+            if self.settlements.len() == 4 && regions.len() == 5 {
+                self.settlements.push(None);
+            }
+            for city in self.settlements.iter().flatten() {
+                let districts = city
+                    .districts
+                    .iter()
+                    .filter(|state| state.outcome.is_some())
+                    .count() as u16;
+                self.research.earn(
+                    2 * city.quest.index() as u16
+                        + 2 * districts
+                        + 2 * u16::from(city.local_finished),
+                );
+            }
+            if self
+                .settlements
+                .get(3)
+                .and_then(Option::as_ref)
+                .is_some_and(|city| {
+                    city.quest == Quest::Complete
+                        && city.districts.iter().all(|state| state.outcome.is_some())
+                })
+            {
+                self.unlocked = self.unlocked.max(4);
             }
             self.version = SAVE_VERSION;
         }
@@ -2010,6 +2496,7 @@ impl Campaign {
                             && city.walkers[0].hippo
                             && city.last_market < 2
                             && city.energy.is_finite()
+                            && city.society.morale <= 100
                             && city.held.is_none_or(valid_bundle)
                             && city.roads.iter().all(|&tile| region.bounds.contains(tile))
                             && city.buildings.iter().all(|site| {
@@ -2023,6 +2510,8 @@ impl Campaign {
                             })
                             && city.walkers.iter().all(|walker| {
                                 region.bounds.contains(walker.tile())
+                                    && walker.childhood.is_finite()
+                                    && walker.childhood >= 0.
                                     && walker.bundle.is_none_or(valid_bundle)
                                     && walker.route.iter().all(|&p| region.bounds.contains(p))
                                     && walker.job.is_none_or(valid_job)
@@ -2056,19 +2545,39 @@ impl Game {
             .unwrap()
     }
 
+    pub fn building_plan(&self, kind: Building, tile: Tile) -> Result<(), String> {
+        if let Some(kind) = kind.civic() {
+            self.campaign.research.permits(kind)?;
+        }
+        self.city().placement(self.region(), kind, tile)
+    }
+
     pub fn act(&mut self, action: Action) -> GameResult {
         let index = self.campaign.active;
         let settlement = self.campaign.settlements[index].as_mut().unwrap();
         let region = &self.regions[index];
         let gifts = &mut self.campaign.gifts;
+        let research = &mut self.campaign.research;
         let mut text = match action {
             Action::Hand(target) => settlement.hand(region, target),
-            Action::Build(kind, tile, rotation) => settlement.build(region, kind, tile, rotation),
+            Action::Build(kind, tile, rotation) => {
+                if let Some(kind) = kind.civic() {
+                    research.permits(kind)?;
+                }
+                settlement.build(region, kind, tile, rotation)
+            }
             Action::Road(start, end) => settlement.build_road(region, start, end),
             Action::Upgrade(tile) => settlement.upgrade(region, tile),
-            Action::Settle(index) => settlement
-                .claim_district(region, index)
-                .inspect(|_| gifts.earn()),
+            Action::Research(tech) => {
+                research.learn(tech, settlement.city_rank())?;
+                Ok(format!("{} erforscht · Neue Pläne im Baubuch", tech.name()))
+            }
+            Action::Muster(tile) => settlement.muster(region, tile),
+            Action::Patrol(tile) => settlement.patrol(region, tile),
+            Action::Settle(index) => settlement.claim_district(region, index).inspect(|_| {
+                gifts.earn();
+                research.earn(2);
+            }),
             Action::Assign(tile, hippo) => settlement.assign(region, tile, hippo),
             Action::Watch(tile) => settlement.watch(region, tile, *gifts),
             Action::Tend(tile) => settlement.tend(region, tile, *gifts),
@@ -2141,7 +2650,8 @@ impl Game {
         let index = self.campaign.active;
         let city = self.campaign.settlements[index].as_mut().unwrap();
         let region = &self.regions[index];
-        city.tick(region, self.campaign.gifts, dt);
+        let insight = city.tick(region, self.campaign.gifts, dt);
+        self.campaign.research.earn(insight);
         self.advance_quests();
     }
 
@@ -2152,12 +2662,15 @@ impl Game {
         let main = city.advance_quest(region);
         if main {
             self.campaign.gifts.earn();
-            if city.quest == Quest::Complete {
-                self.campaign.unlocked = self
-                    .campaign
-                    .unlocked
-                    .max((index + 1).min(self.regions.len() - 1));
-            }
+            self.campaign.research.earn(2);
+        }
+        if city.quest == Quest::Complete
+            && city.districts.iter().all(|state| state.outcome.is_some())
+        {
+            self.campaign.unlocked = self
+                .campaign
+                .unlocked
+                .max((index + 1).min(self.regions.len() - 1));
         }
         if !city.local_finished
             && city.quest.index() >= Quest::Bridge.index()
@@ -2166,6 +2679,7 @@ impl Game {
             city.local_finished = true;
             city.faith = city.faith.saturating_add(6);
             self.campaign.gifts.earn();
+            self.campaign.research.earn(2);
             return true;
         }
         main
@@ -2539,6 +3053,8 @@ mod tests {
         let mut legacy = serde_json::to_value(&game.campaign).unwrap();
         legacy["version"] = 1.into();
         legacy["unlocked"] = 1.into();
+        legacy.as_object_mut().unwrap().remove("research");
+        legacy["settlements"].as_array_mut().unwrap().truncate(4);
         let city = legacy["settlements"][0].as_object_mut().unwrap();
         for key in [
             "roads",
@@ -2548,6 +3064,7 @@ mod tests {
             "recovering",
             "cooldowns",
             "last_market",
+            "society",
         ] {
             city.remove(key);
         }
@@ -2637,5 +3154,122 @@ mod tests {
         let before = game.city().energy;
         game.act(Action::Cast(Miracle::Mend, hippo)).unwrap();
         assert!(game.city().energy > before);
+    }
+
+    fn linked_civic(game: &mut Game, kind: Civic) -> Tile {
+        let building = Building::Civic(kind);
+        let region = game.region();
+        let tile = region
+            .bounds
+            .tiles()
+            .filter(|&tile| tile.within(region.start, 7))
+            .filter(|&tile| {
+                building.tiles(tile).flat_map(Tile::neighbors).any(|cell| {
+                    game.city().road_at(region, cell) && game.city().walkable(region, cell)
+                })
+            })
+            .find(|&tile| game.building_plan(building, tile).is_ok())
+            .unwrap_or_else(|| panic!("Kein Bauplatz für {}", building.name()));
+        game.act(Action::Build(building, tile, 0)).unwrap();
+        assert!(
+            game.city()
+                .connected(game.region(), game.city().building_at(tile).unwrap())
+        );
+        tile
+    }
+
+    #[test]
+    fn research_building_chains_and_civilian_growth_work_together() {
+        let mut game = fresh();
+        assert!(game.act(Action::Research(Tech::Foundations)).is_err());
+        prepare_bridge(&mut game);
+        build(&mut game, Building::Workshop);
+        let sample = game.region().start.offset(1, 2);
+        assert!(
+            game.building_plan(Building::Civic(Civic::Lodge), sample)
+                .unwrap_err()
+                .contains("Erforsche")
+        );
+        assert!(game.act(Action::Research(Tech::Smithing)).is_err());
+        game.campaign.research.earn(30);
+        for tech in [
+            Tech::Foundations,
+            Tech::Workshops,
+            Tech::Smithing,
+            Tech::Commons,
+            Tech::Palisades,
+            Tech::Militia,
+        ] {
+            let balance = game.campaign.research.insight;
+            game.act(Action::Research(tech)).unwrap();
+            assert_eq!(game.campaign.research.insight, balance - tech.price());
+            assert!(game.act(Action::Research(tech)).is_err());
+        }
+        game.campaign.settlements[0].as_mut().unwrap().stock = [48, 48, 38];
+        linked_civic(&mut game, Civic::Lodge);
+        linked_civic(&mut game, Civic::Sawmill);
+        linked_civic(&mut game, Civic::Masonry);
+        linked_civic(&mut game, Civic::Garden);
+        let before = game.city().inhabitants();
+        for _ in 0..4 {
+            game.campaign.settlements[0].as_mut().unwrap().provisions = 0.;
+            game.step(1.);
+        }
+        assert!(game.city().inhabitants() > before);
+        assert!(
+            game.city()
+                .walkers
+                .iter()
+                .any(|walker| walker.childhood > 0.)
+        );
+        assert!(game.city().society.morale > 60);
+        assert!(game.city().society.goods[0] >= 4 && game.city().society.goods[1] >= 4);
+        game.campaign.settlements[0].as_mut().unwrap().stock = [48, 48, 38];
+        linked_civic(&mut game, Civic::Forge);
+        let barracks = linked_civic(&mut game, Civic::Barracks);
+        game.campaign.settlements[0].as_mut().unwrap().provisions = 0.;
+        game.step(1.);
+        assert_eq!(game.city().society.goods[2], 1);
+        game.act(Action::Muster(barracks)).unwrap();
+        assert_eq!(game.city().garrison(), 1);
+        assert_eq!(game.city().society.goods[2], 0);
+        assert!(game.act(Action::Muster(barracks)).is_err());
+        let post = game.region().bridge().offset(0, 1);
+        game.act(Action::Patrol(post)).unwrap();
+        let save = serde_json::to_vec(&game.campaign).unwrap();
+        let restored = Game::new(
+            Region::campaign(),
+            Some(serde_json::from_slice(&save).unwrap()),
+        );
+        assert!(restored.campaign.research.knows(Tech::Smithing));
+        assert_eq!(restored.city().garrison(), 1);
+        assert!(restored.city().walkers.iter().any(|walker| walker.guard
+            && matches!(walker.job, Some(Job::Watch(target)) if target == post)));
+    }
+
+    #[test]
+    fn an_existing_four_world_campaign_opens_the_new_islands_with_progress_intact() {
+        let mut game = fresh();
+        game.campaign.version = 2;
+        game.campaign.settlements.truncate(4);
+        game.campaign.active = 3;
+        game.campaign.unlocked = 3;
+        let mut previous = Settlement::new(&game.regions[3]);
+        previous.quest = Quest::Complete;
+        previous.outcome = Some(Outcome::Alliance);
+        previous
+            .districts
+            .iter_mut()
+            .for_each(|state| state.outcome = Some(Outcome::Alliance));
+        game.campaign.settlements[3] = Some(previous);
+        let mut upgraded = Game::new(Region::campaign(), Some(game.campaign));
+        assert_eq!(upgraded.campaign.active, 3);
+        assert_eq!(upgraded.campaign.unlocked, 4);
+        assert!(upgraded.campaign.research.insight >= 12);
+        upgraded.act(Action::Travel(4)).unwrap();
+        assert_eq!(upgraded.region().kind, Biome::Aegean);
+        let bay = Tile(upgraded.region().cross_x, -40);
+        assert!(upgraded.region().water(bay));
+        assert!(!upgraded.region().bridge_cell(bay));
     }
 }
