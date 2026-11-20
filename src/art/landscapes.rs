@@ -69,6 +69,10 @@ impl Palette {
             },
         }
     }
+
+    fn open_water(&self) -> Color {
+        rgb(self.water[0]).mix(&rgb(self.water[1]), 0.31)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -87,6 +91,23 @@ pub fn landscape(
 ) {
     let palette = Palette::for_biome(region.kind);
     let bounds = region.bounds.padded(8);
+    if region.kind == Biome::Aegean {
+        // Continue the sea beyond the detailed chunks in the campaign overview.
+        let center = (region.bounds.0.world() + region.bounds.1.world()) * 0.5;
+        let mut sea = Geometry::default();
+        sea.flat_box(
+            center.with_y(WATER - 0.028),
+            440.,
+            440.,
+            palette.open_water(),
+        );
+        parent.spawn((
+            Mesh3d(meshes.add(sea.mesh())),
+            MeshMaterial3d(art.water.clone()),
+            Transform::default(),
+            NotShadowCaster,
+        ));
+    }
     let Tile(left, north) = bounds.0;
     let Tile(right, south) = bounds.1.offset(1, 1);
     for z in (north..south).step_by(CHUNK as usize) {
@@ -175,7 +196,7 @@ fn chunk(
                 if sea {
                     water.tri_colors(
                         corners.map(|s| s.position.with_y(WATER)),
-                        corners.map(|s| sea_color(palette, s)),
+                        corners.map(|s| sea_color(region, palette, s)),
                     );
                     if land {
                         shoreline(&mut foam, corners);
@@ -249,17 +270,29 @@ fn land_color(region: &Region, palette: &Palette, s: Sample) -> Color {
     )
 }
 
-fn sea_color(palette: &Palette, s: Sample) -> Color {
+fn sea_color(region: &Region, palette: &Palette, s: Sample) -> Color {
     let depth = -s.coast;
     let run = noise(Vec2::new(s.local.x * 0.67, s.local.y * 1.61), 0.98, 80);
     let broad = noise(s.local, 9.5, 86);
     let deep = rgb(palette.water[0]).mix(&rgb(palette.water[1]), 0.11 + broad * 0.37 + run * 0.14);
     let shallows = rgb(palette.water[1]).mix(&rgb(palette.water[2]), 0.28 + run * 0.51);
     let depth_fade = smooth((depth + broad * 0.88 - 0.45) / 3.7);
-    shallows.mix(&deep, depth_fade).mix(
+    let local_color = shallows.mix(&deep, depth_fade).mix(
         &rgb(0xc4e8ca),
         smooth((run - 0.54) / 0.46) * (1. - depth_fade) * 0.38,
-    )
+    );
+    if region.kind != Biome::Aegean {
+        return local_color;
+    }
+    let Tile(west, north) = region.bounds.0;
+    let Tile(east, south) = region.bounds.1;
+    let edge = (s.local.x - f32::from(west))
+        .min(f32::from(east) - s.local.x)
+        .min(s.local.y - f32::from(north))
+        .min(f32::from(south) - s.local.y);
+    palette
+        .open_water()
+        .mix(&local_color, smooth((edge + 7.4) / 7.4))
 }
 
 fn shoreline(foam: &mut Geometry, corners: [Sample; 3]) {
