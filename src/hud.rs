@@ -607,7 +607,7 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                         styled_button(
                             right,
                             hud,
-                            game.city().quest.name(),
+                            game.city().objective(game.region()).0,
                             UiAction::ToggleObjective,
                             false,
                             false,
@@ -1889,7 +1889,8 @@ fn cutscene(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout) {
 fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play, layout: Layout) {
     let region = game.region();
     let city = game.city();
-    let tight = layout.narrow_modal || (play.panel == Panel::Map && layout.short);
+    let tight =
+        layout.narrow_modal || (layout.short && matches!(play.panel, Panel::Map | Panel::Spells));
     parent.spawn((
         Node{width:Val::Percent(100.),height:Val::Percent(100.),align_items:AlignItems::Center,
             justify_content:JustifyContent::Center,..default()},
@@ -2151,7 +2152,7 @@ pub fn update(
                     seconds.ceil()
                 )
             }),
-            Label::Objective => city.objective(region),
+            Label::Objective => city.objective(region).1,
             Label::Creature => format!(
                 "Rang {} · {:.0}% Kraft · {}",
                 gifts.training,
@@ -2171,7 +2172,8 @@ pub fn update(
                 "{:.0} Kraft · Radius {}\n{}",
                 spell.cost(),
                 spell.radius(gifts),
-                spell.effect()
+                city.ritual_status(region, *spell, gifts)
+                    .unwrap_or_else(|| spell.effect())
             ),
             Label::Order(tool, index) => match (*tool, *index) {
                 (Tool::Hippo, 6) => "Freien Boden wählen",
@@ -2244,7 +2246,7 @@ pub fn update(
             Label::Subtitle => play
                 .story
                 .map_or_else(String::new, |story| story.caption(region).into()),
-            Label::Quest => city.quest.name().into(),
+            Label::Quest => city.objective(region).0.into(),
             Label::Notice => {
                 if time.elapsed_secs() < play.notice_until {
                     play.notice.clone()
@@ -2339,7 +2341,9 @@ pub fn update(
             UiAction::Do(Action::Camp(index)) => city.camp_plan(index).is_err(),
             UiAction::Order(Tool::Hippo, 1) => gifts.training < 2,
             UiAction::Order(Tool::Hippo, 2) => gifts.training < 3,
-            UiAction::Order(Tool::Miracles, index) => city.mana < Miracle::ALL[index].cost(),
+            UiAction::Order(Tool::Miracles, index) => city
+                .ritual_status(region, Miracle::ALL[index], gifts)
+                .is_some(),
             UiAction::Do(Action::Praise) => city.lesson.is_none(),
             UiAction::Do(Action::RecallHelpers) => city.gathering_helpers() == 0,
             UiAction::Do(Action::AssignArea(_, _, false)) => !city.idle_helper(),

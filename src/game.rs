@@ -374,11 +374,11 @@ impl Miracle {
     pub fn effect(self) -> &'static str {
         match self {
             Self::Rain => "Bewässert trockene Felder",
-            Self::Wind => "Schwächt Wachen und Widerstand",
-            Self::Ward => "Schützt das Dorf vor Überfällen",
-            Self::Bloom => "Lässt Felder reifen und Pflanzen nachwachsen",
-            Self::Mend => "Gibt dem Nilpferd Kraft zurück",
-            Self::Thunder => "Vertreibt Wachen und bricht Widerstand",
+            Self::Wind => "Schwächt Wachen",
+            Self::Ward => "Schützt Vorräte",
+            Self::Bloom => "Reift Saat, erneuert Quellen",
+            Self::Mend => "Stärkt das Nilpferd",
+            Self::Thunder => "Bricht Widerstand",
         }
     }
 
@@ -2572,6 +2572,39 @@ impl Settlement {
                 })
     }
 
+    pub fn ritual_requirement(
+        &self,
+        region: &Region,
+        spell: Miracle,
+        gifts: Gifts,
+    ) -> Option<&'static str> {
+        match spell {
+            _ if region.sandbox && spell.offensive() => Some("Nur in Kampagnen"),
+            Miracle::Thunder if gifts.storm == 0 => Some("Talent Stimme des Donners"),
+            Miracle::Ward if self.city_rank() < 3 => Some("Benötigt Werkstatt"),
+            Miracle::Bloom if gifts.growth == 0 => Some("Talent Hände der Blüte"),
+            Miracle::Mend if gifts.training == 0 => Some("Nach dem ersten Lob"),
+            _ => None,
+        }
+    }
+
+    pub fn ritual_status(
+        &self,
+        region: &Region,
+        spell: Miracle,
+        gifts: Gifts,
+    ) -> Option<&'static str> {
+        self.ritual_requirement(region, spell, gifts).or_else(|| {
+            if self.mana + 0.001 < spell.cost() {
+                Some("Wunderkraft lädt am Schrein")
+            } else if self.cooldowns[spell as usize] > 0.001 {
+                Some("Wunder erholt sich")
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn ritual_error(
         &self,
         region: &Region,
@@ -2579,17 +2612,11 @@ impl Settlement {
         tile: Tile,
         gifts: Gifts,
     ) -> Option<&'static str> {
-        if region.sandbox && spell.offensive() {
-            return Some("Im freien Bauen gibt es keine Gegner.");
+        if let Some(reason) = self.ritual_status(region, spell, gifts) {
+            return Some(reason);
         }
         if !self.influence(region, tile) {
             return Some("Das Ziel liegt außerhalb deines Einflusses.");
-        }
-        if self.mana + 0.001 < spell.cost() {
-            return Some("Wunderkraft lädt am Schrein wieder auf.");
-        }
-        if self.cooldowns[spell as usize] > 0.001 {
-            return Some("Das Wunder muss sich kurz erholen.");
         }
         let radius = spell.radius(gifts);
         match spell {
@@ -2605,21 +2632,11 @@ impl Settlement {
             {
                 Some("Richte den Regenkreis auf ein trockenes Feld.")
             }
-            Miracle::Thunder if gifts.storm == 0 => {
-                Some("Lerne Stimme des Donners im Fortschrittsmenü.")
-            }
             Miracle::Wind | Miracle::Thunder if !self.threat_in(region, tile, radius) => {
                 Some("Ziele auf Wachen am Übergang oder eine widerständige Siedlung.")
             }
-            Miracle::Ward if self.city_rank() < 3 => Some("Die Werkstatt öffnet das Schutzwunder."),
-            Miracle::Bloom if gifts.growth == 0 => {
-                Some("Lerne Hände der Blüte im Fortschrittsmenü.")
-            }
             Miracle::Bloom if !self.blooms_at(region, tile, radius) => {
                 Some("Ziele auf wachsende Saat, Obst oder genutztes Holz.")
-            }
-            Miracle::Mend if gifts.training == 0 => {
-                Some("Dein Nilpferd lernt Heillicht nach dem ersten Lob kennen.")
             }
             Miracle::Mend if self.energy >= 95. || !self.walkers[0].tile().within(tile, radius) => {
                 Some("Ziele auf das müde Nilpferd, um seine Kraft zu erneuern.")
@@ -2806,26 +2823,89 @@ impl Settlement {
         }
     }
 
-    pub fn objective(&self, region: &Region) -> String {
-        if region.sandbox {
-            return "Wähle Pläne im Baubuch und baue im ganzen Gebiet. Die Straßen und Brücken sind offen.".into();
-        }
+    pub fn objective(&self, region: &Region) -> (&'static str, String) {
         match self.quest {
-            Quest::Shelter if self.hand_deliveries == 0 =>
-                "Pfote wählen, einen Holzstoß antippen, greifen und am Sammelplatz ablegen.".into(),
-            Quest::Shelter if self.count(Building::House) == 0 =>
-                "Baue eine Hütte auf freiem Boden bei deinem Schrein.".into(),
-            Quest::Shelter if self.count(Building::Store) == 0 =>
-                "Baue ein Lager. Helfer können beim Sammeln mitarbeiten.".into(),
-            Quest::Shelter => "Gib dem Nilpferd einen Sammelauftrag und warte auf seine Lieferung.".into(),
-            Quest::Fields if self.count(Building::Field) == 0 =>
-                "Lege ein Feld an. Dort lässt Regen deine erste Saat wachsen.".into(),
-            Quest::Fields => "Wirke Regenschauer auf das Feld. Ernte mit der Pfote, sobald die Pflanzen reif sind.".into(),
-            Quest::Bridge if self.count(Building::Shrine) == 0 =>
+            Quest::Shelter if self.hand_deliveries == 0 && self.held.is_some() => (
+                "Ladung ablegen",
+                "Wähle den Sammelplatz und tippe auf Ablegen. Zum Ziel zeigt dir den Sammelplatz."
+                    .into(),
+            ),
+            Quest::Shelter if self.hand_deliveries == 0 => (
+                "Holz greifen",
+                "Tippe mit der Pfote auf einen Holzstoß und wähle Greifen.".into(),
+            ),
+            Quest::Shelter if self.count(Building::House) == 0 => (
+                "Hütte bauen",
+                "Wähle unter Bauen eine Hütte und setze sie auf freien Boden am Schrein.".into(),
+            ),
+            Quest::Shelter if self.count(Building::Store) == 0 => (
+                "Lager bauen",
+                "Wähle ein Lager im Baubuch. Gläubige können dort ihre Ladung ablegen.".into(),
+            ),
+            Quest::Shelter => (
+                "Nilpferd losschicken",
+                "Wähle Nilpferd und dann Sammeln. Markiere eine Quelle und bestätige den Auftrag."
+                    .into(),
+            ),
+            Quest::Fields if self.count(Building::Field) == 0 => (
+                "Feld anlegen",
+                "Wähle unter Bauen ein Feld. Darauf lässt Regen deine erste Saat wachsen.".into(),
+            ),
+            Quest::Fields
+                if self.buildings.iter().any(|site| {
+                    site.kind == Building::Field && matches!(site.crop, Crop::Ripe)
+                }) =>
+            {
+                (
+                    "Feld ernten",
+                    "Tippe mit der Pfote auf das reife Feld und wähle Ernten.".into(),
+                )
+            }
+            Quest::Fields
+                if self.buildings.iter().any(|site| {
+                    site.kind == Building::Field && matches!(site.crop, Crop::Growing(_))
+                }) =>
+            {
+                (
+                    "Saat wächst",
+                    "Sobald das Feld reif ist, kannst du es mit der Pfote ernten.".into(),
+                )
+            }
+            Quest::Fields => (
+                "Regen wirken",
+                "Wähle Wunder und dann Regenschauer. Richte den Regenkreis auf ein trockenes Feld."
+                    .into(),
+            ),
+            Quest::Bridge if self.count(Building::Shrine) == 0 => (
+                "Grenzschrein bauen",
                 "Baue den Grenzschrein auf dem goldenen Platz am Übergang.".into(),
-            Quest::Bridge => format!("Baue Ansehen ({}/{}) auf und erfülle die Bitte. Oder vertreibe die Wachen mit Windstößen.", self.renown(), region.renown),
-            Quest::Districts => format!("Führe die Nachbardörfer zusammen ({}/2). Siedlungen wählst du auf der Landkarte.", self.districts.iter().filter(|state| state.outcome.is_some()).count()),
-            Quest::Complete => "Kapitel abgeschlossen. Du kannst weiterbauen oder weiterreisen.".into(),
+            ),
+            Quest::Bridge => (
+                "Übergang sichern",
+                format!(
+                    "Baue Ansehen ({}/{}) auf und erfülle die Bitte. Oder vertreibe die Wachen mit Windstößen.",
+                    self.renown(),
+                    region.renown
+                ),
+            ),
+            Quest::Districts => (
+                "Siedlungen vereinen",
+                format!(
+                    "Führe die Nachbardörfer zusammen ({}/2). Siedlungen wählst du auf der Landkarte.",
+                    self.districts
+                        .iter()
+                        .filter(|state| state.outcome.is_some())
+                        .count()
+                ),
+            ),
+            Quest::Complete if region.sandbox => (
+                "Freies Bauen",
+                "Wähle Pläne im Baubuch. Straßen und Brücken sind offen.".into(),
+            ),
+            Quest::Complete => (
+                "Kapitel abgeschlossen",
+                "Du kannst weiterbauen oder zum nächsten Kapitel reisen.".into(),
+            ),
         }
     }
 
@@ -3378,9 +3458,118 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::play::{CameraRig, Panel, Play, Tool, UiAction};
 
     fn fresh() -> Game {
         Game::new(Region::campaign(), None)
+    }
+
+    #[test]
+    fn tutorial_advances_after_grabbing_and_delivering_wood() {
+        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        let wood = game.region().sources[0].tile;
+        let depot = game.region().depot;
+        let goal = |game: &Game| game.city().objective(game.region()).0;
+
+        assert_eq!(goal(&game), "Holz greifen");
+        game.act(Action::Hand(wood)).unwrap();
+        assert_eq!(goal(&game), "Ladung ablegen");
+        game.act(Action::Hand(depot)).unwrap();
+        assert_eq!(goal(&game), "Hütte bauen");
+    }
+
+    #[test]
+    fn a_side_quest_can_only_be_rewarded_once_even_after_loading() {
+        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        let region = game.region().clone();
+        assert_eq!(game.city().side_quest(&region), SideQuest::Available);
+        assert!(game.act(Action::FinishLocal).is_err());
+        game.act(Action::AcceptLocal).unwrap();
+        assert_eq!(game.city().side_quest(&region), SideQuest::Active);
+
+        let city = game.campaign.settlements[0].as_mut().unwrap();
+        let well = region
+            .bounds
+            .tiles()
+            .filter(|tile| tile.within(region.start, 5))
+            .map(|tile| BuildingSite {
+                kind: Building::Well,
+                tile,
+                rotation: 0,
+                crop: Crop::Dry,
+                upgraded: false,
+            })
+            .find(|site| {
+                city.connected(&region, site)
+                    && site
+                        .kind
+                        .tiles(site.tile)
+                        .all(|tile| city.walkable(&region, tile) && !city.road_at(&region, tile))
+            })
+            .unwrap();
+        city.buildings.push(well);
+        city.harvests = 3;
+        let reload = |game: &Game| {
+            let data = serde_json::to_vec(&game.saved_games()).unwrap();
+            Game::resume(serde_json::from_slice(&data).unwrap()).unwrap()
+        };
+        let mut game = reload(&game);
+        assert_eq!(game.city().side_quest(&region), SideQuest::Ready);
+
+        let faith = game.city().faith;
+        let insight = game.campaign.research.insight;
+        let points = game.campaign.gifts.points;
+        game.act(Action::FinishLocal).unwrap();
+        let mut game = reload(&game);
+        assert_eq!(game.city().side_quest(&region), SideQuest::Complete);
+        assert!(game.act(Action::FinishLocal).is_err());
+        assert_eq!(game.city().faith, faith + 6);
+        assert_eq!(game.campaign.research.insight, insight + 2);
+        assert_eq!(game.campaign.gifts.points, points + 1);
+    }
+
+    #[test]
+    fn spellbook_keeps_locked_spells_open_and_guides_rain_to_dry_fields() {
+        let mut game = Game::start(Mode::Sandbox(Biome::Aegean));
+        let field = game
+            .city()
+            .buildings
+            .iter()
+            .find(|site| site.kind == Building::Field)
+            .unwrap()
+            .tile;
+        let mut play = Play::new(&game);
+        let mut view = CameraRig::new(&game);
+
+        play.activate(UiAction::Tool(Tool::Miracles), &mut game, &mut view, 0.);
+        play.activate(
+            UiAction::Order(Tool::Miracles, Miracle::Thunder as usize),
+            &mut game,
+            &mut view,
+            0.,
+        );
+        assert_eq!(play.panel, Panel::Spells);
+        assert_eq!(play.notice, "Nur in Kampagnen");
+
+        play.activate(
+            UiAction::Order(Tool::Miracles, Miracle::Rain as usize),
+            &mut game,
+            &mut view,
+            0.,
+        );
+        play.aim = game.region().depot;
+        play.activate(UiAction::Guide, &mut game, &mut view, 0.);
+        assert_eq!(play.aim, field);
+        assert!(play.activate(UiAction::Confirm, &mut game, &mut view, 0.));
+        assert!(matches!(
+            game.city().building_at(field).unwrap().crop,
+            Crop::Growing(_)
+        ));
+        assert!(
+            game.city()
+                .ritual_status(game.region(), Miracle::Rain, game.campaign.gifts)
+                .is_some()
+        );
     }
 
     fn stock_up(game: &mut Game, material: Material, needed: u16) {

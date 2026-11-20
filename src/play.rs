@@ -283,6 +283,37 @@ impl Play {
             Tool::Hippo if self.option == 6 => region.start,
             Tool::Miracles if self.miracle() == Miracle::Mend => city.walkers[0].tile(),
             Tool::Miracles if self.miracle() == Miracle::Ward => region.start,
+            Tool::Miracles if self.miracle() == Miracle::Rain => city
+                .buildings
+                .iter()
+                .filter(|site| site.kind == Building::Field && city.influence(region, site.tile))
+                .min_by_key(|site| {
+                    (
+                        !matches!(site.crop, Crop::Dry),
+                        self.aim.distance(site.tile),
+                    )
+                })
+                .map_or(region.start, |site| site.tile),
+            Tool::Miracles if self.miracle() == Miracle::Bloom => {
+                let growing_fields = city
+                    .buildings
+                    .iter()
+                    .filter(|site| matches!(site.crop, Crop::Growing(_)))
+                    .map(|site| site.tile);
+                let depleted_plants = region
+                    .sources
+                    .iter()
+                    .zip(&city.nodes)
+                    .filter(|(source, stock)| {
+                        source.material != Material::Stone && **stock < source.stock
+                    })
+                    .map(|(source, _)| source.tile);
+                growing_fields
+                    .chain(depleted_plants)
+                    .filter(|&tile| city.influence(region, tile))
+                    .min_by_key(|&tile| self.aim.distance(tile))
+                    .unwrap_or(region.start)
+            }
             Tool::Miracles if self.miracle().offensive() && city.quest == Quest::Bridge => city
                 .guards
                 .iter()
@@ -297,12 +328,17 @@ impl Play {
                 .min_by_key(|(district, _)| self.aim.distance(district.center))
                 .map(|(district, _)| district.center)
                 .unwrap_or(region.start),
-            Tool::Miracles | Tool::Hand if city.quest == Quest::Fields => city
+            Tool::Hand if city.quest == Quest::Fields => city
                 .buildings
                 .iter()
-                .find(|site| site.kind == Building::Field)
-                .map(|site| site.tile)
-                .unwrap_or(region.start),
+                .filter(|site| site.kind == Building::Field)
+                .min_by_key(|site| {
+                    (
+                        !matches!(site.crop, Crop::Ripe),
+                        self.aim.distance(site.tile),
+                    )
+                })
+                .map_or(region.start, |site| site.tile),
             Tool::Hand if city.quest == Quest::Bridge => region.bridge(),
             _ => region
                 .sources
@@ -337,13 +373,23 @@ impl Play {
             }
             UiAction::Tool(tool) => self.open_tool(tool),
             UiAction::Order(tool, index) => {
-                let minimum = match (tool, index) {
-                    (Tool::Hippo, 1) => 2,
-                    (Tool::Hippo, 2) => 3,
-                    _ => 0,
+                let gifts = game.campaign.gifts;
+                let requirement = match (tool, index) {
+                    (Tool::Hippo, 1) if gifts.training < 2 => {
+                        Some("Wache wird auf Rang 2 verfügbar.")
+                    }
+                    (Tool::Hippo, 2) if gifts.training < 3 => {
+                        Some("Feldpflege wird auf Rang 3 verfügbar.")
+                    }
+                    (Tool::Miracles, _) => {
+                        game.city()
+                            .ritual_requirement(game.region(), Miracle::ALL[index], gifts)
+                    }
+                    _ => None,
                 };
-                if game.campaign.gifts.training < minimum {
-                    self.notice = format!("Dieser Auftrag wird auf Rang {minimum} verfügbar.");
+                if let Some(reason) = requirement {
+                    self.focus = Some(action);
+                    self.notice = reason.into();
                     self.notice_ok = false;
                     self.notice_until = now + 4.;
                     return false;
@@ -680,15 +726,20 @@ impl Play {
         match story.sequence {
             Sequence::Arrival => {
                 self.tool(Tool::Hand);
-                self.aim = region.sources[0].tile;
+                self.aim = self.guide_tile(game);
                 *view = CameraRig::new(game);
             }
             Sequence::Crossing => {
                 self.aim = region.bridge();
                 view.focus(self.aim);
             }
-            Sequence::Shelter | Sequence::Islands => {
+            Sequence::Shelter => {
                 view.focus(region.start);
+            }
+            Sequence::Islands => {
+                self.tool(Tool::Hand);
+                self.aim = self.guide_tile(game);
+                view.focus(self.aim);
             }
         }
     }
