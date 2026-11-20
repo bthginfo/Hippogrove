@@ -16,6 +16,8 @@ jobs:
           if [[ $(uname -m) == arm64 ]]; then target=aarch64-apple-ios-sim; else target=x86_64-apple-ios; fi
           rustup target add "$target"
       - name: Build the app
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: 0
         run: tools/build-ios.sh
       - name: Open the app on iPhone and iPad
         run: |
