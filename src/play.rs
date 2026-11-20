@@ -424,7 +424,7 @@ impl Play {
                 } else {
                     panel
                 };
-                self.focus = None;
+                self.focus = (self.panel == Panel::Map).then_some(UiAction::Panel(Panel::Map));
             }
             UiAction::ToggleObjective => self.objective_expanded = !self.objective_expanded,
             UiAction::ReplayArrival if game.campaign.active == 0 => {
