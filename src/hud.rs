@@ -129,7 +129,7 @@ pub fn setup(
     hud.atlas = atlases.add(TextureAtlasLayout::from_grid(
         UVec2::splat(64),
         4,
-        6,
+        7,
         None,
         None,
     ));
@@ -1309,6 +1309,20 @@ fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
     }
 }
 
+fn material_glyph(biome: Biome, material: Material) -> usize {
+    match (biome, material) {
+        (Biome::Terraces, Material::Wood) => 25,
+        (Biome::Terraces, Material::Stone) => 26,
+        (_, Material::Wood) => 0,
+        (_, Material::Stone) => 1,
+        (Biome::Valley, Material::Food) => 19,
+        (Biome::Fjord, Material::Food) => 21,
+        (Biome::Terraces, Material::Food) => 22,
+        (Biome::Lake, Material::Food) => 23,
+        (Biome::Aegean, Material::Food) => 24,
+    }
+}
+
 fn inventory_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout, kind: Biome) {
     parent
         .spawn(Node {
@@ -1328,17 +1342,17 @@ fn inventory_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout,
         [
             (
                 kind.material(Material::Wood),
-                0,
+                material_glyph(kind, Material::Wood),
                 Label::Stock(Material::Wood),
             ),
             (
                 kind.material(Material::Stone),
-                1,
+                material_glyph(kind, Material::Stone),
                 Label::Stock(Material::Stone),
             ),
             (
                 kind.material(Material::Food),
-                19,
+                material_glyph(kind, Material::Food),
                 Label::Stock(Material::Food),
             ),
         ],
@@ -1407,12 +1421,9 @@ fn inventory_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout,
         ))
         .with_children(|cargo| {
             cargo.spawn(row()).with_children(|bundle| {
-                let picture = match layout.carried {
-                    Some(Material::Wood) => 0,
-                    Some(Material::Stone) => 1,
-                    Some(Material::Food) => 19,
-                    None => 5,
-                };
+                let picture = layout
+                    .carried
+                    .map_or(5, |material| material_glyph(kind, material));
                 glyph(bundle, hud, picture, 34.);
                 label(bundle, hud, Label::Carried, 15., INK);
             });
@@ -1702,7 +1713,7 @@ pub fn update(
                     format!(
                         "{} {} in der Pfote",
                         bundle.count,
-                        region.sources[bundle.source].material.name()
+                        region.kind.material(region.sources[bundle.source].material)
                     )
                 },
             ),
