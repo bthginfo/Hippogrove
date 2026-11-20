@@ -44,57 +44,74 @@ pub fn main() {
     }
     let game = Game::new(regions, saved);
     let mut app = App::new();
-    app.add_plugins(
-        DefaultPlugins
-            .set(AssetPlugin {
-                meta_check: AssetMetaCheck::Never,
-                ..default()
-            })
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Hippogrove".into(),
-                    resolution: (1360_f32, 765_f32).into(),
-                    present_mode: PresentMode::AutoVsync,
-                    ..default()
-                }),
+    let plugins = DefaultPlugins
+        .set(AssetPlugin {
+            meta_check: AssetMetaCheck::Never,
+            ..default()
+        })
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Hippogrove".into(),
+                resolution: (1360_f32, 765_f32).into(),
+                present_mode: PresentMode::AutoVsync,
                 ..default()
             }),
-    )
-    .insert_resource(ClearColor(art::rgb(0xc9d1a7)))
-    .insert_resource(Time::<Fixed>::from_hz(24.))
-    .insert_resource(Play::new(&game))
-    .insert_resource(CameraRig::new(&game))
-    .insert_resource(game)
-    .insert_resource(file)
-    .init_resource::<controls::Controls>()
-    .init_resource::<hud::Hud>()
-    .init_resource::<Target>()
-    .init_resource::<view::Board>()
-    .add_systems(Startup, (view::setup, hud::setup))
-    .add_systems(FixedUpdate, simulate)
-    .add_systems(
-        Update,
-        (
-            controls::collect,
-            view::move_camera,
-            refresh_target,
-            view::sync_board,
+            ..default()
+        });
+    #[cfg(target_os = "android")]
+    let plugins = plugins.set(android_renderer());
+    app.add_plugins(plugins)
+        .insert_resource(ClearColor(art::rgb(0xc9d1a7)))
+        .insert_resource(Time::<Fixed>::from_hz(24.))
+        .insert_resource(Play::new(&game))
+        .insert_resource(CameraRig::new(&game))
+        .insert_resource(game)
+        .insert_resource(file)
+        .init_resource::<controls::Controls>()
+        .init_resource::<hud::Hud>()
+        .init_resource::<Target>()
+        .init_resource::<view::Board>()
+        .add_systems(Startup, (view::setup, hud::setup))
+        .add_systems(FixedUpdate, simulate)
+        .add_systems(
+            Update,
             (
-                view::props,
-                view::animate,
-                view::aim,
-                view::weather,
-                view::magic,
-            ),
-            hud::layout,
-            hud::update,
-            save::checkpoint,
-            screenshot,
-        )
-            .chain(),
-    );
+                controls::collect,
+                view::move_camera,
+                refresh_target,
+                view::sync_board,
+                (
+                    view::props,
+                    view::animate,
+                    view::aim,
+                    view::weather,
+                    view::magic,
+                ),
+                hud::layout,
+                hud::update,
+                save::checkpoint,
+                screenshot,
+            )
+                .chain(),
+        );
     embed_assets(&app);
     app.run();
+}
+
+#[cfg(target_os = "android")]
+fn android_renderer() -> bevy::render::RenderPlugin {
+    use bevy::render::settings::{WgpuFeatures, WgpuSettings, WgpuSettingsPriority};
+
+    // Some Android Vulkan drivers report bindless features that cannot validate the PBR shaders.
+    bevy::render::RenderPlugin {
+        render_creation: WgpuSettings {
+            priority: WgpuSettingsPriority::Compatibility,
+            features: WgpuFeatures::empty(),
+            ..default()
+        }
+        .into(),
+        ..default()
+    }
 }
 
 fn embed_assets(app: &App) {
