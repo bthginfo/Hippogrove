@@ -193,15 +193,55 @@ def mallet(p, l, o, r):
     p([(22,25),(43,31),(43,42),(22,36)], '#c88c55')
 
 
-def berry_basket(p, l, o, r):
+def fruit_basket(p, l, o, r, fruit, outline, shine, long=False):
     o((10,23,55,58), '#ba8a56', EDGE)
     o((10,22,55,42), '#e3b579', EDGE)
     for x,y in [(18,23),(26,16),(35,20),(43,24),(28,29)]:
-        o((x-5,y-4,x+6,y+7), '#bb5147', '#773e36')
-        o((x-2,y-2,x+2,y+2), '#e89479')
+        o((x-5,y-4,x+6,y+(10 if long else 7)), fruit, outline)
+        o((x-2,y-2,x+2,y+2), shine)
     o((39,13,54,22), '#79a560')
     l([(13,43),(26,46),(40,45),(52,42)], '#ebc08a')
     l([(16,50),(29,52),(46,48)], '#dfa875')
+
+
+def berry_basket(p, l, o, r):
+    fruit_basket(p, l, o, r, '#bb5147', '#773e36', '#e89479')
+
+
+def frostberries(p, l, o, r):
+    fruit_basket(p, l, o, r, '#626ca8', '#3e466b', '#9da7e1')
+
+
+def dates(p, l, o, r):
+    fruit_basket(p, l, o, r, '#b6723f', '#7b4a2f', '#dda76b', True)
+
+
+def olives(p, l, o, r):
+    fruit_basket(p, l, o, r, '#7a994b', '#455f35', '#c0c96f', True)
+
+
+def rice(p, l, o, r):
+    o((8,24,56,57), '#c0714f', EDGE)
+    o((8,22,56,40), '#ecd5ac', EDGE)
+    for x, y in [(15,29),(22,24),(25,32),(33,29),(38,24),(42,32),(49,29)]:
+        o((x-3,y-2,x+4,y+3), '#fff0cf')
+    l([(13,44),(24,48),(41,47),(51,44)], '#f2a26e', 2)
+
+
+def bamboo(p, l, o, r):
+    for x,y in [(10,39),(21,42),(26,32)]:
+        p([(x,y),(x+31,y-24),(x+37,y-16),(x+7,y+8)], '#4f7850')
+        l([(x+4,y),(x+34,y-20)], '#abc276', 2)
+        o((x,y-1,x+8,y+8), '#c8ce81', '#657849')
+        l([(x+12,y-8),(x+16,y-3)], '#8eaa5e', 2)
+        l([(x+23,y-16),(x+28,y-10)], '#8eaa5e', 2)
+
+
+def jade(p, l, o, r):
+    p([(9,43),(17,22),(35,16),(52,24),(55,43),(44,53),(20,53)], '#4d7f67')
+    p([(17,22),(35,16),(52,24),(43,31),(27,32)], '#ace0a2')
+    p([(9,43),(27,32),(43,31),(44,53),(20,53)], '#71b58b')
+    l([(17,40),(28,37),(39,38)], '#8ac99a', 2)
 
 
 def pouch(p, l, o, r):
@@ -213,9 +253,9 @@ def pouch(p, l, o, r):
 
 
 if __name__ == '__main__':
-    atlas = Image.new('RGBA', (4 * SIZE, 6 * SIZE))
+    atlas = Image.new('RGBA', (4 * SIZE, 7 * SIZE))
     glyphs = [wood, stone, food, prayer, mana, paw, hammer, people, hippo, magic, map_icon, scroll, book, chart, pin, road,
-              boards, blocks, mallet, berry_basket, pouch]
+              boards, blocks, mallet, berry_basket, pouch, frostberries, rice, dates, olives, bamboo, jade]
     for index, glyph in enumerate(glyphs):
         atlas.paste(icon(glyph), ((index % 4) * SIZE, (index // 4) * SIZE))
     out = Path(__file__).resolve().parent.parent / 'assets' / 'ui' / 'atlas.png'
