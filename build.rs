@@ -5,5 +5,8 @@ fn main() {
     ) {
         // Read gamepad events before NativeActivity's touch and keyboard adapter.
         println!("cargo:rustc-link-arg-cdylib=-Wl,--wrap=AInputQueue_getEvent");
+        // Android audio uses Oboe, whose C++ runtime must be linked into the single native library.
+        println!("cargo:rustc-link-arg-cdylib=-Wl,-Bstatic,-lc++,-Bdynamic");
+        println!("cargo:rustc-link-arg-cdylib=-Wl,--no-undefined");
     }
 }

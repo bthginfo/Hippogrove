@@ -2,7 +2,9 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-**[Hippogrove 1.2.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/aa2770b035bd9b175dcd0d6a926cb5a722fac5a3/Hippogrove-1.2.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.2.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/aa2770b035bd9b175dcd0d6a926cb5a722fac5a3/Hippogrove-1.2.0.apk.sha256)
+**[Hippogrove 1.2.1 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/bfaf4b2d87026e1aa43a14fd54a4c240a3e52262/Hippogrove-1.2.1.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.2.1) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/bfaf4b2d87026e1aa43a14fd54a4c240a3e52262/Hippogrove-1.2.1.apk.sha256)
+
+Version 1.2.1 behebt einen Startabsturz unter Android und lässt sich direkt über 1.2.0 installieren.
 
 Die signierte Standalone-App braucht Android 8 oder neuer und Vulkan. Die APK unterstützt ARM64 und x86_64. Die App lässt sich parallel zu älteren Hippogrove-Versionen installieren und hat ihren eigenen Spielstand.
 
@@ -91,6 +93,6 @@ Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus W
 
 ## Geprüfter Stand
 
-Alle 33 Rust-Tests für 1.2.0 waren erfolgreich. Der Spieldurchlauf mit virtuellem Gamepad umfasste Tutorial, Kampagneneinstieg, Baubuch und Ausbau. Der APK-Download und seine Signatur wurden geprüft. Der Lauf auf physischen Android-Geräten steht aus.
+Alle 33 Rust-Tests für 1.2.1 waren erfolgreich. Der Spieldurchlauf mit virtuellem Gamepad umfasste Tutorial, Kampagneneinstieg, Baubuch und Ausbau. Im Android-15-Emulator wurde 1.2.1 über 1.2.0 installiert und bis ins Hauptmenü gestartet. Der APK-Download und seine Signatur wurden geprüft. Der Lauf auf physischen Android-Geräten steht aus.
 
 Die Rust-Tests spielen den Friedensweg durch die 15 Themenkapitel sowie die fünf Kapitel der Chronik und den Kampfweg im Weidental. Sie prüfen auch die Forschungs- und Produktionsketten, Geburten, Patrouillen, Wunder, die Menüführung und die Übernahme älterer Spielstände. [Spielaufnahmen und Prüfungen für 1.0](docs/V1.md) · [Stadtentwicklung](docs/Stadtentwicklung.md)
