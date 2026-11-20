@@ -1,12 +1,26 @@
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
+#import <UIKit/UIKit.h>
 
 #include <stdint.h>
 
 extern void hippogrove_controller_state(float lx, float ly, float rx, float ry,
                                         float zoom, uint32_t buttons, uint32_t connected);
+extern void hippogrove_safe_insets(float left, float top, float right, float bottom);
 
 static GCController *active;
+
+static void update_safe_insets(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in [(UIWindowScene *)scene windows]) {
+            if (!window.isKeyWindow) continue;
+            UIEdgeInsets edge = window.safeAreaInsets;
+            hippogrove_safe_insets(edge.left, edge.top, edge.right, edge.bottom);
+            return;
+        }
+    }
+}
 
 static void publish(GCExtendedGamepad *pad) {
     uint32_t buttons = (pad.buttonA.pressed ? 1 : 0)
@@ -38,6 +52,14 @@ static void select_controller(GCController *controller) {
 
 void hippogrove_start_controllers(void) {
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    for (NSNotificationName event in @[UIWindowDidBecomeKeyNotification,
+            UIApplicationDidBecomeActiveNotification, UIDeviceOrientationDidChangeNotification]) {
+        [center addObserverForName:event object:nil queue:NSOperationQueue.mainQueue
+                        usingBlock:^(NSNotification *note) {
+            (void)note;
+            dispatch_async(dispatch_get_main_queue(), ^{ update_safe_insets(); });
+        }];
+    }
     [center addObserverForName:GCControllerDidConnectNotification object:nil
                         queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
         select_controller(note.object);

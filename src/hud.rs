@@ -5,15 +5,20 @@ use crate::{
     art::rgb,
     game::{Action, Game, Outcome, Quest, Settlement, Talent, stock_text},
     play::{Panel, Play, Target, Tool, UiAction},
-    region::{Biome, Tile},
+    region::{Biome, Material, Tile},
 };
 
-const CREAM: u32 = 0xf9eed0;
-const PAPER: u32 = 0xfff7e3;
-const INK: u32 = 0x25372b;
-const MUTED: u32 = 0x58624b;
-const GREEN: u32 = 0xd6dfb5;
-const DARK: u32 = 0x344c3e;
+const PAPER: u32 = 0xf6eed7;
+const INK: u32 = 0x27372e;
+const MUTED: u32 = 0x526054;
+const DARK: u32 = 0x233b30;
+const SURFACE: u32 = 0x304b3e;
+const LIGHT: u32 = 0xfff4dc;
+const SUBTLE: u32 = 0xe6ddc2;
+const GOLD: u32 = 0xffd487;
+const BRASS: u32 = 0xb99151;
+const JADE: u32 = 0xd4e9b9;
+const EDGE: f32 = 16.;
 
 #[derive(Component)]
 pub struct HitArea;
@@ -39,7 +44,7 @@ pub type HitTest<'w, 's> = Query<
 
 #[derive(Clone, Copy, Component)]
 pub(crate) enum Label {
-    Stock,
+    Stock(Material),
     Faith,
     Objective,
     Quest,
@@ -51,7 +56,15 @@ pub(crate) enum Label {
     District(usize),
     LocalQuest,
     Climate,
+    Mana,
+    Controls,
 }
+
+#[derive(Component)]
+pub struct ManaFill;
+
+#[derive(Component)]
+pub struct Toast;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Layout {
@@ -63,7 +76,11 @@ struct Layout {
     quest: Quest,
     campaign_complete: bool,
     talents: [u8; Talent::ALL.len()],
-    paused: bool,
+    objective_expanded: bool,
+    road_started: bool,
+    compact: bool,
+    short: bool,
+    safe: [u16; 4],
 }
 
 #[derive(Resource, Default)]
@@ -73,12 +90,61 @@ pub struct Hud {
     regular: Handle<Font>,
     bold: Handle<Font>,
     serif: Handle<Font>,
+    icons: Handle<Image>,
+    atlas: Handle<TextureAtlasLayout>,
 }
 
-pub fn setup(mut hud: ResMut<Hud>, assets: Res<AssetServer>) {
+pub fn setup(
+    mut hud: ResMut<Hud>,
+    assets: Res<AssetServer>,
+    mut atlases: ResMut<Assets<TextureAtlasLayout>>,
+) {
     hud.regular = assets.load("embedded://fonts/DMSans-Medium.ttf");
     hud.bold = assets.load("embedded://fonts/DMSans-Bold.ttf");
     hud.serif = assets.load("embedded://fonts/DMSerifText-Regular.ttf");
+    hud.icons = assets.load("embedded://ui/atlas.png");
+    hud.atlas = atlases.add(TextureAtlasLayout::from_grid(
+        UVec2::splat(64),
+        4,
+        4,
+        None,
+        None,
+    ));
+}
+
+fn glyph(parent: &mut ChildSpawnerCommands, hud: &Hud, index: usize, size: f32) {
+    parent.spawn((
+        ImageNode::from_atlas_image(
+            hud.icons.clone(),
+            TextureAtlas {
+                layout: hud.atlas.clone(),
+                index,
+            },
+        ),
+        Node {
+            width: Val::Px(size),
+            height: Val::Px(size),
+            flex_shrink: 0.,
+            ..default()
+        },
+    ));
+}
+
+fn button_glyph(action: UiAction) -> Option<usize> {
+    match action {
+        UiAction::Tool(Tool::Hand) => Some(5),
+        UiAction::Tool(Tool::Build) => Some(6),
+        UiAction::Tool(Tool::Helpers) => Some(7),
+        UiAction::Tool(Tool::Hippo) => Some(8),
+        UiAction::Tool(Tool::Miracles) => Some(9),
+        UiAction::Tool(Tool::Plan) => Some(15),
+        UiAction::Panel(Panel::Map) => Some(10),
+        UiAction::Panel(Panel::Journey) => Some(12),
+        UiAction::Panel(Panel::Progress) => Some(13),
+        UiAction::Panel(Panel::Quests) | UiAction::ToggleObjective => Some(11),
+        UiAction::Guide => Some(14),
+        _ => None,
+    }
 }
 
 fn panel_node() -> Node {
@@ -128,12 +194,13 @@ fn button(
     strong: bool,
 ) -> Entity {
     let surface = if strong {
-        DARK
+        GOLD
     } else if selected {
-        GREEN
+        JADE
     } else {
-        CREAM
+        SURFACE
     };
+    let tool = matches!(action, UiAction::Tool(_));
     parent
         .spawn((
             Button,
@@ -144,23 +211,49 @@ fn button(
                 strong,
             },
             Node {
-                min_height: Val::Px(if strong { 56. } else { 50. }),
-                padding: UiRect::axes(Val::Px(if strong { 17. } else { 13. }), Val::Px(7.)),
+                min_width: Val::Px(if tool { 60. } else { 48. }),
+                min_height: Val::Px(if tool {
+                    66.
+                } else if strong {
+                    54.
+                } else {
+                    48.
+                }),
+                padding: UiRect::axes(Val::Px(if tool { 7. } else { 11. }), Val::Px(5.)),
+                border: UiRect::all(Val::Px(2.)),
+                flex_direction: if tool {
+                    FlexDirection::Column
+                } else {
+                    FlexDirection::Row
+                },
+                column_gap: Val::Px(6.),
+                row_gap: Val::Px(1.),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
             },
             BackgroundColor(rgb(surface)),
-            BorderRadius::all(Val::Px(12.)),
+            BorderColor(rgb(if selected || strong { GOLD } else { BRASS })),
+            Outline::new(Val::Px(3.), Val::Px(2.), Color::NONE),
+            BorderRadius::all(Val::Px(if tool { 13. } else { 11. })),
         ))
         .with_children(|child| {
-            let color = if strong { PAPER } else { INK };
+            if let Some(index) = button_glyph(action) {
+                glyph(child, hud, index, if tool { 32. } else { 20. });
+            }
+            let color = if strong || selected { INK } else { LIGHT };
             let e = child
                 .spawn((
                     Text::new(name),
                     TextFont {
                         font: hud.bold.clone(),
-                        font_size: if strong { 19. } else { 17. },
+                        font_size: if tool {
+                            13.
+                        } else if strong {
+                            18.
+                        } else {
+                            15.
+                        },
                         ..default()
                     },
                     TextColor(rgb(color)),
@@ -168,6 +261,8 @@ fn button(
                 .id();
             if matches!(action, UiAction::Confirm) {
                 child.commands().entity(e).insert(Label::Confirm);
+            } else if matches!(action, UiAction::ToggleObjective) {
+                child.commands().entity(e).insert(Label::Quest);
             }
         })
         .id()
@@ -182,111 +277,271 @@ fn row() -> Node {
     }
 }
 
-fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game) {
+fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout) {
+    let border = UiRect::all(Val::Px(2.));
     parent
         .spawn((
             HitArea,
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(21.),
-                top: Val::Px(17.),
-                ..panel_node()
+                left: Val::Px(EDGE),
+                top: Val::Px(EDGE),
+                flex_direction: if layout.compact {
+                    FlexDirection::Column
+                } else {
+                    FlexDirection::Row
+                },
+                align_items: if layout.compact {
+                    AlignItems::Start
+                } else {
+                    AlignItems::Center
+                },
+                column_gap: Val::Px(15.),
+                row_gap: Val::Px(4.),
+                padding: UiRect::axes(Val::Px(12.), Val::Px(7.)),
+                border,
+                ..default()
             },
-            BackgroundColor(rgb(CREAM)),
-            BorderRadius::all(Val::Px(14.)),
+            BackgroundColor(rgb(DARK)),
+            BorderColor(rgb(BRASS)),
+            BorderRadius::all(Val::Px(15.)),
         ))
         .with_children(|panel| {
-            text(panel, hud, &game.region().name, 28., INK);
-            label(panel, hud, Label::Stock, 17., INK);
-            label(panel, hud, Label::Faith, 15., MUTED);
-            label(panel, hud, Label::Climate, 15., MUTED);
+            text(
+                panel,
+                hud,
+                &game.region().name,
+                if layout.compact { 25. } else { 30. },
+                LIGHT,
+            );
+            panel
+                .spawn(Node {
+                    column_gap: Val::Px(7.),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|stats| {
+                    for material in Material::ALL {
+                        stat(
+                            stats,
+                            hud,
+                            material.index(),
+                            material.name(),
+                            Label::Stock(material),
+                        );
+                    }
+                    stat(stats, hud, 3, "Glaube", Label::Faith);
+                    stats
+                        .spawn(Node {
+                            align_items: AlignItems::Center,
+                            ..default()
+                        })
+                        .with_children(|mana| {
+                            glyph(mana, hud, 4, 26.);
+                            mana.spawn(Node {
+                                flex_direction: FlexDirection::Column,
+                                min_width: Val::Px(50.),
+                                ..default()
+                            })
+                            .with_children(|meter| {
+                                label(meter, hud, Label::Mana, 14., LIGHT);
+                                meter
+                                    .spawn((
+                                        Node {
+                                            width: Val::Px(48.),
+                                            height: Val::Px(4.),
+                                            ..default()
+                                        },
+                                        BackgroundColor(rgb(0x526a56)),
+                                        BorderRadius::all(Val::Px(3.)),
+                                    ))
+                                    .with_children(|track| {
+                                        track.spawn((
+                                            ManaFill,
+                                            Node {
+                                                width: Val::Percent(0.),
+                                                height: Val::Percent(100.),
+                                                ..default()
+                                            },
+                                            BackgroundColor(rgb(0x94dbc1)),
+                                            BorderRadius::all(Val::Px(3.)),
+                                        ));
+                                    });
+                            });
+                        });
+                });
+            if !layout.compact {
+                label(panel, hud, Label::Climate, 14., SUBTLE);
+            }
         });
+
+    if layout.compact {
+        let mut nav = row();
+        nav.position_type = PositionType::Absolute;
+        nav.top = Val::Px(EDGE + 90.);
+        nav.left = Val::Px(EDGE);
+        parent
+            .spawn(nav)
+            .with_children(|tabs| navigation(tabs, hud, layout.quest));
+    }
+
     parent
         .spawn((
             HitArea,
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(17.),
-                right: Val::Px(21.),
-                width: Val::Percent(29.),
-                min_width: Val::Px(228.),
-                max_width: Val::Px(360.),
-                ..panel_node()
+                top: Val::Px(EDGE),
+                right: Val::Px(EDGE),
+                width: Val::Percent(if layout.compact { 34. } else { 28. }),
+                min_width: Val::Px(if layout.compact { 205. } else { 244. }),
+                max_width: Val::Px(365.),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(4.)),
+                border,
+                ..default()
             },
-            BackgroundColor(rgb(CREAM)),
-            BorderRadius::all(Val::Px(14.)),
+            BackgroundColor(rgb(DARK)),
+            BorderColor(rgb(BRASS)),
+            BorderRadius::all(Val::Px(15.)),
         ))
         .with_children(|panel| {
-            label(panel, hud, Label::Quest, 25., INK);
-            label(panel, hud, Label::Objective, 16., MUTED);
-            panel.spawn(row()).with_children(|controls| {
-                button(controls, hud, "Zum Ziel", UiAction::Guide, false, false);
-                button(
-                    controls,
-                    hud,
-                    "Aufträge",
-                    UiAction::Panel(Panel::Quests),
-                    false,
-                    false,
-                );
-            });
+            button(
+                panel,
+                hud,
+                game.city().quest.name(),
+                UiAction::ToggleObjective,
+                false,
+                false,
+            );
+            if layout.objective_expanded {
+                panel
+                    .spawn((
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(5.),
+                            padding: UiRect::all(Val::Px(9.)),
+                            ..default()
+                        },
+                        BackgroundColor(rgb(PAPER)),
+                        BorderRadius::all(Val::Px(9.)),
+                    ))
+                    .with_children(|card| {
+                        label(card, hud, Label::Objective, 15., INK);
+                        if layout.compact {
+                            label(card, hud, Label::Climate, 13., MUTED);
+                        }
+                        card.spawn(row()).with_children(|links| {
+                            button(links, hud, "Zum Ziel", UiAction::Guide, false, false);
+                            button(
+                                links,
+                                hud,
+                                "Aufträge",
+                                UiAction::Panel(Panel::Quests),
+                                false,
+                                false,
+                            );
+                        });
+                    });
+            }
         });
+
     parent
-        .spawn((Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(19.),
-            left: Val::Percent(32.),
-            width: Val::Percent(35.),
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            ..default()
-        },))
-        .with_children(|panel| label(panel, hud, Label::Notice, 16., PAPER));
+        .spawn((
+            Toast,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(if layout.compact { 106. } else { 78. }),
+                left: Val::Percent(31.),
+                width: Val::Percent(36.),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                padding: UiRect::axes(Val::Px(12.), Val::Px(7.)),
+                ..default()
+            },
+            Visibility::Hidden,
+            BackgroundColor(rgb(DARK)),
+            BorderRadius::all(Val::Px(10.)),
+        ))
+        .with_children(|toast| label(toast, hud, Label::Notice, 15., LIGHT));
 }
 
-fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, complete: bool) {
+fn stat(parent: &mut ChildSpawnerCommands, hud: &Hud, icon: usize, name: &str, value: Label) {
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            flex_shrink: 0.,
+            ..default()
+        })
+        .with_children(|stat| {
+            glyph(stat, hud, icon, 26.);
+            stat.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                ..default()
+            })
+            .with_children(|column| {
+                text(column, hud, name, 11., SUBTLE);
+                label(column, hud, value, 16., LIGHT);
+            });
+        });
+}
+
+fn navigation(parent: &mut ChildSpawnerCommands, hud: &Hud, quest: Quest) {
+    let complete = quest == Quest::Complete;
+    button(
+        parent,
+        hud,
+        "Landkarte",
+        UiAction::Panel(Panel::Map),
+        false,
+        false,
+    );
+    button(
+        parent,
+        hud,
+        if complete { "Weiterreisen" } else { "Kapitel" },
+        UiAction::Panel(Panel::Journey),
+        complete,
+        false,
+    );
+    button(
+        parent,
+        hud,
+        "Fortschritt",
+        UiAction::Panel(Panel::Progress),
+        false,
+        false,
+    );
+}
+
+fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Layout) {
     parent
         .spawn(Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(17.),
-            left: Val::Px(21.),
-            width: Val::Percent(69.),
+            bottom: Val::Px(EDGE),
+            left: Val::Px(EDGE),
+            width: Val::Percent(if layout.compact { 65. } else { 67. }),
             flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(7.),
+            align_items: AlignItems::Start,
+            row_gap: Val::Px(6.),
             ..default()
         })
         .with_children(|toolbar| {
-            toolbar.spawn(row()).with_children(|tabs| {
-                button(
-                    tabs,
-                    hud,
-                    "Landkarte",
-                    UiAction::Panel(Panel::Map),
-                    false,
-                    false,
-                );
-                button(
-                    tabs,
-                    hud,
-                    if complete { "Weiterreisen" } else { "Kapitel" },
-                    UiAction::Panel(Panel::Journey),
-                    complete,
-                    false,
-                );
-                button(
-                    tabs,
-                    hud,
-                    "Fortschritt",
-                    UiAction::Panel(Panel::Progress),
-                    false,
-                    false,
-                );
-            });
+            if !layout.compact {
+                toolbar
+                    .spawn(row())
+                    .with_children(|tabs| navigation(tabs, hud, layout.quest));
+            }
             if play.tool.choices() > 1 {
                 toolbar.spawn(row()).with_children(|options| {
-                    let page_size = 4;
+                    let page_size = if play.tool == Tool::Hippo
+                        || (layout.compact && play.tool == Tool::Miracles)
+                    {
+                        3
+                    } else {
+                        4
+                    };
                     let page = (play.option / page_size) * page_size;
-                    (page..play.tool.choices().min(page + page_size)).for_each(|index| {
+                    for index in page..play.tool.choices().min(page + page_size) {
                         button(
                             options,
                             hud,
@@ -295,91 +550,91 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, complete: b
                             index == play.option,
                             false,
                         );
-                    });
+                    }
                     if play.tool.choices() > page_size {
                         let next = if page + page_size < play.tool.choices() {
                             page + page_size
                         } else {
                             0
                         };
-                        button(
-                            options,
-                            hud,
-                            "Weitere",
-                            UiAction::Choice(next),
-                            false,
-                            false,
-                        );
+                        let category = match play.tool {
+                            Tool::Build => match next {
+                                4 => "Versorgung ›",
+                                8 => "Grenze ›",
+                                _ => "Grundbau ›",
+                            },
+                            Tool::Hippo if next == 0 => "Aufträge ›",
+                            Tool::Hippo => "Pflege ›",
+                            _ => "Weitere ›",
+                        };
+                        button(options, hud, category, UiAction::Choice(next), false, false);
                     }
-                    if play.tool == Tool::Build {
-                        button(options, hud, "Drehen", UiAction::Rotate, false, false);
-                    }
-                    if play.tool == Tool::Hippo {
+                });
+            }
+            let mut dock = row();
+            dock.padding = UiRect::all(Val::Px(5.));
+            dock.border = UiRect::all(Val::Px(2.));
+            dock.column_gap = Val::Px(5.);
+            toolbar
+                .spawn((
+                    HitArea,
+                    dock,
+                    BackgroundColor(rgb(DARK)),
+                    BorderRadius::all(Val::Px(16.)),
+                    BorderColor(rgb(BRASS)),
+                ))
+                .with_children(|tabs| {
+                    for tool in Tool::ALL {
                         button(
-                            options,
+                            tabs,
                             hud,
-                            "Loben",
-                            UiAction::Do(Action::Praise),
-                            false,
-                            false,
-                        );
-                        button(
-                            options,
-                            hud,
-                            "Snack",
-                            UiAction::Do(Action::Feed),
-                            false,
-                            false,
-                        );
-                        button(
-                            options,
-                            hud,
-                            "Pause",
-                            UiAction::Do(Action::Rest),
-                            false,
+                            tool.name(),
+                            UiAction::Tool(tool),
+                            tool == play.tool,
                             false,
                         );
                     }
                 });
-            }
-            toolbar.spawn(row()).with_children(|tabs| {
-                for tool in Tool::ALL {
-                    button(
-                        tabs,
-                        hud,
-                        tool.name(),
-                        UiAction::Tool(tool),
-                        tool == play.tool,
-                        false,
-                    );
-                }
-            });
         });
+
     parent
         .spawn((
             HitArea,
             Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Px(17.),
-                right: Val::Px(21.),
-                width: Val::Percent(25.),
-                min_width: Val::Px(194.),
-                max_width: Val::Px(270.),
+                bottom: Val::Px(EDGE),
+                right: Val::Px(EDGE),
+                width: Val::Percent(if layout.compact { 29. } else { 25. }),
+                min_width: Val::Px(if layout.compact { 166. } else { 197. }),
+                max_width: Val::Px(290.),
+                border: UiRect::all(Val::Px(2.)),
                 ..panel_node()
             },
-            BackgroundColor(rgb(CREAM)),
-            BorderRadius::all(Val::Px(14.)),
+            BackgroundColor(rgb(DARK)),
+            BorderColor(rgb(BRASS)),
+            BorderRadius::all(Val::Px(16.)),
         ))
         .with_children(|command| {
-            label(command, hud, Label::Detail, 15., MUTED);
+            label(command, hud, Label::Detail, 15., LIGHT);
             button(command, hud, "Ausführen", UiAction::Confirm, false, true);
-            if play.tool != Tool::Hand {
-                button(command, hud, "Abbrechen", UiAction::Cancel, false, false);
+            label(command, hud, Label::Controls, 12., SUBTLE);
+            if play.tool == Tool::Build {
+                button(command, hud, "Drehen", UiAction::Rotate, false, false);
+            }
+            if play.road_anchor.is_some() {
+                button(
+                    command,
+                    hud,
+                    "Weg abbrechen",
+                    UiAction::Cancel,
+                    false,
+                    false,
+                );
             }
         });
 }
 
-fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game) {
+fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: bool) {
     let region = game.region();
     let (land, water) = match region.kind {
         Biome::Valley => (0xb7bf80, 0x6daaae),
@@ -399,7 +654,7 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game) {
         .spawn((
             Node {
                 width: Val::Percent(100.),
-                height: Val::Px(142.),
+                height: Val::Px(if short { 86. } else { 156. }),
                 overflow: Overflow::clip(),
                 ..default()
             },
@@ -497,21 +752,22 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game) {
     });
 }
 
-fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play) {
+fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play, layout: Layout) {
     let region = game.region();
     let city = game.city();
     parent.spawn((
         Node{width:Val::Percent(100.),height:Val::Percent(100.),align_items:AlignItems::Center,
             justify_content:JustifyContent::Center,..default()},
-        BackgroundColor(rgb(INK).with_alpha(0.52)),
+        BackgroundColor(rgb(0x14261d).with_alpha(0.64)),
     )).with_children(|shade| {
         shade.spawn((
             HitArea,
             Node{
-                width:Val::Percent(83.),max_width:Val::Px(690.),flex_direction:FlexDirection::Column,
-                padding:UiRect::all(Val::Px(21.)),row_gap:Val::Px(10.),..default()
+                width:Val::Percent(92.),max_width:Val::Px(720.),flex_direction:FlexDirection::Column,
+                padding:UiRect::all(Val::Px(if layout.short { 12. } else { 21. })),
+                border:UiRect::all(Val::Px(2.)),row_gap:Val::Px(if layout.short { 6. } else { 10. }),..default()
             },
-            BackgroundColor(rgb(PAPER)),BorderRadius::all(Val::Px(18.)),
+            BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
             box_node.spawn(row()).with_children(|nav| {
                 button(nav,hud,"Kapitel",UiAction::Panel(Panel::Journey),play.panel==Panel::Journey,false);
@@ -532,7 +788,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play)
                             UiAction::Do(Action::Travel(index)),index==game.campaign.active,false);
                     }
                 }
-                Panel::Map => map_panel(box_node,hud,game),
+                Panel::Map => map_panel(box_node,hud,game,layout.short),
                 Panel::Progress => {
                     text(box_node,hud,"Gott, Siedlung und Kreatur",31.,INK);
                     label(box_node,hud,Label::Progress,17.,MUTED);
@@ -570,8 +826,13 @@ pub fn layout(
     window: Single<&Window, With<PrimaryWindow>>,
     mut scale: ResMut<UiScale>,
 ) {
-    let size = window.resolution.size();
-    let wanted = (size.x / 1130.).min(size.y / 600.).clamp(0.62, 1.22);
+    let safe = crate::controls::safe_insets(&window);
+    let [left, top_inset, right, bottom_inset] = safe.map(f32::from);
+    let size = Vec2::new(
+        window.width() - left - right,
+        window.height() - top_inset - bottom_inset,
+    );
+    let wanted = (size.x / 1500.).min(size.y / 720.).clamp(1., 1.14);
     if (scale.0 - wanted).abs() > 0.01 {
         scale.0 = wanted;
     }
@@ -588,7 +849,11 @@ pub fn layout(
         } else {
             [0; Talent::ALL.len()]
         },
-        paused: play.paused,
+        objective_expanded: play.objective_expanded,
+        road_started: play.road_anchor.is_some(),
+        compact: size.x / scale.0 < 920.,
+        short: size.y / scale.0 < 490.,
+        safe,
     };
     if hud.layout == Some(key) {
         return;
@@ -596,22 +861,36 @@ pub fn layout(
     if let Some(root) = hud.root.take() {
         commands.entity(root).despawn()
     }
+    let inset = |index| Val::Px(f32::from(safe[index]) / scale.0);
     let entity = commands
         .spawn((
             Name::new("Spieloberfläche"),
             Node {
                 width: Val::Percent(100.),
                 height: Val::Percent(100.),
+                padding: UiRect {
+                    left: inset(0),
+                    top: inset(1),
+                    right: inset(2),
+                    bottom: inset(3),
+                },
                 ..default()
             },
         ))
         .with_children(|root| {
-            if play.panel == Panel::Closed {
-                top(root, &hud, &game);
-                bottom(root, &hud, &play, key.quest == Quest::Complete);
-            } else {
-                modal(root, &hud, &game, &play);
-            }
+            root.spawn(Node {
+                width: Val::Percent(100.),
+                height: Val::Percent(100.),
+                ..default()
+            })
+            .with_children(|safe_root| {
+                if play.panel == Panel::Closed {
+                    top(safe_root, &hud, &game, key);
+                    bottom(safe_root, &hud, &play, key);
+                } else {
+                    modal(safe_root, &hud, &game, &play, key);
+                }
+            });
         })
         .id();
     hud.root = Some(entity);
@@ -624,33 +903,34 @@ pub fn update(
     target: Res<Target>,
     time: Res<Time>,
     mut labels: Query<(&Label, &mut Text)>,
-    mut buttons: Query<(
-        &ControlButton,
-        &Interaction,
-        &ComputedNode,
-        &GlobalTransform,
-        &mut BackgroundColor,
-    )>,
-    window: Single<&Window, With<PrimaryWindow>>,
+    mut buttons: Query<
+        (
+            &ControlButton,
+            &Interaction,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &mut Outline,
+        ),
+        Without<Toast>,
+    >,
+    mut toasts: Query<(&mut Visibility, &mut BackgroundColor), With<Toast>>,
+    mut mana: Query<&mut Node, With<ManaFill>>,
 ) {
     let city = game.city();
     let region = game.region();
     let gifts = game.campaign.gifts;
     for (tag, mut text) in &mut labels {
         let value = match tag {
-            Label::Stock => format!(
-                "Holz {}   Stein {}   Nahrung {}",
-                city.stock[0], city.stock[1], city.stock[2]
-            ),
-            Label::Faith => format!(
-                "Glaube {}  ·  Wunder {:.0}/{:.0}",
-                city.faith,
-                city.mana,
-                gifts.mana_cap()
-            ),
+            Label::Stock(material) => city.stock[material.index()].to_string(),
+            Label::Faith => city.faith.to_string(),
+            Label::Mana => format!("{:.0}/{:.0}", city.mana, gifts.mana_cap()),
             Label::Objective => city.objective(region),
             Label::Climate => region.weather(city.weather_time).name().into(),
-            Label::Quest => city.quest.name().into(),
+            Label::Quest => format!(
+                "{} {}",
+                city.quest.name(),
+                if play.objective_expanded { "−" } else { "+" }
+            ),
             Label::Notice => {
                 if time.elapsed_secs() < play.notice_until {
                     play.notice.clone()
@@ -659,6 +939,13 @@ pub fn update(
                 }
             }
             Label::Confirm => target.label.clone(),
+            Label::Controls => {
+                if play.gamepad {
+                    "Südtaste · Bestätigen".into()
+                } else {
+                    String::new()
+                }
+            }
             Label::Detail if play.tool == Tool::Hippo => format!(
                 "{} · {:.0}% Kraft\n{}",
                 city.creature_status(),
@@ -716,24 +1003,52 @@ pub fn update(
             text.0 = value;
         }
     }
-    let pointer = play.pointer.map(|p| p * window.scale_factor());
-    for (button, interaction, node, layout, mut color) in &mut buttons {
-        let hovered = *interaction == Interaction::Hovered
-            || (play.gamepad && pointer.is_some_and(|p| contains(node, layout, p)));
-        let shade = if matches!(button.action, UiAction::Confirm) && !target.legal {
-            0x6a6050
-        } else if hovered && button.strong {
-            0x52745e
-        } else if hovered {
-            0xe5d5ac
-        } else if button.strong {
-            DARK
-        } else if button.selected {
-            GREEN
+    for mut meter in &mut mana {
+        meter.width = Val::Percent((100. * city.mana / gifts.mana_cap()).clamp(0., 100.));
+    }
+    for (mut visible, mut surface) in &mut toasts {
+        *visible = if !play.notice.is_empty() && time.elapsed_secs() < play.notice_until {
+            Visibility::Visible
         } else {
-            CREAM
+            Visibility::Hidden
+        };
+        surface.0 = rgb(if play.notice_ok { DARK } else { 0x69402f });
+    }
+    for (button, interaction, mut color, mut border, mut outline) in &mut buttons {
+        let focused = play.panel != Panel::Closed && play.focus == Some(button.action);
+        let hovered = *interaction != Interaction::None;
+        let unavailable = match button.action {
+            UiAction::Confirm => !target.legal,
+            UiAction::Do(Action::Travel(index)) => index > game.campaign.unlocked,
+            UiAction::Do(Action::Learn(talent)) => gifts.rank(talent) >= 2 || gifts.points == 0,
+            _ => false,
+        };
+        let shade = if unavailable {
+            if button.strong { 0xc9c3ab } else { 0x59665a }
+        } else if focused || hovered {
+            if button.strong {
+                0xffe5b2
+            } else if button.selected {
+                0xe5f2cc
+            } else {
+                0x4a6855
+            }
+        } else if button.strong {
+            GOLD
+        } else if button.selected {
+            JADE
+        } else {
+            SURFACE
         };
         color.0 = rgb(shade);
+        border.0 = rgb(if focused {
+            0xffecaa
+        } else if button.selected || button.strong {
+            GOLD
+        } else {
+            BRASS
+        });
+        outline.color = if focused { rgb(0x68502d) } else { Color::NONE };
     }
 }
 
@@ -743,6 +1058,75 @@ fn contains(node: &ComputedNode, transform: &GlobalTransform, point: Vec2) -> bo
             .abs()
             .cmple(node.size() * 0.5))
         .all()
+}
+
+pub fn move_focus(areas: &HitTest, current: Option<UiAction>, direction: Vec2) -> Option<UiAction> {
+    let mut buttons = areas
+        .iter()
+        .filter_map(|(button, node, transform, visible)| {
+            let button = button?;
+            (visible.get() && !node.is_empty()).then_some((
+                button.action,
+                transform.translation().truncate(),
+                node.stack_index(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    buttons.sort_by_key(|item| item.2);
+    focus_in(&buttons, current, direction)
+}
+
+fn focus_in(
+    buttons: &[(UiAction, Vec2, u32)],
+    current: Option<UiAction>,
+    direction: Vec2,
+) -> Option<UiAction> {
+    let &(action, origin, _) = buttons
+        .iter()
+        .find(|item| Some(item.0) == current)
+        .or_else(|| buttons.first())?;
+    if direction == Vec2::ZERO {
+        return Some(action);
+    }
+    let heading = direction.normalize();
+    buttons
+        .iter()
+        .copied()
+        .filter_map(|(next, point, _)| {
+            let offset = point - origin;
+            let along = offset.dot(heading);
+            (along > 2.).then(|| (along + offset.perp_dot(heading).abs() * 2.7, next))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, next)| next)
+        .or(Some(action))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_follows_spatial_directions_and_survives_relayout() {
+        let map = UiAction::Panel(Panel::Map);
+        let progress = UiAction::Panel(Panel::Progress);
+        let chapter = UiAction::Panel(Panel::Journey);
+        let travel = UiAction::Landscape;
+        let controls = [
+            (chapter, Vec2::new(60., 35.), 0),
+            (map, Vec2::new(178., 35.), 1),
+            (progress, Vec2::new(310., 35.), 2),
+            (travel, Vec2::new(154., 170.), 3),
+        ];
+        assert_eq!(focus_in(&controls, Some(map), Vec2::X), Some(progress));
+        assert_eq!(focus_in(&controls, Some(map), Vec2::Y), Some(travel));
+        assert_eq!(focus_in(&controls, Some(travel), Vec2::NEG_Y), Some(map));
+        assert_eq!(focus_in(&controls, Some(progress), Vec2::X), Some(progress));
+        assert_eq!(
+            focus_in(&controls, Some(UiAction::Cancel), Vec2::ZERO),
+            Some(chapter)
+        );
+    }
 }
 
 pub fn hit(areas: &HitTest, point: Vec2, scale: f32) -> (bool, Option<UiAction>) {

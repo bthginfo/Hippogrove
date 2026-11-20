@@ -45,7 +45,7 @@ impl Tool {
         match self {
             Self::Build => Building::ALL.len(),
             Self::Miracles => Miracle::ALL.len(),
-            Self::Hippo => 3,
+            Self::Hippo => 6,
             Self::Plan => 2,
             _ => 1,
         }
@@ -55,7 +55,7 @@ impl Tool {
         match self {
             Self::Build => Building::ALL[index].name(),
             Self::Miracles => Miracle::ALL[index].name(),
-            Self::Hippo => ["Sammeln", "Wache", "Feldpflege"][index],
+            Self::Hippo => ["Sammeln", "Wache", "Feldpflege", "Loben", "Snack", "Pause"][index],
             Self::Plan => ["Wege", "Ausbau"][index],
             _ => self.name(),
         }
@@ -72,7 +72,7 @@ pub enum Panel {
     Quests,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiAction {
     Tool(Tool),
     Choice(usize),
@@ -83,6 +83,7 @@ pub enum UiAction {
     Panel(Panel),
     Focus(Tile),
     Landscape,
+    ToggleObjective,
     Do(Action),
 }
 
@@ -94,8 +95,11 @@ pub struct Play {
     pub option: usize,
     pub rotation: u8,
     pub road_anchor: Option<Tile>,
+    pub objective_expanded: bool,
+    pub focus: Option<UiAction>,
     pub notice: String,
     pub notice_until: f32,
+    pub notice_ok: bool,
     pub last_magic: Option<(Miracle, Tile, u64)>,
     pub gamepad: bool,
     pub pointer: Option<Vec2>,
@@ -112,8 +116,11 @@ impl Play {
             option: 0,
             rotation: 0,
             road_anchor: None,
-            notice: game.region().lore.clone(),
-            notice_until: 8.,
+            objective_expanded: true,
+            focus: None,
+            notice: String::new(),
+            notice_until: 0.,
+            notice_ok: true,
             last_magic: None,
             gamepad: false,
             pointer: None,
@@ -167,6 +174,9 @@ impl Play {
             Tool::Helpers => Action::Assign(self.aim, false),
             Tool::Hippo if self.option == 1 => Action::Watch(self.aim),
             Tool::Hippo if self.option == 2 => Action::Tend(self.aim),
+            Tool::Hippo if self.option == 3 => Action::Praise,
+            Tool::Hippo if self.option == 4 => Action::Feed,
+            Tool::Hippo if self.option == 5 => Action::Rest,
             Tool::Hippo => Action::Assign(self.aim, true),
             Tool::Miracles => Action::Cast(self.miracle(), self.aim),
             Tool::Plan if self.option == 1 => Action::Upgrade(self.aim),
@@ -236,6 +246,7 @@ impl Play {
                 } else {
                     self.notice = "Beginne auf freiem Boden im Einflussgebiet.".into();
                     self.notice_until = now + 4.;
+                    self.notice_ok = false;
                 }
             }
             UiAction::Confirm if self.panel == Panel::Closed => {
@@ -245,6 +256,7 @@ impl Play {
             UiAction::Cancel => {
                 if self.panel != Panel::Closed {
                     self.panel = Panel::Closed;
+                    self.focus = None;
                 } else if self.road_anchor.is_some() {
                     self.road_anchor = None;
                 } else {
@@ -261,11 +273,13 @@ impl Play {
                 self.aim = tile;
                 self.tool(Tool::Hand);
                 self.panel = Panel::Closed;
+                self.focus = None;
                 self.pointer = None;
                 view.focus(tile);
             }
             UiAction::Landscape => {
                 self.panel = Panel::Closed;
+                self.focus = None;
                 view.landscape();
                 self.pointer = None;
             }
@@ -275,7 +289,9 @@ impl Play {
                 } else {
                     panel
                 };
+                self.focus = None;
             }
+            UiAction::ToggleObjective => self.objective_expanded = !self.objective_expanded,
             UiAction::Do(action) => return self.execute(action, game, view, now),
         }
         false
@@ -287,6 +303,7 @@ impl Play {
         let success = result.is_ok();
         self.notice = result.unwrap_or_else(|error| error);
         self.notice_until = now + 5.;
+        self.notice_ok = success;
         if success {
             self.revision = self.revision.wrapping_add(1);
             if matches!(action, Action::Road(..)) {
@@ -298,15 +315,17 @@ impl Play {
             if previous != game.campaign.active {
                 self.tool = Tool::Hand;
                 self.panel = Panel::Closed;
+                self.focus = None;
                 self.option = 0;
                 self.road_anchor = None;
                 self.last_magic = None;
                 self.aim = game.region().sources[0].tile;
-                self.notice = game.region().lore.clone();
+                self.notice = game.region().subtitle.clone();
                 self.notice_until = now + 8.;
                 *view = CameraRig::new(game);
             } else if matches!(action, Action::Travel(_)) {
                 self.panel = Panel::Closed;
+                self.focus = None;
             }
         }
         success
@@ -517,6 +536,25 @@ impl Target {
                 }
                 .into();
                 "Feld pflegen".into()
+            }
+            Action::Praise => {
+                self.legal = city.lesson.is_some();
+                self.detail = if self.legal {
+                    "Lob stärkt den Kreaturenrang."
+                } else {
+                    "Lobe die Kreatur nach einer Lieferung, Wache oder Ernte."
+                }
+                .into();
+                "Nilpferd loben".into()
+            }
+            Action::Feed => {
+                self.legal = city.energy < 95. && city.stock[2] >= 2;
+                self.detail = "2 Nahrung · stellt bis zu 55 Kraft wieder her".into();
+                "Snack geben".into()
+            }
+            Action::Rest => {
+                self.detail = "Beendet den Auftrag. Die Kreatur erholt sich.".into();
+                "Pause einlegen".into()
             }
             Action::Repair => {
                 self.detail = stock_text(region.rebuild);

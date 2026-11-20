@@ -308,7 +308,7 @@ impl Miracle {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Talent {
     Rain,
     Spring,
@@ -360,7 +360,7 @@ impl Gifts {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     Hand(Tile),
     Build(Building, Tile, u8),
