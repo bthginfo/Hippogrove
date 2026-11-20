@@ -1,4 +1,4 @@
-use super::{Art, block, mound, parcel, part};
+use super::{Art, block, mound, parcel, part, stonework};
 use crate::{
     civic::Civic,
     region::{Biome, Material},
@@ -110,7 +110,7 @@ fn roof(
         parent,
         art,
         &art.ridge,
-        [x, y + rise * 0.83, z],
+        [x, y + rise * 0.55 + 0.036, z],
         [0.14, 0.13, length + 0.09],
     );
     if biome == Biome::Fjord {
@@ -120,7 +120,7 @@ fn roof(
                 parent,
                 &art.cube,
                 &art.plank,
-                Vec3::new(x, y + rise * 0.73, z + side * length * 0.47),
+                Vec3::new(x, y + rise * 0.55 + 0.03, z + side * length * 0.47),
                 Vec3::new(0.1, 0.70, 0.13),
                 Quat::from_rotation_z(side * 0.69),
             );
@@ -128,7 +128,7 @@ fn roof(
                 parent,
                 &art.cube,
                 &art.plank,
-                Vec3::new(x, y + rise * 0.73, z + side * length * 0.47),
+                Vec3::new(x, y + rise * 0.55 + 0.03, z + side * length * 0.47),
                 Vec3::new(0.1, 0.70, 0.13),
                 Quat::from_rotation_z(-side * 0.69),
             );
@@ -220,6 +220,14 @@ fn shell(
         [x, h / 2. + 0.17, z],
         [w, h, d],
     );
+    if biome == Biome::Aegean {
+        stonework(
+            parent,
+            art,
+            Vec3::new(x, h / 2. + 0.17, z),
+            Vec3::new(w, h, d),
+        );
+    }
     box_at(
         parent,
         art,

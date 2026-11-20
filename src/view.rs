@@ -1,6 +1,6 @@
 use bevy::{
     core_pipeline::{fxaa::Fxaa, tonemapping::Tonemapping},
-    pbr::CascadeShadowConfigBuilder,
+    pbr::DistanceFog,
     prelude::*,
     render::camera::ScalingMode,
 };
@@ -9,7 +9,8 @@ use crate::{
     art::{self, Art, block, mound, part},
     game::{Building, Crop, Game, MAX_ROAD_RUN, MAX_WALKERS, Miracle, Quest, Walker},
     play::{CameraRig, Panel, Play, Target, Tool},
-    region::{Biome, CELL, Material, Weather},
+    region::{Biome, CELL, Material, Tile},
+    terrain,
 };
 
 #[derive(Component)]
@@ -71,7 +72,7 @@ pub enum CarryView {
 pub struct Cloud;
 
 #[derive(Component)]
-pub struct GroundRing;
+pub struct GroundRing(Option<(usize, Tile, i16, bool)>);
 
 #[derive(Clone, Copy, Component)]
 pub enum Blueprint {
@@ -83,17 +84,20 @@ pub enum Blueprint {
 }
 
 #[derive(Component)]
-pub struct WeatherParticle {
-    origin: Vec3,
-    drift: f32,
+pub struct Effect {
+    age: f32,
+    length: f32,
+    velocity: Vec3,
+    scale: f32,
+    phase: EffectPhase,
 }
 
-#[derive(Component)]
-pub struct Effect {
-    pub age: f32,
-    pub length: f32,
-    pub drift: Vec3,
-    pub scale: f32,
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum EffectPhase {
+    Rising,
+    Falling,
+    Splash,
+    Flash,
 }
 
 pub fn setup(
@@ -121,28 +125,9 @@ pub fn setup(
         Msaa::Off,
         Fxaa::default(),
         Tonemapping::None,
+        DistanceFog::default(),
     ));
-    commands.insert_resource(AmbientLight {
-        color: art::rgb(0xffefd9),
-        brightness: 900.,
-        ..default()
-    });
-    commands.spawn((
-        Name::new("Weiches Sonnenlicht"),
-        DirectionalLight {
-            color: art::rgb(0xffefd8),
-            illuminance: 2770.,
-            shadows_enabled: true,
-            ..default()
-        },
-        CascadeShadowConfigBuilder {
-            num_cascades: 1,
-            maximum_distance: 54.,
-            ..default()
-        }
-        .build(),
-        Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, -0.85, -0.93, 0.)),
-    ));
+    crate::atmosphere::setup(&mut commands, &mut materials, &art);
 
     commands
         .spawn((Cloud, Transform::default(), Visibility::Visible))
@@ -200,7 +185,7 @@ pub fn setup(
             }
         });
     commands.spawn((
-        GroundRing,
+        GroundRing(None),
         Mesh3d(art.ring.clone()),
         MeshMaterial3d(art.gold.clone()),
         Transform::default(),
@@ -333,7 +318,13 @@ fn villager(parent: &mut ChildSpawnerCommands, art: &Art, guard: bool) {
     }
 }
 
-fn spawn_walker(parent: &mut ChildSpawnerCommands, art: &Art, index: usize, walker: &Walker) {
+fn spawn_walker(
+    parent: &mut ChildSpawnerCommands,
+    art: &Art,
+    index: usize,
+    walker: &Walker,
+    ground: f32,
+) {
     let hippo = walker.hippo;
     let scale = actor_scale(walker);
     parent
@@ -343,7 +334,7 @@ fn spawn_walker(parent: &mut ChildSpawnerCommands, art: &Art, index: usize, walk
                 speed: 0.,
                 phase: 0.,
             },
-            Transform::from_translation(walker.world())
+            Transform::from_translation(walker.world().with_y(ground))
                 .with_scale(Vec3::splat(scale))
                 .with_rotation(Quat::from_rotation_y(0.44)),
             Visibility::Visible,
@@ -458,6 +449,7 @@ pub fn sync_board(
     art: Res<Art>,
     game: Res<Game>,
     mut board: ResMut<Board>,
+    scenery: Query<(Entity, &art::LandscapeProp)>,
 ) {
     let current = game.campaign.active;
     let region = game.region();
@@ -466,10 +458,7 @@ pub fn sync_board(
         if let Some(root) = board.root {
             commands.entity(root).despawn();
         }
-        let ground = meshes.add(art::landscape(region));
-        let extents = region.bounds.padded(7);
-        let min = extents.0.world();
-        let max = extents.1.world();
+        let grounded = |tile: Tile| terrain::on_ground(region, tile.world());
         let root = commands
             .spawn((
                 Name::new(region.name.clone()),
@@ -477,24 +466,12 @@ pub fn sync_board(
                 Visibility::Visible,
             ))
             .with_children(|parent| {
-                parent.spawn((
-                    Mesh3d(ground),
-                    MeshMaterial3d(art.ground.clone()),
-                    Transform::default(),
-                ));
-                block(
-                    parent,
-                    &art,
-                    &art.clay,
-                    (min + max) * 0.5 - Vec3::Y * 0.64,
-                    max - min + Vec3::new(CELL, 0.57, CELL),
-                );
-                art::scenery(parent, &art, region);
+                art::landscape(parent, &mut meshes, &art, region, city);
                 for (i, source) in region.sources.iter().enumerate() {
                     parent
                         .spawn((
                             SourceView(i),
-                            Transform::from_translation(source.tile.world()),
+                            Transform::from_translation(grounded(source.tile)),
                             Visibility::Visible,
                         ))
                         .with_children(|p| {
@@ -507,7 +484,10 @@ pub fn sync_board(
                     .chain(region.districts.iter().map(|district| district.center))
                 {
                     parent
-                        .spawn((Transform::from_translation(p.world()), Visibility::Visible))
+                        .spawn((
+                            Transform::from_translation(grounded(p)),
+                            Visibility::Visible,
+                        ))
                         .with_children(|p| {
                             if region.kind == Biome::Aegean {
                                 art::building(p, &art, region.kind, Building::Shrine);
@@ -520,7 +500,7 @@ pub fn sync_board(
                     for tile in region.district_houses(index) {
                         parent
                             .spawn((
-                                Transform::from_translation(tile.world())
+                                Transform::from_translation(grounded(tile))
                                     .with_scale(Vec3::splat(0.92)),
                                 Visibility::Visible,
                             ))
@@ -528,7 +508,7 @@ pub fn sync_board(
                                 art::building(p, &art, region.kind, Building::House)
                             });
                     }
-                    let p = district.center.world();
+                    let p = grounded(district.center);
                     parent.spawn((
                         RivalFlag(Some(index)),
                         Mesh3d(art.ring.clone()),
@@ -539,7 +519,7 @@ pub fn sync_board(
                 }
                 parent
                     .spawn((
-                        Transform::from_translation(region.depot.world()),
+                        Transform::from_translation(grounded(region.depot)),
                         Visibility::Visible,
                     ))
                     .with_children(|p| {
@@ -564,7 +544,8 @@ pub fn sync_board(
                 for tile in region.rival_buildings() {
                     parent
                         .spawn((
-                            Transform::from_translation(tile.world()).with_scale(Vec3::splat(0.91)),
+                            Transform::from_translation(grounded(tile))
+                                .with_scale(Vec3::splat(0.91)),
                             Visibility::Visible,
                         ))
                         .with_children(|p| {
@@ -586,11 +567,11 @@ pub fn sync_board(
                             p.commands().entity(flag).insert(RivalFlag(None));
                         });
                 }
-                for (i, tile) in region.guards.iter().enumerate() {
+                for (i, &tile) in region.guards.iter().enumerate() {
                     parent
                         .spawn((
                             GuardView(i),
-                            Transform::from_translation(tile.world()),
+                            Transform::from_translation(grounded(tile)),
                             Visibility::Visible,
                         ))
                         .with_children(|p| {
@@ -602,33 +583,10 @@ pub fn sync_board(
                     PlotMarker,
                     Mesh3d(art.ring.clone()),
                     MeshMaterial3d(art.gold.clone()),
-                    Transform::from_translation(region.frontier.world() + Vec3::Y * 0.055)
+                    Transform::from_translation(grounded(region.frontier) + Vec3::Y * 0.055)
                         .with_scale(Vec3::splat(0.68)),
                     Visibility::Hidden,
                 ));
-                if matches!(region.kind, Biome::Fjord | Biome::Valley | Biome::Terraces) {
-                    let material = match region.kind {
-                        Biome::Fjord => &art.white,
-                        Biome::Valley => &art.ripple,
-                        _ => &art.plaster,
-                    };
-                    for i in 0..44 {
-                        let p = Vec3::new(
-                            (i * 17 % 62) as f32 * 0.51 - 15.,
-                            0.,
-                            (i * 23 % 58) as f32 * 0.54 - 16.,
-                        );
-                        let flake = mound(parent, &art, material, p, Vec3::splat(0.078));
-                        parent.commands().entity(flake).insert((
-                            WeatherParticle {
-                                origin: p,
-                                drift: (i % 9) as f32,
-                            },
-                            bevy::pbr::NotShadowCaster,
-                            Visibility::Hidden,
-                        ));
-                    }
-                }
             })
             .id();
         *board = Board {
@@ -704,12 +662,21 @@ pub fn sync_board(
         board.roads = Some((city.roads.len(), entity));
     }
     for (index, site) in city.buildings.iter().enumerate().skip(board.buildings) {
+        for (entity, spot) in &scenery {
+            if site.kind.tiles(site.tile).any(|tile| tile == spot.0) {
+                commands.entity(entity).try_despawn();
+            }
+        }
         commands
             .spawn((
                 ChildOf(root),
-                Transform::from_translation(site.kind.center(site.tile)).with_rotation(
-                    Quat::from_rotation_y(f32::from(site.rotation) * std::f32::consts::FRAC_PI_2),
-                ),
+                Transform::from_translation(terrain::on_ground(
+                    region,
+                    site.kind.center(site.tile),
+                ))
+                .with_rotation(Quat::from_rotation_y(
+                    f32::from(site.rotation) * std::f32::consts::FRAC_PI_2,
+                )),
                 Visibility::Visible,
             ))
             .with_children(|parent| {
@@ -725,22 +692,14 @@ pub fn sync_board(
                     parent
                         .spawn((CropView(index), Transform::default(), Visibility::Hidden))
                         .with_children(|plants| {
-                            for x in [-0.96, -0.32, 0.32, 0.96] {
-                                for z in [-0.91, -0.30, 0.30, 0.91] {
-                                    let point = Vec3::new(x, 0.28, z);
-                                    mound(
+                            for (i, x) in [-0.96, -0.32, 0.32, 0.96].into_iter().enumerate() {
+                                for (j, z) in [-0.87, -0.28, 0.28, 0.87].into_iter().enumerate() {
+                                    art::place_scene(
                                         plants,
-                                        &art,
-                                        &art.leaf[2],
-                                        point,
-                                        Vec3::new(0.32, 0.38, 0.29),
-                                    );
-                                    mound(
-                                        plants,
-                                        &art,
-                                        &art.moss,
-                                        point + Vec3::Y * 0.15,
-                                        Vec3::new(0.24, 0.21, 0.22),
+                                        &art.waldwinkel.crop,
+                                        Vec3::new(x, 0.16, z),
+                                        0.60,
+                                        (i * 19 + j * 11) as f32 * 0.29,
                                     );
                                 }
                             }
@@ -750,9 +709,15 @@ pub fn sync_board(
     }
     board.buildings = city.buildings.len();
     for (index, walker) in city.walkers.iter().enumerate().skip(board.walkers) {
-        commands
-            .entity(root)
-            .with_children(|parent| spawn_walker(parent, &art, index, walker));
+        commands.entity(root).with_children(|parent| {
+            spawn_walker(
+                parent,
+                &art,
+                index,
+                walker,
+                terrain::actor_height(region, walker.world(), city.bridge_fixed),
+            )
+        });
     }
     board.walkers = city.walkers.len();
 }
@@ -838,12 +803,14 @@ pub fn animate(
     mut limbs: Query<(&Limb, &mut Transform), Without<WalkerView>>,
 ) {
     let delta = time.delta_secs().max(0.0001);
+    let city = game.city();
+    let region = game.region();
     let mut motion = [(0., 0.); MAX_WALKERS];
     for (mut meta, mut pose) in &mut actors {
         let Some(walker) = game.city().walkers.get(meta.index) else {
             continue;
         };
-        let goal = walker.world();
+        let goal = walker.world().with_y(0.);
         let offset = goal - pose.translation.with_y(0.);
         let blend = 1. - (-16. * delta).exp();
         let speed = (offset.length() * blend / delta / 2.8).clamp(0., 1.);
@@ -854,7 +821,9 @@ pub fn animate(
             pose.rotation = pose.rotation.slerp(facing, (delta * 10.).min(1.));
         }
         let bob = meta.phase.sin().abs() * 0.055 * meta.speed;
-        pose.translation = (pose.translation + offset * blend).with_y(bob);
+        let next = pose.translation + offset * blend;
+        let ground = terrain::actor_height(region, next, city.bridge_fixed);
+        pose.translation = next.with_y(ground + bob);
         pose.scale = Vec3::splat(actor_scale(walker));
         if let Some(state) = motion.get_mut(meta.index) {
             *state = (meta.phase, meta.speed);
@@ -888,13 +857,15 @@ pub fn aim(
     play: Res<Play>,
     target: Res<Target>,
     art: Res<Art>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut cloud: Single<
         (&mut Transform, &mut Visibility),
         (With<Cloud>, Without<GroundRing>, Without<Blueprint>),
     >,
     mut ring: Single<
         (
-            &mut Transform,
+            &mut GroundRing,
+            &mut Mesh3d,
             &mut Visibility,
             &mut MeshMaterial3d<StandardMaterial>,
         ),
@@ -911,8 +882,14 @@ pub fn aim(
         (Without<Cloud>, Without<GroundRing>),
     >,
 ) {
-    let open = play.panel == Panel::Closed && game.region().bounds.contains(play.aim);
-    let p = play.aim.world();
+    let region = game.region();
+    let city = game.city();
+    let open = play.panel == Panel::Closed && region.bounds.contains(play.aim);
+    let p = play.aim.world().with_y(terrain::actor_height(
+        region,
+        play.aim.world(),
+        city.bridge_fixed,
+    ));
     let (cloud_pose, cloud_visible) = &mut *cloud;
     cloud_pose.translation = p + Vec3::new(0.18, 1.56 + time.elapsed_secs().sin() * 0.065, -0.23);
     cloud_pose.rotation = Quat::from_rotation_y(0.51);
@@ -922,13 +899,22 @@ pub fn aim(
     } else {
         Visibility::Hidden
     };
-    let (ring_pose, ring_visible, ring_surface) = &mut *ring;
-    ring_pose.translation = p + Vec3::Y * 0.067;
-    ring_pose.scale = Vec3::splat(if play.tool == Tool::Miracles {
-        f32::from(play.miracle().radius(game.campaign.gifts)) * CELL
+    let (ring_shape, ring_mesh, ring_visible, ring_surface) = &mut *ring;
+    let cells = if play.tool == Tool::Miracles {
+        play.miracle().radius(game.campaign.gifts)
     } else {
-        0.74
-    });
+        0
+    };
+    let signature = (game.campaign.active, play.aim, cells, city.bridge_fixed);
+    if open && play.tool != Tool::Build && ring_shape.0 != Some(signature) {
+        let radius = if cells == 0 {
+            0.74
+        } else {
+            f32::from(cells) * CELL
+        };
+        ring_mesh.0 = meshes.add(art::surface_ring(region, p, radius, city.bridge_fixed));
+        ring_shape.0 = Some(signature);
+    }
     ring_surface.0 = if target.legal {
         art.gold.clone()
     } else {
@@ -949,7 +935,7 @@ pub fn aim(
             *visible = if let Some(tile) =
                 tile.filter(|_| open && play.tool == Tool::Plan && play.option == 0)
             {
-                pose.translation = tile.world() + Vec3::Y * 0.082;
+                pose.translation = terrain::on_ground(region, tile.world()) + Vec3::Y * 0.082;
                 pose.scale = Vec3::splat(CELL * 0.87);
                 surface.0 = if index == 0 {
                     art.gold.clone()
@@ -976,7 +962,7 @@ pub fn aim(
         if *visible == Visibility::Hidden {
             continue;
         }
-        let center = kind.center(play.aim);
+        let center = terrain::on_ground(region, kind.center(play.aim));
         let rotation = Quat::from_rotation_y(play.rotation as f32 * std::f32::consts::FRAC_PI_2);
         pose.rotation = rotation;
         surface.0 = if target.legal {
@@ -1026,66 +1012,6 @@ pub fn aim(
     }
 }
 
-pub fn weather(
-    time: Res<Time>,
-    mut ambient: ResMut<AmbientLight>,
-    mut background: ResMut<ClearColor>,
-    game: Res<Game>,
-    view: Res<CameraRig>,
-    mut flakes: Query<(&WeatherParticle, &mut Transform, &mut Visibility)>,
-) {
-    let city = game.city();
-    background.0 = art::rgb(if game.region().kind == Biome::Aegean {
-        0x73b6c8
-    } else {
-        0xc9d1a7
-    });
-    let weather = game.region().weather(city.weather_time);
-    let ambient_goal = match weather {
-        Weather::Snow | Weather::Mist => 745.,
-        Weather::Drought => 940.,
-        _ if city.rainfall > 0. || weather == Weather::Showers => 760.,
-        _ => 900.,
-    };
-    ambient.brightness += (ambient_goal - ambient.brightness) * time.delta_secs().min(1.);
-    let visible =
-        matches!(weather, Weather::Snow | Weather::Showers | Weather::Mist) && view.height <= 38.;
-    for (flake, mut pose, mut visibility) in &mut flakes {
-        *visibility = if visible {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
-        if !visible {
-            continue;
-        }
-        let t = city.weather_time;
-        let speed = if weather == Weather::Showers {
-            5.
-        } else {
-            0.77
-        };
-        let h = 6.5 - (t * speed + flake.drift * 0.73).rem_euclid(6.5);
-        pose.scale = match weather {
-            Weather::Showers => Vec3::new(0.045, 0.31, 0.045),
-            Weather::Mist => Vec3::new(0.68, 0.084, 0.23),
-            _ => Vec3::splat(0.082),
-        };
-        pose.translation = view.target
-            + flake.origin
-            + Vec3::new(
-                (t * 0.60 + flake.drift).sin() * 0.7,
-                if weather == Weather::Mist {
-                    0.45 + h * 0.11
-                } else {
-                    h
-                },
-                (t * 0.3).cos() * 0.61,
-            );
-        pose.rotate_y(time.delta_secs() * 0.26);
-    }
-}
-
 pub fn magic(
     mut commands: Commands,
     time: Res<Time>,
@@ -1093,8 +1019,11 @@ pub fn magic(
     game: Res<Game>,
     art: Res<Art>,
     mut board: ResMut<Board>,
-    mut effects: Query<(Entity, &mut Effect, &mut Transform)>,
+    mut effects: Query<(Entity, &mut Effect, &mut Transform, &mut Mesh3d)>,
 ) {
+    let city = game.city();
+    let region = game.region();
+    let contact = |point| terrain::actor_height(region, point, city.bridge_fixed);
     if let Some((spell, tile, revision)) = play.last_magic {
         if revision != board.seen_magic {
             board.seen_magic = revision;
@@ -1107,6 +1036,7 @@ pub fn magic(
                 Miracle::Thunder => &art.amber,
             };
             let radius = f32::from(spell.radius(game.campaign.gifts)) * CELL;
+            let center = tile.world().with_y(contact(tile.world()));
             if let Some(root) = board.root {
                 if spell == Miracle::Thunder {
                     for (x, z, h, angle) in [
@@ -1119,12 +1049,13 @@ pub fn magic(
                             Effect {
                                 age: 0.,
                                 length: 0.26,
-                                drift: Vec3::ZERO,
+                                velocity: Vec3::ZERO,
                                 scale: 0.17,
+                                phase: EffectPhase::Flash,
                             },
                             Mesh3d(art.cube.clone()),
                             MeshMaterial3d(art.gold.clone()),
-                            Transform::from_translation(tile.world() + Vec3::new(x, h, z))
+                            Transform::from_translation(center + Vec3::new(x, h, z))
                                 .with_scale(Vec3::new(0.17, 2.35, 0.17))
                                 .with_rotation(Quat::from_rotation_z(angle)),
                             bevy::pbr::NotShadowCaster,
@@ -1135,15 +1066,14 @@ pub fn magic(
                     let angle = i as f32 * 2.39996;
                     let outward = Vec3::new(angle.cos(), 0., angle.sin());
                     let frac = (i as f32 * 0.618).fract();
-                    let start = tile.world()
-                        + outward * radius * frac.sqrt()
-                        + Vec3::Y
-                            * if spell == Miracle::Rain {
-                                1.5 + frac * 3.4
-                            } else {
-                                0.25 + frac
-                            };
-                    let drift = match spell {
+                    let start = center + outward * radius * frac.sqrt();
+                    let height = if spell == Miracle::Rain {
+                        1.6 + frac * 3.4
+                    } else {
+                        0.25 + frac
+                    };
+                    let start = start.with_y(contact(start) + height);
+                    let velocity = match spell {
                         Miracle::Rain => Vec3::new(0.1, -1.9, 0.05),
                         Miracle::Mend => -outward * 0.5 + Vec3::Y * 1.45,
                         Miracle::Bloom => outward * 0.41 + Vec3::Y * 0.84,
@@ -1151,7 +1081,7 @@ pub fn magic(
                         _ => outward * (1.4 + frac) + Vec3::Y * 0.33,
                     };
                     let length = if spell == Miracle::Rain {
-                        0.67 + frac * 1.2
+                        2.0
                     } else {
                         0.7 + frac * 0.34
                     };
@@ -1160,8 +1090,13 @@ pub fn magic(
                         Effect {
                             age: 0.,
                             length,
-                            drift,
+                            velocity,
                             scale: if spell == Miracle::Rain { 0.085 } else { 0.25 },
+                            phase: if spell == Miracle::Rain {
+                                EffectPhase::Falling
+                            } else {
+                                EffectPhase::Rising
+                            },
                         },
                         Mesh3d(art.lump.clone()),
                         MeshMaterial3d(mat.clone()),
@@ -1172,20 +1107,40 @@ pub fn magic(
             }
         }
     }
-    for (entity, mut effect, mut pose) in &mut effects {
-        effect.age += time.delta_secs();
-        if effect.age >= effect.length || pose.translation.y < 0.04 {
+    let delta = time.delta_secs().min(0.09);
+    for (entity, mut effect, mut pose, mut mesh) in &mut effects {
+        effect.age += delta;
+        if effect.age >= effect.length {
             commands.entity(entity).despawn();
             continue;
         }
-        pose.translation += effect.drift * time.delta_secs();
-        let scale = effect.scale * (1. - effect.age / effect.length).sqrt();
-        if effect.drift != Vec3::ZERO {
-            pose.scale = Vec3::new(
-                scale,
-                scale * if effect.drift.y < 0. { 3.8 } else { 0.41 },
-                scale,
-            );
+        match effect.phase {
+            EffectPhase::Falling => {
+                pose.translation += effect.velocity * delta - Vec3::Y * 4.9 * delta * delta;
+                effect.velocity.y -= 9.8 * delta;
+                let ground = contact(pose.translation);
+                if pose.translation.y <= ground + 0.049 {
+                    pose.translation.y = ground + 0.051;
+                    pose.scale = Vec3::splat(0.08);
+                    effect.phase = EffectPhase::Splash;
+                    effect.length = 0.24;
+                    effect.age = 0.;
+                    mesh.0 = art.ring.clone();
+                } else {
+                    pose.scale =
+                        Vec3::new(effect.scale, effect.velocity.y.abs() * 0.089, effect.scale);
+                }
+            }
+            EffectPhase::Splash => {
+                pose.scale = Vec3::splat(0.08 + effect.age * 1.14);
+            }
+            EffectPhase::Rising => {
+                pose.translation += effect.velocity * delta;
+                pose.translation.y = pose.translation.y.max(contact(pose.translation) + 0.06);
+                let scale = effect.scale * (1. - effect.age / effect.length).sqrt();
+                pose.scale = Vec3::new(scale, scale * 0.41, scale);
+            }
+            EffectPhase::Flash => {}
         }
     }
 }

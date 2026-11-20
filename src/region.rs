@@ -19,10 +19,17 @@ impl Tile {
     }
 
     pub fn from_world(point: Vec3) -> Self {
-        Self(
-            (point.x / CELL + ORIGIN.x).round() as i16,
-            (point.z / CELL + ORIGIN.y).round() as i16,
-        )
+        let local = Self::coordinates(point);
+        Self(local.x.round() as i16, local.y.round() as i16)
+    }
+
+    pub fn coordinates(world: Vec3) -> Vec2 {
+        Vec2::new(world.x, world.z) / CELL + ORIGIN
+    }
+
+    pub fn world_point(local: Vec2) -> Vec3 {
+        let point = (local - ORIGIN) * CELL;
+        Vec3::new(point.x, 0., point.y)
     }
 
     pub fn offset(self, x: i16, z: i16) -> Self {
@@ -237,7 +244,9 @@ impl Region {
     }
 
     pub fn water(&self, tile: Tile) -> bool {
-        self.in_channel(tile) || (self.kind == Biome::Aegean && !self.on_island(tile))
+        self.in_channel(tile)
+            || (self.kind == Biome::Aegean
+                && self.island_shore(Vec2::new(f32::from(tile.0), f32::from(tile.1))) <= 0.)
     }
 
     fn in_channel(&self, tile: Tile) -> bool {
@@ -245,8 +254,7 @@ impl Region {
         (bank..bank + self.river_span(tile.0)).contains(&tile.1)
     }
 
-    fn on_island(&self, tile: Tile) -> bool {
-        let place = Vec2::new(f32::from(tile.0), f32::from(tile.1));
+    pub fn island_shore(&self, place: Vec2) -> f32 {
         let coast = (place.x * 0.31 + place.y * 0.45).sin() * 0.075;
         [
             (Vec2::new(17., -9.), Vec2::new(54., 29.)),
@@ -255,7 +263,10 @@ impl Region {
             (Vec2::new(65., -25.), Vec2::new(14., 10.)),
         ]
         .into_iter()
-        .any(|(center, radius)| ((place - center) / radius).length_squared() < 1. + coast)
+        .map(|(center, radius)| {
+            (1. + coast - ((place - center) / radius).length_squared()) * radius.min_element() * 0.5
+        })
+        .fold(f32::NEG_INFINITY, f32::max)
     }
 
     pub fn rocky(&self, tile: Tile) -> bool {
