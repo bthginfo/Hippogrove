@@ -7,7 +7,9 @@ use bevy::{
 
 use crate::{
     art::{self, Art, block, mound, part},
-    game::{Building, Crop, Game, MAX_ROAD_RUN, MAX_WALKERS, Miracle, Quest, Walker},
+    game::{
+        Building, Crop, FirstDelivery, Game, MAX_ROAD_RUN, MAX_WALKERS, Miracle, Quest, Walker,
+    },
     growth::{CreatureGrowth, Tone},
     modes::Mode,
     play::{CameraRig, Panel, PawGesture, Play, Target, Tool},
@@ -28,6 +30,7 @@ pub struct Board {
     boundary_camps: [bool; AREA_COUNT],
     roads: Option<(usize, Entity)>,
     city_decor: Option<(Tone, usize, Entity)>,
+    opening_farm: Option<(bool, Entity)>,
     buildings: usize,
     walkers: usize,
     seen_magic: u64,
@@ -128,6 +131,12 @@ pub struct GroundRing(Option<(Mode, usize, Tile, i16, bool)>);
 #[derive(Component)]
 pub struct GuideMarker;
 
+#[derive(Component)]
+pub enum CarryMarker {
+    Store,
+    Farm,
+}
+
 #[derive(Clone, Copy, Component)]
 pub enum Blueprint {
     Base,
@@ -198,13 +207,39 @@ pub fn setup(
         DistanceFog::default(),
     ));
     crate::atmosphere::setup(&mut commands, &mut materials, &art);
+    let pointer = meshes.add(Cone::new(0.26, 0.66).mesh().resolution(4));
     commands.spawn((
         GuideMarker,
-        Mesh3d(meshes.add(Cone::new(0.26, 0.66).mesh().resolution(4))),
+        Mesh3d(pointer.clone()),
         MeshMaterial3d(art.gold.clone()),
         Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::PI)),
         Visibility::Hidden,
     ));
+    for (site, color) in [
+        (CarryMarker::Store, &art.gold),
+        (CarryMarker::Farm, &art.ripple),
+    ] {
+        commands
+            .spawn((site, Transform::default(), Visibility::Hidden))
+            .with_children(|marker| {
+                part(
+                    marker,
+                    &art.ring,
+                    color,
+                    Vec3::Y * 0.08,
+                    Vec3::splat(1.35),
+                    Quat::IDENTITY,
+                );
+                part(
+                    marker,
+                    &pointer,
+                    color,
+                    Vec3::Y * 2.65,
+                    Vec3::ONE,
+                    Quat::from_rotation_x(std::f32::consts::PI),
+                );
+            });
+    }
 
     commands
         .spawn((Cloud, Transform::default(), Visibility::Visible))
@@ -638,6 +673,100 @@ fn actor_scale(walker: &Walker, growth: CreatureGrowth) -> f32 {
     }
 }
 
+fn opening_farm(parent: &mut ChildSpawnerCommands, art: &Art, repaired: bool) {
+    block(
+        parent,
+        art,
+        &art.warm_stone,
+        Vec3::Y * 0.10,
+        Vec3::new(1.65, 0.22, 1.56),
+    );
+    block(
+        parent,
+        art,
+        &art.plaster,
+        Vec3::Y * 0.68,
+        Vec3::new(1.34, 1.12, 1.28),
+    );
+    block(
+        parent,
+        art,
+        &art.door,
+        Vec3::new(-0.22, 0.57, 0.65),
+        Vec3::new(0.43, 0.86, 0.07),
+    );
+    block(
+        parent,
+        art,
+        &art.dark_wood,
+        Vec3::new(0.34, 0.86, 0.66),
+        Vec3::new(0.29, 0.31, 0.07),
+    );
+    for side in [-1., 1.] {
+        let slope = Quat::from_rotation_z(-side * 0.54);
+        for row in -2..=2 {
+            let damaged = !repaired && side > 0. && row >= 0;
+            if !damaged {
+                part(
+                    parent,
+                    &art.cube,
+                    &art.roof_color[Biome::Valley as usize],
+                    Vec3::new(side * 0.43, 1.40, row as f32 * 0.32),
+                    Vec3::new(1.0, 0.15, 0.34),
+                    slope,
+                );
+            } else {
+                part(
+                    parent,
+                    &art.cube,
+                    &art.timber,
+                    Vec3::new(side * 0.43, 1.37, row as f32 * 0.32),
+                    Vec3::new(1.0, 0.08, 0.09),
+                    slope,
+                );
+            }
+        }
+    }
+    if repaired {
+        block(
+            parent,
+            art,
+            &art.amber,
+            Vec3::new(0.34, 0.86, 0.70),
+            Vec3::new(0.23, 0.25, 0.04),
+        );
+        art::parcel(
+            parent,
+            art,
+            Material::Food,
+            Vec3::new(0.75, 0.10, 0.84),
+            0.75,
+        );
+    } else {
+        part(
+            parent,
+            &art.cube,
+            &art.door,
+            Vec3::new(0.69, 1.24, 0.32),
+            Vec3::new(0.45, 0.047, 0.94),
+            Quat::from_rotation_z(-0.54),
+        );
+        art::parcel(
+            parent,
+            art,
+            Material::Wood,
+            Vec3::new(0.75, 0.09, 0.83),
+            0.45,
+        );
+    }
+    parent
+        .spawn((
+            Transform::from_xyz(-0.75, 0.04, 0.73).with_scale(Vec3::splat(0.76)),
+            Visibility::Inherited,
+        ))
+        .with_children(|person| villager(person, art, false, 1));
+}
+
 pub fn sync_board(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -900,6 +1029,26 @@ pub fn sync_board(
     }
 
     let root = board.root.unwrap();
+    if let Some(tile) = city.opening_farm(region) {
+        let repaired = city.opening_choice() == Some(FirstDelivery::Farm);
+        if board
+            .opening_farm
+            .is_none_or(|(previous, _)| previous != repaired)
+        {
+            if let Some((_, entity)) = board.opening_farm.take() {
+                commands.entity(entity).despawn();
+            }
+            let entity = commands
+                .spawn((
+                    ChildOf(root),
+                    Transform::from_translation(terrain::on_ground(region, tile.world())),
+                    Visibility::Inherited,
+                ))
+                .with_children(|farm| opening_farm(farm, &art, repaired))
+                .id();
+            board.opening_farm = Some((repaired, entity));
+        }
+    }
     let tone = city.reputation.tone();
     if board
         .city_decor
@@ -1289,8 +1438,14 @@ pub fn animate(
         let stride = if walker.hippo { 1.44 } else { 1.20 };
         meta.phase = (meta.phase + travel.length() * std::f32::consts::TAU / stride)
             .rem_euclid(std::f32::consts::TAU);
-        if travel.length_squared() > 0.00002 {
-            let facing = Quat::from_rotation_y(travel.x.atan2(travel.z));
+        let looking = walker.hippo && city.looking_at_wood_store();
+        let heading = if looking {
+            (region.depot.world() - pose.translation).with_y(0.)
+        } else {
+            travel
+        };
+        if heading.length_squared() > 0.00002 {
+            let facing = Quat::from_rotation_y(heading.x.atan2(heading.z));
             meta.facing = meta.facing.slerp(facing, 1. - (-12. * delta).exp());
         }
         let holding = walker.bundle.is_some();
@@ -1300,13 +1455,21 @@ pub fn animate(
         meta.holding = holding;
         meta.gathering = (meta.gathering - delta).max(0.);
         let bow = (meta.gathering / 0.48 * std::f32::consts::PI).sin() * 0.20;
-        let relax = if walker.hippo && matches!(gesture, Some(PawGesture::Pet)) {
-            pulse
+        let relax = if walker.hippo {
+            let pleased = play.hippo_happy_at.map_or(0., |since| {
+                let t = ((time.elapsed_secs() - since) / 0.9).clamp(0., 1.);
+                (t * std::f32::consts::PI).sin().max(0.)
+            });
+            if matches!(gesture, Some(PawGesture::Pet)) {
+                pulse.max(pleased)
+            } else {
+                pleased
+            }
         } else {
             0.
         };
         pose.rotation = meta.facing
-            * Quat::from_rotation_x(bow + relax * 0.14)
+            * Quat::from_rotation_x(bow + relax * 0.14 + if looking { 0.16 } else { 0. })
             * Quat::from_rotation_z(relax * 0.10);
         let bob = meta.phase.sin().abs() * 0.040 * meta.speed;
         let next = pose.translation + travel;
@@ -1403,6 +1566,36 @@ pub fn highlight_guide(
         *visible = Visibility::Inherited;
     } else {
         *visible = Visibility::Hidden;
+    }
+}
+
+pub fn highlight_carry(
+    time: Res<Time>,
+    game: Res<Game>,
+    play: Res<Play>,
+    mut markers: Query<(&CarryMarker, &mut Transform, &mut Visibility)>,
+) {
+    let city = game.city();
+    let region = game.region();
+    let show = play.panel == Panel::Closed && play.tool == Tool::Hand && !region.tutorial;
+    for (kind, mut pose, mut visibility) in &mut markers {
+        let tile = if show {
+            match kind {
+                CarryMarker::Store => city.carry_destination(region, play.aim),
+                CarryMarker::Farm if city.first_delivery_ready(region) => city.opening_farm(region),
+                CarryMarker::Farm => None,
+            }
+        } else {
+            None
+        };
+        if let Some(tile) = tile {
+            let wave = (time.elapsed_secs() * 4.5).sin();
+            pose.translation = terrain::on_ground(region, tile.world());
+            pose.scale = Vec3::new(1.06 + wave * 0.05, 1. + wave * 0.10, 1.06 + wave * 0.05);
+            *visibility = Visibility::Inherited;
+        } else {
+            *visibility = Visibility::Hidden;
+        }
     }
 }
 

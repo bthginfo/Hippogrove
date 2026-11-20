@@ -2,7 +2,10 @@ use bevy::prelude::*;
 
 use crate::{
     civic::{Branch, Civic, Goods, Tech},
-    game::{Action, Building, Crop, Game, Miracle, PAW_BUNDLE, PAW_LIMIT, Quest, stock_text},
+    game::{
+        Action, Building, Crop, FARM_REWARD, FirstDelivery, Game, Miracle, PAW_BUNDLE, PAW_LIMIT,
+        Quest, stock_text,
+    },
     modes::Mode,
     practice::Step as PracticeStep,
     quests::Goal,
@@ -93,6 +96,7 @@ pub enum Panel {
     Research,
     Inspection,
     Inventory,
+    FirstDelivery,
     Story,
     Modes,
 }
@@ -106,6 +110,7 @@ pub enum UiAction {
     Rotate,
     Zoom(bool),
     Guide,
+    ToolTarget,
     Panel(Panel),
     Focus(Tile),
     AreaMaterial(Material),
@@ -182,23 +187,24 @@ pub struct Play {
     pub revision: u64,
     pub grab: Option<GrabHold>,
     pub guide_marker: Option<(Tile, f32)>,
+    pub hippo_happy_at: Option<f32>,
+    wood_help: Option<u16>,
+    hippo_deliveries: u16,
     practice_step: Option<PracticeStep>,
 }
 
 impl Play {
     pub fn new(game: &Game) -> Self {
-        let story = (!game.campaign.intro_seen && game.campaign.active == 0).then(|| {
-            Story::new(if game.region().kind == Biome::Aegean {
-                Sequence::Islands
-            } else {
-                Sequence::Arrival
-            })
-        });
+        let story = (!game.campaign.intro_seen && game.campaign.active == 0)
+            .then(|| Story::new(Self::arrival(game)));
+        let delivery = game.city().first_delivery_ready(game.region());
         Self {
             aim: game.region().sources[0].tile,
             tool: Tool::Hand,
             panel: if story.is_some() {
                 Panel::Story
+            } else if delivery {
+                Panel::FirstDelivery
             } else {
                 Panel::Closed
             },
@@ -213,7 +219,7 @@ impl Play {
             catalog_branch: None,
             catalog_page: 0,
             tech: Tech::Foundations,
-            focus: None,
+            focus: delivery.then_some(UiAction::Focus(game.region().depot)),
             notice: String::new(),
             notice_until: 0.,
             notice_ok: true,
@@ -227,7 +233,23 @@ impl Play {
             revision: 0,
             grab: None,
             guide_marker: None,
+            hippo_happy_at: None,
+            wood_help: game
+                .city()
+                .wood_help_active()
+                .then_some(game.city().hippo_deliveries),
+            hippo_deliveries: game.city().hippo_deliveries,
             practice_step: None,
+        }
+    }
+
+    fn arrival(game: &Game) -> Sequence {
+        if game.city().opening_farm(game.region()).is_some() {
+            Sequence::FirstDelivery
+        } else if game.region().kind == Biome::Aegean {
+            Sequence::Islands
+        } else {
+            Sequence::Arrival
         }
     }
 
@@ -463,14 +485,16 @@ impl Play {
         }
         let city = game.city();
         let region = game.region();
-        let main =
-            self.panel == Panel::Quests || (self.panel == Panel::Closed && self.tool == Tool::Hand);
+        let main = matches!(self.panel, Panel::Closed | Panel::Quests)
+            && !region.sandbox
+            && city.quest != Quest::Complete;
         let step = match self.panel {
             Panel::SideQuest => region.quests.map(|quests| &quests.side),
             _ if main => city.quest_step(region),
             _ => return None,
         };
-        if main && self.tool == Tool::Hand && city.held.is_some() {
+        if main && city.quest == Quest::Shelter && city.held.is_some() {
+            self.tool(Tool::Hand);
             return Some(city.nearest_store(region, self.aim));
         }
         let supply = |material| {
@@ -490,7 +514,9 @@ impl Play {
             goal
         } else if main {
             match city.quest {
-                Quest::Shelter if city.hand_deliveries == 0 => {
+                Quest::Shelter
+                    if city.hand_deliveries == 0 || city.waiting_for_first_delivery() =>
+                {
                     let tile = supply(Material::Wood);
                     self.tool(Tool::Hand);
                     return Some(tile);
@@ -678,7 +704,7 @@ impl Play {
             self.aim = self.practice_target(game, step);
             self.guide_marker = Some((self.aim, now + 6.));
             self.pointer = None;
-            view.focus_practice(self.aim);
+            view.focus_action(self.aim);
         }
     }
 
@@ -704,7 +730,15 @@ impl Play {
                 self.tool(Tool::Hand);
                 self.close_panels();
             }
-            UiAction::Tool(tool) => self.open_tool(tool),
+            UiAction::Tool(tool) => {
+                self.open_tool(tool);
+                if self.panel == Panel::Orders(Tool::Hippo)
+                    && !game.campaign.gifts.gathers_low_wood
+                    && game.city().practiced_wood(game.region())
+                {
+                    self.focus = Some(UiAction::Do(Action::Praise));
+                }
+            }
             UiAction::Order(tool, index) => {
                 let gifts = game.campaign.gifts;
                 let requirement = match (tool, index) {
@@ -833,20 +867,40 @@ impl Play {
             UiAction::Zoom(closer) => {
                 view.zoom_toward(if closer { 0.24 } else { -0.24 }, Some(self.aim.world()))
             }
-            UiAction::Guide => {
-                self.aim = self
-                    .guide_quest(game)
-                    .unwrap_or_else(|| self.guide_tile(game));
-                self.close_panels();
-                if game.mode == Mode::Tutorial {
-                    view.focus_practice(self.aim);
-                } else {
-                    view.focus(self.aim);
+            UiAction::Guide | UiAction::ToolTarget => {
+                let tool_target = action == UiAction::ToolTarget
+                    && self.panel == Panel::Closed
+                    && self.tool != Tool::Hand
+                    && game.mode != Mode::Tutorial;
+                if !tool_target
+                    && matches!(
+                        self.panel,
+                        Panel::Closed | Panel::Quests | Panel::FirstDelivery
+                    )
+                    && game.city().first_delivery_ready(game.region())
+                {
+                    if self.panel != Panel::FirstDelivery {
+                        self.open_delivery(game);
+                    }
+                    return false;
                 }
+                self.aim = if tool_target {
+                    self.guide_tile(game)
+                } else {
+                    self.guide_quest(game)
+                        .unwrap_or_else(|| self.guide_tile(game))
+                };
+                self.close_panels();
+                view.focus_action(self.aim);
                 self.pointer = None;
                 self.guide_marker = Some((self.aim, now + 6.));
             }
-            UiAction::Focus(tile) => self.focus_tile(tile, view),
+            UiAction::Focus(tile) => {
+                if self.panel == Panel::FirstDelivery {
+                    self.notice_until = now;
+                }
+                self.focus_tile(tile, view);
+            }
             UiAction::AreaMaterial(material) => {
                 self.area_material = material;
                 self.focus = Some(action);
@@ -879,7 +933,7 @@ impl Play {
             UiAction::Panel(panel) => self.open_panel(panel),
             UiAction::ToggleObjective => self.open_panel(Panel::Quests),
             UiAction::ReplayArrival if game.campaign.active == 0 => {
-                self.start_story(Sequence::Arrival, game, view);
+                self.start_story(Self::arrival(game), game, view);
             }
             UiAction::ReplayArrival | UiAction::FinishStory => {}
             UiAction::ModeTab(sandbox) => self.free_build_tab = sandbox,
@@ -953,12 +1007,26 @@ impl Play {
         self.focus = None;
     }
 
+    fn open_delivery(&mut self, game: &Game) {
+        self.open_panel(Panel::FirstDelivery);
+        let region = game.region();
+        let focused = game
+            .city()
+            .opening_farm(region)
+            .filter(|&farm| farm == self.aim);
+        self.focus = Some(UiAction::Focus(focused.unwrap_or(region.depot)));
+    }
+
     fn focus_tile(&mut self, tile: Tile, view: &mut CameraRig) {
+        if self.panel == Panel::FirstDelivery {
+            view.focus_action(tile);
+        } else {
+            view.focus(tile);
+        }
         self.aim = tile;
         self.tool(Tool::Hand);
         self.close_panels();
         self.pointer = None;
-        view.focus(tile);
     }
 
     fn choose_mode(&mut self, mode: Mode, game: &mut Game, view: &mut CameraRig, now: f32) {
@@ -993,6 +1061,7 @@ impl Play {
     fn execute(&mut self, action: Action, game: &mut Game, view: &mut CameraRig, now: f32) -> bool {
         let previous = game.campaign.active;
         let carried = game.city().held.is_some();
+        let opening_choice = game.city().opening_choice();
         let first_island_landing = matches!(action, Action::Travel(4))
             && game.mode == Mode::Chronicle
             && game
@@ -1006,11 +1075,16 @@ impl Play {
         self.notice_until = now + 5.;
         self.notice_ok = success;
         if success {
+            let took = !carried && game.city().held.is_some();
+            let chose_delivery = opening_choice.is_none()
+                && game.city().opening_choice().is_some()
+                && matches!(action, Action::Hand(_));
             self.revision = self.revision.wrapping_add(1);
             let cue = match action {
+                Action::Hand(_) if chose_delivery => Some(Cue::Reward),
                 Action::Hand(_) if carried => Some(Cue::Drop),
                 Action::Grab(..) | Action::Hand(_) if game.city().held.is_some() => Some(Cue::Lift),
-                Action::Pet => Some(Cue::Pet),
+                Action::Pet | Action::Praise => Some(Cue::Pet),
                 Action::Hand(tile) if game.region().source_at(tile).is_none() => Some(Cue::Gather),
                 Action::Cast(spell, _) => Some(Cue::Cast(spell)),
                 Action::Build(..) | Action::Upgrade(_) | Action::Road(..) | Action::Repair => {
@@ -1041,14 +1115,23 @@ impl Play {
             if let Some(gesture) = gesture {
                 self.paw_gesture = Some((gesture, now));
             }
-            if action == Action::Pet {
-                self.close_panels();
-                self.aim = game.city().walkers[0].tile();
-                if game.mode == Mode::Tutorial {
-                    view.focus_practice(self.aim);
-                } else {
-                    view.focus(self.aim);
+            if took && game.mode != Mode::Tutorial {
+                self.guide_marker = None;
+                if game.city().first_delivery_ready(game.region()) {
+                    self.open_delivery(game);
+                } else if let Some(store) = game.city().carry_destination(game.region(), self.aim) {
+                    self.aim = store;
+                    self.pointer = None;
                 }
+            }
+            if action == Action::Praise {
+                self.hippo_happy_at = Some(now);
+            }
+            if matches!(action, Action::Pet | Action::Praise) {
+                self.close_panels();
+                self.tool(Tool::Hand);
+                self.aim = game.city().walkers[0].tile();
+                view.focus_action(self.aim);
             }
             if matches!(action, Action::Road(..)) {
                 self.road_anchor = None;
@@ -1068,6 +1151,12 @@ impl Play {
                 *view = CameraRig::new(game);
                 view.jump = true;
                 self.previous_quest = game.city().quest;
+                self.hippo_happy_at = None;
+                self.hippo_deliveries = game.city().hippo_deliveries;
+                self.wood_help = game
+                    .city()
+                    .wood_help_active()
+                    .then_some(self.hippo_deliveries);
             } else if matches!(action, Action::Travel(_)) {
                 self.close_panels();
             }
@@ -1083,10 +1172,43 @@ impl Play {
         success
     }
 
+    pub fn observe_wood_help(&mut self, game: &Game, now: f32) {
+        let city = game.city();
+        let delivered = city.hippo_deliveries;
+        let active = city.wood_help_active().then_some(delivered);
+        let finished = self
+            .wood_help
+            .is_some_and(|previous| active.is_none() && delivered > previous);
+        let learned = game.campaign.gifts.gathers_low_wood;
+        let notice = if finished {
+            self.hippo_happy_at = Some(now);
+            self.revision = self.revision.wrapping_add(1);
+            self.last_sound = Some((Cue::Pet, self.revision));
+            Some("Dein Nilpferd hat das Holz selbst ins Lager gebracht.")
+        } else if active.is_some() && self.wood_help.is_none() {
+            Some("Das Holz wird knapp. Dein Nilpferd holt jetzt selbst Nachschub.")
+        } else if delivered > self.hippo_deliveries
+            && !learned
+            && city.practiced_wood(game.region())
+        {
+            Some("Holz geliefert! Unter Nilpferd → Loben lernt es, selbst Holz zu holen.")
+        } else {
+            None
+        };
+        self.wood_help = active;
+        self.hippo_deliveries = delivered;
+        if let Some(notice) = notice {
+            self.notice = notice.into();
+            self.notice_ok = true;
+            self.notice_until = now + 5.5;
+        }
+    }
+
     pub fn observe_shelter(&mut self, game: &Game, view: &mut CameraRig) {
         let quest = game.city().quest;
         if self.story.is_none()
             && game.campaign.active == 0
+            && game.city().opening_choice().is_none()
             && self.previous_quest == Quest::Shelter
             && quest == Quest::Fields
         {
@@ -1117,7 +1239,7 @@ impl Play {
         }
         let region = game.region();
         match story.sequence {
-            Sequence::Arrival => {
+            Sequence::Arrival | Sequence::FirstDelivery => {
                 self.tool(Tool::Hand);
                 self.aim = self.guide_tile(game);
                 *view = CameraRig::new(game);
@@ -1199,7 +1321,7 @@ impl CameraRig {
         self.height = self.height.clamp(22., 29.);
     }
 
-    fn focus_practice(&mut self, tile: Tile) {
+    fn focus_action(&mut self, tile: Tile) {
         self.focus(tile);
         self.target = (self.target + Vec3::new(1.9, 0., 5.1)).clamp(self.min, self.max);
     }
@@ -1247,6 +1369,7 @@ impl Target {
         let city = game.city();
         let region = game.region();
         let tile = play.aim;
+        let first_delivery = city.first_delivery_at(region, tile);
         self.legal = true;
         self.detail.clear();
         self.road_preview.clear();
@@ -1454,7 +1577,12 @@ impl Target {
                 "Streicheln".into()
             }
             Action::Rest => {
-                self.detail = "Beendet den Auftrag. Die Kreatur erholt sich.".into();
+                self.detail = if game.campaign.gifts.gathers_low_wood {
+                    "Stoppt auch die Holzhilfe. Sammeln oder Lob setzt sie fort."
+                } else {
+                    "Beendet den Auftrag. Die Kreatur erholt sich."
+                }
+                .into();
                 "Pause einlegen".into()
             }
             Action::Repair => {
@@ -1470,8 +1598,36 @@ impl Target {
                 );
                 "Bitte erfüllen".into()
             }
+            Action::Hand(_) if first_delivery.is_some() => {
+                self.legal = city.first_delivery_ready(region);
+                match first_delivery.unwrap() {
+                    FirstDelivery::Village => {
+                        self.detail = format!(
+                            "{PAW_BUNDLE} Holz an Mira · das Dorf teilt den Rest im Lager."
+                        );
+                        "Dorf beliefern".into()
+                    }
+                    FirstDelivery::Farm => {
+                        self.detail = format!(
+                            "{PAW_BUNDLE} Holz für Joras Dach · {} als Dank.",
+                            stock_text(FARM_REWARD)
+                        );
+                        "Hof beliefern".into()
+                    }
+                }
+            }
+            Action::Hand(_) if city.held.is_none() && city.opening_farm(region) == Some(tile) => {
+                self.legal = false;
+                self.detail = if city.opening_choice() == Some(FirstDelivery::Farm) {
+                    "Joras Dach ist wieder dicht."
+                } else {
+                    "Auf diesem Hof lebt Jora."
+                }
+                .into();
+                "Uferhof".into()
+            }
             Action::Hand(_) if city.held.is_some() => {
-                self.legal = city.can_store_at(region, tile);
+                self.legal = city.can_store_at(region, tile) && city.influence(region, tile);
                 let bundle = city.held.unwrap();
                 if region.source_at(tile) == Some(bundle.source) {
                     self.legal = true;

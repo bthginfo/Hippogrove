@@ -20,7 +20,10 @@ use crate::terrain;
 pub const SAVE_VERSION: u32 = 4;
 pub const PAW_BUNDLE: u16 = 6;
 pub const PAW_LIMIT: u16 = 18;
+pub const FARM_REWARD: Stock = [0, 5, 8];
 const RIVAL_RESOLVE: u8 = 3;
+const LOW_WOOD: u16 = 8;
+const WOOD_LOOK: f32 = 1.1;
 const ORIGINAL_SOURCE_COUNT: usize = 10;
 pub const START_RADIUS: i16 = 7;
 pub const FRONTIER_RADIUS: i16 = 8;
@@ -449,6 +452,7 @@ pub struct Gifts {
     pub storm: u8,
     pub coaching: u8,
     pub creature: CreatureGrowth,
+    pub gathers_low_wood: bool,
 }
 
 impl Gifts {
@@ -512,6 +516,7 @@ pub struct Bundle {
 pub enum Job {
     Gather(usize),
     GatherArea(usize, Material),
+    RefillWood(usize),
     Move(Tile),
     Watch(Tile),
     Tend(Tile),
@@ -522,6 +527,34 @@ pub enum Job {
 pub enum Lesson {
     Delivery(usize),
     Practiced(Job),
+}
+
+impl Lesson {
+    fn job(self) -> Job {
+        match self {
+            Self::Delivery(source) => Job::Gather(source),
+            Self::Practiced(job) => job,
+        }
+    }
+
+    fn is_wood(self, region: &Region) -> bool {
+        match self.job() {
+            Job::Gather(source) => region.sources[source].material == Material::Wood,
+            Job::GatherArea(_, material) => material == Material::Wood,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FirstDelivery {
+    Village,
+    Farm,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+struct Opening {
+    choice: Option<FirstDelivery>,
 }
 
 #[derive(Default)]
@@ -620,6 +653,8 @@ pub struct Settlement {
     regrowth: Vec<f32>,
     pub walkers: Vec<Walker>,
     pub held: Option<Bundle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    opening: Option<Opening>,
     pub quest: Quest,
     pub outcome: Option<Outcome>,
     pub bridge_fixed: bool,
@@ -648,6 +683,8 @@ pub struct Settlement {
     pub care_interactions: u16,
     #[serde(default)]
     recovering: bool,
+    #[serde(default)]
+    wood_help_paused: bool,
     #[serde(default)]
     cooldowns: [f32; Miracle::ALL.len()],
     #[serde(default)]
@@ -699,6 +736,7 @@ impl Settlement {
                 Walker::new(region.depot.offset(-1, 0), false),
             ],
             held: None,
+            opening: region.opening_farm().map(|_| Opening::default()),
             quest: Quest::Shelter,
             outcome: None,
             bridge_fixed: false,
@@ -718,6 +756,7 @@ impl Settlement {
             pet_cooldown: 0.,
             care_interactions: 0,
             recovering: false,
+            wood_help_paused: false,
             cooldowns: [0.; Miracle::ALL.len()],
             local_finished: false,
             local_accepted: false,
@@ -896,8 +935,39 @@ impl Settlement {
             && (!region.water(tile) || (self.bridge_fixed && region.bridge_cell(tile)))
             && !region.rocky(tile)
             && !region.fixed_structure(tile)
+            && self.opening_farm(region) != Some(tile)
             && region.source_at(tile).is_none()
             && self.building_at(tile).is_none_or(|site| site.kind.gate())
+    }
+
+    pub fn opening_farm(&self, region: &Region) -> Option<Tile> {
+        self.opening.and_then(|_| region.opening_farm())
+    }
+
+    pub fn opening_choice(&self) -> Option<FirstDelivery> {
+        self.opening.and_then(|opening| opening.choice)
+    }
+
+    pub fn waiting_for_first_delivery(&self) -> bool {
+        self.opening.is_some_and(|opening| opening.choice.is_none())
+    }
+
+    pub fn first_delivery_ready(&self, region: &Region) -> bool {
+        self.waiting_for_first_delivery()
+            && self.held.is_some_and(|bundle| {
+                bundle.count >= PAW_BUNDLE
+                    && region.sources[bundle.source].material == Material::Wood
+            })
+    }
+
+    pub fn first_delivery_at(&self, region: &Region, tile: Tile) -> Option<FirstDelivery> {
+        if self.waiting_for_first_delivery() && region.opening_farm() == Some(tile) {
+            Some(FirstDelivery::Farm)
+        } else if tile == region.depot && self.first_delivery_ready(region) {
+            Some(FirstDelivery::Village)
+        } else {
+            None
+        }
     }
 
     pub fn can_store_at(&self, region: &Region, tile: Tile) -> bool {
@@ -1509,6 +1579,16 @@ impl Settlement {
             .unwrap_or(region.depot)
     }
 
+    pub fn carry_destination(&self, region: &Region, from: Tile) -> Option<Tile> {
+        let bundle = self.held?;
+        if self.first_delivery_ready(region) {
+            return Some(region.depot);
+        }
+        let material = region.sources[bundle.source].material;
+        self.can_deposit(material, bundle.count)
+            .then(|| self.nearest_store(region, from))
+    }
+
     fn route_to_store(&self, region: &Region, start: Tile) -> Option<VecDeque<Tile>> {
         let mut stores: Vec<_> = self.stores(region).collect();
         stores.sort_by_key(|&tile| start.distance(tile));
@@ -1796,7 +1876,9 @@ impl Settlement {
                     if walker.hippo {
                         self.hippo_deliveries = self.hippo_deliveries.saturating_add(1);
                         let completed = walker.job.filter(|job| match *job {
-                            Job::Gather(source) => source == bundle.source,
+                            Job::Gather(source) | Job::RefillWood(source) => {
+                                source == bundle.source
+                            }
                             Job::GatherArea(area, material) => region
                                 .area_sources(area, material)
                                 .any(|(source, _)| source == bundle.source),
@@ -1806,7 +1888,9 @@ impl Settlement {
                             Some(job @ Job::GatherArea(..)) => Lesson::Practiced(job),
                             _ => Lesson::Delivery(bundle.source),
                         });
-                        if gifts.training == 0 && completed.is_some() {
+                        if matches!(completed, Some(Job::RefillWood(_)))
+                            || (gifts.training == 0 && completed.is_some())
+                        {
                             walker.job = None;
                         }
                     } else {
@@ -1827,9 +1911,9 @@ impl Settlement {
                     walker.job = None;
                 }
             }
-            Some(job @ (Job::Gather(_) | Job::GatherArea(..))) => {
+            Some(job @ (Job::Gather(_) | Job::GatherArea(..) | Job::RefillWood(_))) => {
                 let next = match job {
-                    Job::Gather(source) if self.nodes[source] > 0 => self
+                    Job::Gather(source) | Job::RefillWood(source) if self.nodes[source] > 0 => self
                         .route_to(region, walker.tile(), region.sources[source].tile, true)
                         .map(|route| (source, route)),
                     Job::GatherArea(area, material) if self.can_deposit(material, 1) => {
@@ -1838,6 +1922,9 @@ impl Settlement {
                     _ => None,
                 };
                 let Some((source, route)) = next else {
+                    if matches!(job, Job::RefillWood(_)) {
+                        walker.job = None;
+                    }
                     walker.pause = match job {
                         Job::Gather(source) if self.nodes[source] > 0 => 1.,
                         _ => 2.,
@@ -1850,8 +1937,19 @@ impl Settlement {
                     } else {
                         3
                     };
-                    if let Job::GatherArea(_, material) = job {
-                        count = count.min(self.storage_cap() - self.stock[material.index()]);
+                    let material = match job {
+                        Job::GatherArea(_, material) => Some(material),
+                        Job::RefillWood(_) => Some(Material::Wood),
+                        _ => None,
+                    };
+                    if let Some(material) = material {
+                        count = count.min(
+                            self.storage_cap()
+                                .saturating_sub(self.stock[material.index()]),
+                        );
+                    }
+                    if count == 0 && matches!(job, Job::RefillWood(_)) {
+                        walker.job = None;
                     }
                     walker.bundle = self.take(source, count);
                     walker.pause = if walker.bundle.is_some() { 0.65 } else { 1.5 };
@@ -1909,7 +2007,40 @@ impl Settlement {
                 }
                 walker.pause = 2.5;
             }
+            None if walker.hippo
+                && gifts.gathers_low_wood
+                && !region.tutorial
+                && !self.wood_help_paused
+                && self.stock[0] <= LOW_WOOD
+                && self.energy >= 40. =>
+            {
+                self.look_for_wood(walker, region);
+            }
             None => self.daily_route(walker, region, index),
+        }
+    }
+
+    fn look_for_wood(&self, walker: &mut Walker, region: &Region) {
+        let from = walker.tile();
+        let mut wood: Vec<_> = region
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(index, source)| {
+                source.material == Material::Wood
+                    && self.nodes[*index] > 0
+                    && self.influence(region, source.tile)
+            })
+            .collect();
+        wood.sort_by_key(|(_, source)| from.distance(source.tile));
+        if let Some((index, _)) = wood
+            .into_iter()
+            .find(|(_, source)| self.route_to(region, from, source.tile, true).is_some())
+        {
+            walker.job = Some(Job::RefillWood(index));
+            walker.pause = WOOD_LOOK;
+        } else {
+            walker.pause = 2.;
         }
     }
 
@@ -2289,6 +2420,9 @@ impl Settlement {
     }
 
     fn hand(&mut self, region: &Region, target: Tile) -> GameResult {
+        if let Some(destination) = self.first_delivery_at(region, target) {
+            return self.deliver_first_wood(region, destination);
+        }
         if !self.influence(region, target) {
             return Err("Die Wolkenpfote reicht nur bis zur goldenen Grenze.".into());
         }
@@ -2320,6 +2454,56 @@ impl Settlement {
         })
     }
 
+    fn deliver_first_wood(&mut self, region: &Region, destination: FirstDelivery) -> GameResult {
+        if !self.first_delivery_ready(region) {
+            return Err(format!("Jora braucht {PAW_BUNDLE} Holz für ihr Dach."));
+        }
+        let mut bundle = self.held.take().unwrap();
+        bundle.count -= PAW_BUNDLE;
+        self.opening.as_mut().unwrap().choice = Some(destination);
+        self.hand_deliveries = self.hand_deliveries.saturating_add(1);
+        let text = match destination {
+            FirstDelivery::Village => {
+                self.society.morale = self.society.morale.saturating_add(12).min(100);
+                let plot = (self.count(Building::House) == 0)
+                    .then(|| {
+                        [(1, 0), (2, 1), (-3, -2), (1, 2)]
+                            .into_iter()
+                            .map(|(x, z)| region.start.offset(x, z))
+                            .find(|&tile| self.placement_site(region, Building::House, tile))
+                    })
+                    .flatten();
+                if let Some(tile) = plot {
+                    self.raise_building(region, Building::House, tile, 0);
+                }
+                let deposit = bundle
+                    .count
+                    .min(self.storage_cap().saturating_sub(self.stock[0]));
+                self.stock[0] += deposit;
+                bundle.count -= deposit;
+                if plot.is_some() {
+                    "Miras Familie zieht in die erste Hütte ein.".into()
+                } else {
+                    "Mira verteilt das Holz. Die Stimmung im Dorf steigt.".into()
+                }
+            }
+            FirstDelivery::Farm => {
+                let capacity = self.storage_cap();
+                self.stock
+                    .iter_mut()
+                    .zip(FARM_REWARD)
+                    .for_each(|(stock, reward)| {
+                        *stock = stock.saturating_add(reward).min(capacity);
+                    });
+                self.faith = self.faith.saturating_add(4);
+                self.reputation.shift(8);
+                "Joras Dach ist dicht. Sie schickt Vorräte.".into()
+            }
+        };
+        self.held = (bundle.count > 0).then_some(bundle);
+        Ok(text)
+    }
+
     pub fn paw_limit(&self, region: &Region, tile: Tile) -> u16 {
         if self.held.is_some() || !self.influence(region, tile) {
             return 0;
@@ -2338,8 +2522,13 @@ impl Settlement {
             .take(source, amount.clamp(1, capacity))
             .expect("Available paw load");
         self.held = Some(bundle);
+        let destination = if self.first_delivery_ready(region) {
+            "Wähle, wem du mit dem Holz hilfst."
+        } else {
+            "Der Sammelplatz leuchtet, wenn die Ladung hineinpasst."
+        };
         Ok(format!(
-            "{} {} in der Pfote. Wähle den Sammelplatz.",
+            "{} {} in der Pfote. {destination}",
             bundle.count,
             region.kind.material(region.sources[source].material)
         ))
@@ -2377,11 +2566,22 @@ impl Settlement {
 
     fn build(&mut self, region: &Region, kind: Building, tile: Tile, rotation: u8) -> GameResult {
         self.placement(region, kind, tile)?;
-        let rotation = self.build_rotation(region, kind, tile, rotation);
         if !region.sandbox {
             self.pay(kind.price());
             self.pay_goods(kind.goods_price());
         }
+        self.raise_building(region, kind, tile, rotation);
+        let linked = kind.civic().is_some_and(|civic| civic != Civic::Palisade)
+            && !self.connected(region, self.buildings.last().unwrap());
+        Ok(if linked {
+            format!("{} gebaut · Anschluss an einen Weg fehlt", kind.name())
+        } else {
+            format!("{} gebaut", kind.name())
+        })
+    }
+
+    fn raise_building(&mut self, region: &Region, kind: Building, tile: Tile, rotation: u8) {
+        let rotation = self.build_rotation(region, kind, tile, rotation);
         self.buildings.push(BuildingSite {
             kind,
             tile,
@@ -2402,13 +2602,6 @@ impl Settlement {
                 .faith
                 .saturating_add(if kind == Building::Shrine { 3 } else { 2 });
         }
-        let linked = kind.civic().is_some_and(|civic| civic != Civic::Palisade)
-            && !self.connected(region, self.buildings.last().unwrap());
-        Ok(if linked {
-            format!("{} gebaut · Anschluss an einen Weg fehlt", kind.name())
-        } else {
-            format!("{} gebaut", kind.name())
-        })
     }
 
     fn welcome_resident(&mut self, region: &Region, index: usize) {
@@ -2501,7 +2694,9 @@ impl Settlement {
         walker.job = Some(job);
         walker.route.clear();
         walker.pause = 0.;
-        if !walker.hippo {
+        if walker.hippo {
+            self.wood_help_paused = false;
+        } else {
             self.next_worker = self.next_worker.wrapping_add(1);
         }
     }
@@ -2729,6 +2924,7 @@ impl Settlement {
             return "Erholt sich";
         }
         match self.walkers[0].job {
+            Some(Job::RefillWood(_)) => "Holt selbstständig Holz",
             Some(Job::Gather(_) | Job::GatherArea(..)) => "Sammelt",
             Some(Job::Move(_)) => "Unterwegs",
             Some(Job::Watch(_)) => "Hält Wache",
@@ -2736,6 +2932,23 @@ impl Settlement {
             None if self.walkers[0].bundle.is_some() => "Bringt eine Ladung heim",
             None => "Rastet",
         }
+    }
+
+    pub fn wood_help_active(&self) -> bool {
+        matches!(self.walkers[0].job, Some(Job::RefillWood(_)))
+    }
+
+    pub fn practiced_wood(&self, region: &Region) -> bool {
+        !region.tutorial && self.lesson.is_some_and(|lesson| lesson.is_wood(region))
+    }
+
+    pub fn looking_at_wood_store(&self) -> bool {
+        let hippo = &self.walkers[0];
+        self.wood_help_active()
+            && !self.recovering
+            && hippo.route.is_empty()
+            && hippo.bundle.is_none()
+            && hippo.pause > 0.
     }
 
     fn threat_in(&self, region: &Region, tile: Tile, radius: i16) -> bool {
@@ -3016,7 +3229,8 @@ impl Settlement {
         }
         match self.quest {
             Quest::Shelter
-                if self.hand_deliveries > 0
+                if !self.waiting_for_first_delivery()
+                    && self.hand_deliveries > 0
                     && self.hippo_deliveries > 0
                     && self.count(Building::House) > 0
                     && self.count(Building::Store) > 0 =>
@@ -3083,6 +3297,9 @@ impl Settlement {
         if region.tutorial {
             return crate::practice::Step::current(self).text().0;
         }
+        if self.waiting_for_first_delivery() {
+            return "Die erste Holzlieferung";
+        }
         if let Some(step) = self.quest_step(region) {
             &step.title
         } else if let (Quest::Bridge, Some(quests)) = (self.quest, region.quests) {
@@ -3096,6 +3313,25 @@ impl Settlement {
         if region.tutorial {
             let (title, hint) = crate::practice::Step::current(self).text();
             return (title, hint.into());
+        }
+        if self.waiting_for_first_delivery() {
+            return if self.first_delivery_ready(region) {
+                ("Erste Lieferung wählen", "Miras Familie am Schrein und Joras Hof am anderen Ufer brauchen beide Holz. Zum Ziel zeigt dir ihre Bitten.".into())
+            } else if self.held.is_some() {
+                (
+                    "Ladung ablegen",
+                    format!(
+                        "Lege deine Ladung ab. Für die erste Lieferung brauchst du {PAW_BUNDLE} Holz in der Pfote."
+                    ),
+                )
+            } else {
+                (
+                    "Holz für beide Ufer",
+                    format!(
+                        "Mira und Jora bitten um Holz. Greife mindestens {PAW_BUNDLE} Holz für die erste Lieferung."
+                    ),
+                )
+            };
         }
         if let Some(step) = self.quest_step(region) {
             let action = step
@@ -3115,7 +3351,7 @@ impl Settlement {
             return (action, format!("{}\n{progress}", step.hint));
         }
         match self.quest {
-            Quest::Shelter if self.hand_deliveries == 0 && self.held.is_some() => (
+            Quest::Shelter if self.held.is_some() => (
                 "Ladung ablegen",
                 "Wähle den Sammelplatz und tippe auf Ablegen. Zum Ziel zeigt dir den Sammelplatz."
                     .into(),
@@ -3435,6 +3671,10 @@ impl Campaign {
                             |b: Bundle| b.source < region.sources.len() && b.count > 0;
                         let valid_job = |job| match job {
                             Job::Gather(source) => source < region.sources.len(),
+                            Job::RefillWood(source) => region
+                                .sources
+                                .get(source)
+                                .is_some_and(|source| source.material == Material::Wood),
                             Job::GatherArea(area, _) => {
                                 region.areas.get(area).is_some() && city.camps[area]
                             }
@@ -3445,6 +3685,7 @@ impl Campaign {
                         city.nodes.len() == region.sources.len()
                             && city.regrowth.len() == region.sources.len()
                             && city.guards.len() == region.guards.len()
+                            && (city.opening.is_none() || region.opening_farm().is_some())
                             && (2..=MAX_WALKERS).contains(&city.walkers.len())
                             && city.walkers[0].hippo
                             && city.last_market < 2
@@ -3680,6 +3921,7 @@ impl Game {
             Action::Pet => settlement.pet(),
             Action::Feed => settlement.feed(),
             Action::Rest => {
+                settlement.wood_help_paused = true;
                 let hippo = &mut settlement.walkers[0];
                 hippo.job = None;
                 hippo.route.clear();
@@ -3694,7 +3936,7 @@ impl Game {
                     .lesson
                     .take()
                     .ok_or("Lobe die Kreatur nach einer Lieferung, Wache oder Ernte.")?;
-                let hippo = &mut settlement.walkers[0];
+                let wood = !region.tutorial && lesson.is_wood(region);
                 if gifts.training < 5 {
                     gifts.coaching += 1;
                     if gifts.coaching >= gifts.training.saturating_sub(1).max(1) {
@@ -3702,13 +3944,18 @@ impl Game {
                         gifts.coaching = 0;
                     }
                 }
-                if hippo.job.is_none() {
-                    hippo.job = Some(match lesson {
-                        Lesson::Delivery(source) => Job::Gather(source),
-                        Lesson::Practiced(job) => job,
-                    });
+                let hippo = &mut settlement.walkers[0];
+                if wood {
+                    gifts.gathers_low_wood = true;
+                    settlement.wood_help_paused = false;
+                } else if hippo.job.is_none() {
+                    hippo.job = Some(lesson.job());
                 }
-                Ok(format!("Lob angenommen · Nilpferd-Rang {}", gifts.training))
+                Ok(if wood {
+                    "Dein Nilpferd hat gelernt, bei knappem Holz auszuhelfen.".into()
+                } else {
+                    format!("Lob angenommen · Nilpferd-Rang {}", gifts.training)
+                })
             }
             Action::Learn(talent) => {
                 if gifts.points == 0 {
@@ -4035,17 +4282,121 @@ mod tests {
     }
 
     #[test]
-    fn tutorial_advances_after_grabbing_and_delivering_wood() {
+    fn the_first_village_delivery_builds_a_home_and_the_guide_selects_the_store() {
+        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        game.campaign.intro_seen = true;
+        let depot = game.region().depot;
+        let morale = game.city().society.morale;
+        let mut play = Play::new(&game);
+        let mut view = CameraRig::new(&game);
+
+        assert!(play.activate(UiAction::Confirm, &mut game, &mut view, 0.));
+        assert_eq!(play.panel, Panel::FirstDelivery);
+        assert_eq!(play.focus, Some(UiAction::Focus(depot)));
+        play.activate(UiAction::Focus(depot), &mut game, &mut view, 0.);
+        assert!(game.city().opening_choice().is_none());
+        assert!(play.activate(UiAction::Confirm, &mut game, &mut view, 0.));
+
+        assert_eq!(game.city().opening_choice(), Some(FirstDelivery::Village));
+        assert_eq!(game.city().count(Building::House), 1);
+        assert_eq!(game.city().society.morale, morale + 12);
+        assert_eq!(game.city().stock, game.region().initial);
+
+        play.tool(Tool::Build);
+        play.choose(Building::House.index());
+        play.activate(UiAction::Guide, &mut game, &mut view, 0.);
+        assert_eq!(play.building(), Building::Store);
+        assert!(play.activate(UiAction::Confirm, &mut game, &mut view, 0.));
+        assert_eq!(game.city().count(Building::House), 1);
+        assert_eq!(game.city().count(Building::Store), 1);
+    }
+
+    #[test]
+    fn the_farm_delivery_preserves_excess_wood_and_cannot_be_repeated_after_reload() {
+        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        game.campaign.intro_seen = true;
+        let region = game.region().clone();
+        let farm = game.city().opening_farm(&region).unwrap();
+        assert!(!region.water(farm) && !region.rocky(farm) && !region.fixed_structure(farm));
+        assert!(region.source_at(farm).is_none());
+        assert!(game.act(Action::Hand(farm)).is_err());
+
+        game.act(Action::Grab(region.sources[0].tile, PAW_LIMIT))
+            .unwrap();
+        let saved = serde_json::to_vec(&game.saved_games()).unwrap();
+        let mut game = Game::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
+        assert_eq!(Play::new(&game).panel, Panel::FirstDelivery);
+        game.act(Action::Hand(farm)).unwrap();
+        assert_eq!(game.city().opening_choice(), Some(FirstDelivery::Farm));
+        assert_eq!(game.city().count(Building::House), 0);
+        assert_eq!(
+            game.city().stock,
+            [
+                region.initial[0],
+                region.initial[1] + 5,
+                region.initial[2] + 8
+            ]
+        );
+        assert_eq!(game.city().held.unwrap().count, PAW_LIMIT - PAW_BUNDLE);
+
+        let saved = serde_json::to_vec(&game.saved_games()).unwrap();
+        let mut game = Game::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
+        assert_eq!(game.city().opening_choice(), Some(FirstDelivery::Farm));
+        assert!(game.act(Action::Hand(farm)).is_err());
+        game.act(Action::Hand(region.depot)).unwrap();
+        assert_eq!(
+            game.city().stock[0],
+            region.initial[0] + PAW_LIMIT - PAW_BUNDLE
+        );
+        assert!(game.city().held.is_none());
+    }
+
+    #[test]
+    fn a_wood_lesson_only_prompts_a_new_trip_when_the_stock_is_low() {
         let mut game = Game::start(Mode::Campaign(Biome::Valley));
         let wood = game.region().sources[0].tile;
         let depot = game.region().depot;
-        let goal = |game: &Game| game.city().objective(game.region()).0;
-
-        assert_eq!(goal(&game), "Holz greifen");
         game.act(Action::Hand(wood)).unwrap();
-        assert_eq!(goal(&game), "Ladung ablegen");
         game.act(Action::Hand(depot)).unwrap();
-        assert_eq!(goal(&game), "Hütte bauen");
+        game.act(Action::Assign(wood, true)).unwrap();
+        for _ in 0..480 {
+            game.step(1. / 24.);
+            if game.city().hippo_deliveries == 1 {
+                break;
+            }
+        }
+        assert_eq!(game.city().hippo_deliveries, 1);
+        game.act(Action::Praise).unwrap();
+        assert!(game.campaign.gifts.gathers_low_wood);
+        for _ in 0..48 {
+            game.step(1. / 24.);
+        }
+        assert!(!game.city().wood_help_active());
+        build(&mut game, Building::Store);
+        assert_eq!(game.city().stock[0], LOW_WOOD);
+        game.campaign.settlements[0].as_mut().unwrap().nodes[0] = 0;
+        game.step(1. / 24.);
+        assert!(game.city().looking_at_wood_store());
+        assert!(matches!(game.city().walkers[0].job, Some(Job::RefillWood(source)) if source != 0));
+
+        let saved = serde_json::to_vec(&game.saved_games()).unwrap();
+        let mut game = Game::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
+        for _ in 0..720 {
+            game.step(1. / 24.);
+            if game.city().hippo_deliveries == 2 {
+                break;
+            }
+        }
+        assert_eq!(game.city().hippo_deliveries, 2);
+        assert!(game.city().stock[0] > LOW_WOOD);
+        assert!(!game.city().wood_help_active());
+
+        game.campaign.settlements[0].as_mut().unwrap().stock[0] = LOW_WOOD;
+        game.act(Action::Rest).unwrap();
+        for _ in 0..48 {
+            game.step(1. / 24.);
+        }
+        assert!(!game.city().wood_help_active());
     }
 
     #[test]

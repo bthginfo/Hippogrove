@@ -96,7 +96,7 @@ pub fn landscape(
     let render_bounds = region.render_bounds();
     let bounds = render_bounds.padded(8);
     let sea_bounds = region.island_world().then_some(render_bounds);
-    let occupied = occupied_land(city);
+    let occupied = occupied_land(city, region);
     if region.island_world() {
         // Continue the sea beyond the detailed chunks in the campaign overview.
         let center = (region.bounds.0.world() + region.bounds.1.world()) * 0.5;
@@ -154,16 +154,17 @@ pub fn landscape(
     landmarks(parent, art, region, &occupied);
 }
 
-fn occupied_land(city: &Settlement) -> BTreeSet<Tile> {
+fn occupied_land(city: &Settlement, region: &Region) -> BTreeSet<Tile> {
     city.buildings
         .iter()
         .flat_map(|site| site.kind.tiles(site.tile))
         .chain(city.roads.iter().copied())
+        .chain(city.opening_farm(region))
         .collect()
 }
 
 pub fn forest_mesh(region: &Region, patch: ForestPatch, city: &Settlement) -> Mesh {
-    forest_geometry(region, patch, &occupied_land(city)).render_mesh()
+    forest_geometry(region, patch, &occupied_land(city, region)).render_mesh()
 }
 
 fn forest_geometry(region: &Region, patch: ForestPatch, occupied: &BTreeSet<Tile>) -> Geometry {

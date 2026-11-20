@@ -9,7 +9,8 @@ use crate::{
     art::rgb,
     civic::{Branch, Civic, Tech},
     game::{
-        Action, Building, Game, Miracle, Outcome, Quest, Settlement, SideQuest, Talent, stock_text,
+        Action, Building, FARM_REWARD, FirstDelivery, Game, Miracle, Outcome, PAW_BUNDLE, Quest,
+        Settlement, SideQuest, Talent, stock_text,
     },
     modes::Mode,
     play::{CameraRig, Panel, Play, Target, Tool, UiAction},
@@ -83,6 +84,7 @@ pub(crate) enum Label {
     AreaSupply(usize, Material),
     AreaStatus(usize, Material, bool),
     Subtitle,
+    FirstDelivery(FirstDelivery),
 }
 
 #[derive(Component)]
@@ -722,9 +724,10 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
             Toast,
             Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Px(if layout.short { 139. } else { 157. }),
-                left: Val::Percent(20.),
-                width: Val::Percent(60.),
+                top: Val::Px(if layout.short { 63. } else { 74. }),
+                left: Val::Px(if layout.short { 8. } else { EDGE }),
+                width: Val::Percent(43.),
+                max_width: Val::Px(390.),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
                 padding: UiRect::axes(Val::Px(9.), Val::Px(5.)),
@@ -852,7 +855,7 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                 text(
                     hud_root,
                     hud,
-                    "Steuerkreuz für Werkzeuge · L1 Optionen · R1 Ziel",
+                    "Steuerkreuz ← → Werkzeuge · ↑ Auftrag · L1 Optionen · R1 Werkzeugziel",
                     12.,
                     LIGHT,
                 );
@@ -1622,44 +1625,46 @@ fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
         button(parent, hud, "Weiter üben", UiAction::Cancel, false, true);
         return;
     }
-    parent.spawn(row()).with_children(|header| {
-        let title = if game.mode == Mode::Tutorial && game.campaign_complete() {
-            "Übung abgeschlossen"
-        } else {
-            "Hippogrove"
-        };
-        panel_heading(header, hud, title, layout.short);
-        button(
-            header,
-            hud,
-            "Kampagnen",
-            UiAction::ModeTab(false),
-            !layout.free_build_tab,
-            false,
-        );
-        button(
-            header,
-            hud,
-            "Freies Bauen",
-            UiAction::ModeTab(true),
-            layout.free_build_tab,
-            false,
-        );
-        if game.has_save(game.mode) {
-            button(header, hud, "Zurück", UiAction::Cancel, false, true);
-        }
-    });
-    if game.mode != Mode::Tutorial && !layout.free_build_tab {
-        button(
-            parent,
-            hud,
-            "Übungsinsel",
-            UiAction::SelectMode(Mode::Tutorial),
-            false,
-            false,
-        );
-    }
-    parent.spawn(row()).with_children(|cards| {
+    let title = if game.mode == Mode::Tutorial && game.campaign_complete() {
+        "Übung abgeschlossen"
+    } else {
+        "Hippogrove"
+    };
+    modal_header(parent, hud, title, layout.short);
+    let practice = game.mode != Mode::Tutorial && !layout.free_build_tab;
+    let style = ButtonStyle {
+        compact: layout.short,
+        ..default()
+    };
+    parent
+        .spawn(column_grid(if practice { 3 } else { 2 }))
+        .with_children(|tabs| {
+            for (name, sandbox) in [("Kampagnen", false), ("Freies Bauen", true)] {
+                styled_button(
+                    tabs,
+                    hud,
+                    name,
+                    UiAction::ModeTab(sandbox),
+                    layout.free_build_tab == sandbox,
+                    false,
+                    style,
+                );
+            }
+            if practice {
+                styled_button(
+                    tabs,
+                    hud,
+                    "Übungsinsel",
+                    UiAction::SelectMode(Mode::Tutorial),
+                    false,
+                    false,
+                    style,
+                );
+            }
+        });
+    let mut gallery = column_grid(3);
+    gallery.row_gap = Val::Px(6.);
+    parent.spawn(gallery).with_children(|cards| {
         for biome in Biome::ALL {
             let mode = if layout.free_build_tab {
                 Mode::Sandbox(biome)
@@ -1677,10 +1682,9 @@ fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
                         strong: false,
                     },
                     Node {
-                        width: Val::Percent(if layout.short { 48. } else { 32. }),
-                        min_height: Val::Px(if layout.short { 61. } else { 85. }),
+                        min_height: Val::Px(if layout.short { 55. } else { 85. }),
                         align_items: AlignItems::Center,
-                        column_gap: Val::Px(8.),
+                        column_gap: Val::Px(if layout.short { 5. } else { 8. }),
                         padding: UiRect::all(Val::Px(4.)),
                         border: UiRect::all(Val::Px(2.)),
                         ..default()
@@ -1700,8 +1704,8 @@ fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
                             },
                         ),
                         Node {
-                            width: Val::Px(if layout.short { 61. } else { 70. }),
-                            height: Val::Px(if layout.short { 49. } else { 64. }),
+                            width: Val::Px(if layout.short { 43. } else { 70. }),
+                            height: Val::Px(if layout.short { 41. } else { 64. }),
                             flex_shrink: 0.,
                             ..default()
                         },
@@ -1713,11 +1717,26 @@ fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
                     })
                     .with_children(|words| {
                         let foreground = if selected { INK } else { LIGHT };
-                        text(words, hud, mode.name(), 15., foreground);
+                        let name = if layout.short {
+                            ["Weidenland", "Fjord", "Jadekanäle", "Oase", "Ägäis"][biome as usize]
+                        } else {
+                            mode.name()
+                        };
+                        text(
+                            words,
+                            hud,
+                            name,
+                            if layout.short { 13. } else { 15. },
+                            foreground,
+                        );
                         let detail = if game.has_save(mode) {
                             "Fortsetzen"
                         } else if mode.sandbox() {
-                            "Ohne Gegner · Alle Baupläne"
+                            if layout.short {
+                                "Freies Bauen"
+                            } else {
+                                "Ohne Gegner · Alle Baupläne"
+                            }
                         } else {
                             "3 Kapitel"
                         };
@@ -1731,17 +1750,18 @@ fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
                     });
                 });
         }
+        if !layout.free_build_tab && game.has_save(Mode::Chronicle) {
+            styled_button(
+                cards,
+                hud,
+                "Chronik fortsetzen",
+                UiAction::SelectMode(Mode::Chronicle),
+                game.mode == Mode::Chronicle,
+                false,
+                style,
+            );
+        }
     });
-    if !layout.free_build_tab && game.has_save(Mode::Chronicle) {
-        button(
-            parent,
-            hud,
-            "Chronik fortsetzen",
-            UiAction::SelectMode(Mode::Chronicle),
-            game.mode == Mode::Chronicle,
-            false,
-        );
-    }
 }
 
 fn material_glyph(biome: Biome, material: Material) -> usize {
@@ -2071,11 +2091,50 @@ fn cutscene(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout) {
         });
 }
 
+fn first_delivery_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: bool) {
+    let region = game.region();
+    let Some(farm) = game.city().opening_farm(region) else {
+        return;
+    };
+    if let Some(bundle) = game.city().held {
+        text(
+            parent,
+            hud,
+            &format!(
+                "{} Holz in der Pfote · Wähle den Ablageplatz.",
+                bundle.count
+            ),
+            16.,
+            INK,
+        );
+    }
+    parent.spawn(column_grid(2)).with_children(|choices| {
+        for (choice, name, tile, icon) in [
+            (FirstDelivery::Village, "Zu Mira ins Dorf", region.depot, 6),
+            (FirstDelivery::Farm, "Zu Joras Uferhof", farm, 0),
+        ] {
+            styled_button(
+                choices,
+                hud,
+                name,
+                UiAction::Focus(tile),
+                false,
+                false,
+                ButtonStyle {
+                    compact: short,
+                    icon: Some(icon),
+                    caption: Some(Label::FirstDelivery(choice)),
+                },
+            );
+        }
+    });
+}
+
 fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play, layout: Layout) {
     let region = game.region();
     let city = game.city();
-    let tight =
-        layout.narrow_modal || (layout.short && matches!(play.panel, Panel::Map | Panel::Spells));
+    let tight = layout.narrow_modal
+        || (layout.short && matches!(play.panel, Panel::Map | Panel::Spells | Panel::Modes));
     parent.spawn((
         Node{width:Val::Percent(100.),height:Val::Percent(100.),align_items:AlignItems::Center,
             justify_content:JustifyContent::Center,..default()},
@@ -2098,6 +2157,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     Panel::Spells => "Zauberbuch",
                     Panel::Quests => "Aufträge",
                     Panel::SideQuest => "Nebenauftrag",
+                    Panel::FirstDelivery => "Wohin mit dem Holz?",
                     Panel::Sound => "Ton",
                     _ => "",
                 }, layout.short);
@@ -2153,6 +2213,13 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                         button(active,hud,"Zum Ziel",UiAction::Guide,false,true);
                     });
                     label(box_node,hud,Label::Objective,16.,INK);
+                    if let Some(choice) = city.opening_choice() {
+                        let delivery = match choice {
+                            FirstDelivery::Village => "Erste Lieferung · Miras Familie am Schrein",
+                            FirstDelivery::Farm => "Erste Lieferung · Joras Dach ist repariert",
+                        };
+                        text(box_node, hud, delivery, 14., MUTED);
+                    }
                     label(box_node,hud,Label::Raid,15.,MUTED);
                     if !layout.short && !region.tutorial {
                         text(box_node,hud,&region.lore,16.,MUTED);
@@ -2168,10 +2235,11 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                         button(box_node,hud,name,UiAction::Panel(Panel::SideQuest),false,false);
                     }
                 }
+                Panel::FirstDelivery => first_delivery_panel(box_node, hud, game, layout.short),
                 Panel::Closed | Panel::Story => {}
             }
             // The same feedback is visible while purchasing a talent or choosing a chapter.
-            if play.panel != Panel::Map && !layout.narrow_modal {
+            if !matches!(play.panel, Panel::Map | Panel::FirstDelivery | Panel::Modes) && !layout.narrow_modal {
                 label(box_node,hud,Label::Notice,16.,DARK);
             }
             if layout.gamepad && !layout.narrow_modal {
@@ -2364,6 +2432,19 @@ pub fn update(
                     )
                 }),
             Label::Objective => city.objective(region).1,
+            Label::FirstDelivery(FirstDelivery::Village) => {
+                if city.count(Building::House) == 0 {
+                    format!("{PAW_BUNDLE} Holz fürs erste Dach\nMehr Stimmung im Dorf")
+                } else {
+                    format!("{PAW_BUNDLE} Holz für die Familien\nMehr Stimmung im Dorf")
+                }
+            }
+            Label::FirstDelivery(FirstDelivery::Farm) => {
+                format!(
+                    "{PAW_BUNDLE} Holz für Joras Dach\n{} als Dank",
+                    stock_text(FARM_REWARD)
+                )
+            }
             Label::PracticeHint => {
                 let step = crate::practice::Step::current(city);
                 if play.gamepad && step == crate::practice::Step::Grab {

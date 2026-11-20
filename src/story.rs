@@ -10,6 +10,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Sequence {
     Arrival,
+    FirstDelivery,
     Shelter,
     Crossing,
     Islands,
@@ -39,6 +40,19 @@ impl Story {
         let start = region.start;
         let bridge = region.bridge();
         let (shots, lines, timing) = match self.sequence {
+            Sequence::FirstDelivery => (
+                [
+                    (start.offset(0, -1), 22.),
+                    (region.opening_farm().unwrap_or(bridge).offset(1, 1), 25.),
+                    (start.offset(-3, -4), 27.),
+                ],
+                [
+                    "Miras Familie wartet am Schrein auf ihr erstes Dach.",
+                    "Der Sturm hat auch Joras Dach am anderen Ufer beschädigt.",
+                    "Nimm Holz auf und entscheide, wem du zuerst hilfst.",
+                ],
+                [2.4, 2.4, 2.6],
+            ),
             Sequence::Arrival => (
                 [
                     (start.offset(-10, -11), 49.),
@@ -154,7 +168,8 @@ impl Story {
     }
 
     pub fn show_paw(self, region: &Region) -> bool {
-        self.sequence == Sequence::Arrival && self.cue(&self.beats(region)).0 > 0
+        matches!(self.sequence, Sequence::Arrival | Sequence::FirstDelivery)
+            && self.cue(&self.beats(region)).0 > 0
     }
 }
 
@@ -165,6 +180,7 @@ pub fn update(
     mut view: ResMut<CameraRig>,
 ) {
     play.observe_practice(&game, &mut view, time.elapsed_secs());
+    play.observe_wood_help(&game, time.elapsed_secs());
     play.observe_shelter(&game, &mut view);
     let Some(story) = &mut play.story else {
         return;

@@ -830,6 +830,14 @@ impl Region {
         Tile(self.cross_x, self.river + self.water_width - 1)
     }
 
+    pub fn opening_farm(&self) -> Option<Tile> {
+        (self.kind == Biome::Valley
+            && self.chapter() == 0
+            && self.island_world()
+            && self.quests.is_some())
+        .then_some(self.rival_shrine.offset(-5, 0))
+    }
+
     pub fn crossing(&self, tile: Tile) -> bool {
         !self.tutorial && (tile.0 == self.cross_x || self.crossings.contains(&tile.0))
     }

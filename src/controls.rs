@@ -350,6 +350,9 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
         }
         if play.tool == Tool::Hand {
             consider(region.depot, region.depot.world() + Vec3::Y * 0.21);
+            if let Some(farm) = city.opening_farm(region) {
+                consider(farm, farm.world() + Vec3::Y * 0.8);
+            }
             if !region.tutorial {
                 consider(region.bridge(), region.bridge().world() + Vec3::Y * 0.23);
                 for district in &region.districts {
@@ -743,6 +746,7 @@ pub fn collect(
     for (key, action) in [
         (KeyCode::KeyR, UiAction::Rotate),
         (KeyCode::KeyG, UiAction::Guide),
+        (KeyCode::KeyH, UiAction::ToolTarget),
         (KeyCode::Equal, UiAction::Zoom(true)),
         (KeyCode::Minus, UiAction::Zoom(false)),
         (KeyCode::Escape, UiAction::Cancel),
@@ -873,7 +877,7 @@ pub fn collect(
         (MENU, UiAction::Panel(Panel::Menu)),
         (MAP, UiAction::Panel(Panel::Map)),
         (ROTATE, UiAction::Rotate),
-        (GUIDE, UiAction::Guide),
+        (GUIDE, UiAction::ToolTarget),
         (PROGRESS, context),
     ] {
         if pressed & bit != 0 {

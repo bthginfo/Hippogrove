@@ -116,6 +116,7 @@ pub fn main() {
                     view::animate,
                     view::animate_rival,
                     view::highlight_guide,
+                    view::highlight_carry,
                     art::style_creature,
                     life::update,
                     view::gates.after(view::animate),
