@@ -434,6 +434,8 @@ pub enum Action {
     Settle(usize),
     Camp(usize),
     Assign(Tile, bool),
+    AssignArea(usize, Material, bool),
+    CancelArea(usize, Material),
     Watch(Tile),
     Tend(Tile),
     Feed,
@@ -452,9 +454,10 @@ pub struct Bundle {
     pub count: u16,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Job {
     Gather(usize),
+    GatherArea(usize, Material),
     Watch(Tile),
     Tend(Tile),
 }
@@ -464,6 +467,13 @@ pub enum Job {
 pub enum Lesson {
     Delivery(usize),
     Practiced(Job),
+}
+
+#[derive(Default)]
+pub struct AreaSupply {
+    pub units: u32,
+    pub stocked: usize,
+    pub sources: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -805,6 +815,27 @@ impl Settlement {
                     Building::Store | Building::Granary | Building::Civic(Civic::Port)
                 )
             })
+    }
+
+    pub fn area_supply(&self, region: &Region, area: usize, material: Material) -> AreaSupply {
+        let mut supply = AreaSupply::default();
+        for (index, _) in region.area_sources(area, material) {
+            let amount = self.nodes[index];
+            supply.units += u32::from(amount);
+            supply.stocked += usize::from(amount > 0);
+            supply.sources += 1;
+        }
+        supply
+    }
+
+    pub fn area_crew(&self, area: usize, material: Material) -> (usize, bool) {
+        let job = Some(Job::GatherArea(area, material));
+        let hippo = self.walkers[0].job == job;
+        let helpers = self.walkers[1..]
+            .iter()
+            .filter(|walker| walker.job == job)
+            .count();
+        (helpers, hippo)
     }
 
     pub fn camp_plan(&self, index: usize) -> Result<(), &'static str> {
@@ -1330,8 +1361,8 @@ impl Settlement {
         Ok(())
     }
 
-    fn route_to_store(&self, region: &Region, start: Tile) -> Option<VecDeque<Tile>> {
-        let mut stores: Vec<_> = std::iter::once(region.depot)
+    fn stores<'a>(&'a self, region: &'a Region) -> impl Iterator<Item = Tile> + 'a {
+        std::iter::once(region.depot)
             .chain(
                 region
                     .areas
@@ -1358,11 +1389,38 @@ impl Settlement {
                     })
                     .flat_map(|site| site.kind.tiles(site.tile)),
             )
-            .collect();
+    }
+
+    pub fn nearest_store(&self, region: &Region, start: Tile) -> Tile {
+        self.stores(region)
+            .min_by_key(|&tile| start.distance(tile))
+            .unwrap_or(region.depot)
+    }
+
+    fn route_to_store(&self, region: &Region, start: Tile) -> Option<VecDeque<Tile>> {
+        let mut stores: Vec<_> = self.stores(region).collect();
         stores.sort_by_key(|&tile| start.distance(tile));
         stores
             .into_iter()
             .find_map(|tile| self.route_to(region, start, tile, true))
+    }
+
+    fn area_collection(
+        &self,
+        region: &Region,
+        area: usize,
+        material: Material,
+        start: Tile,
+    ) -> Option<(usize, VecDeque<Tile>)> {
+        let mut candidates: Vec<_> = region
+            .area_sources(area, material)
+            .filter(|(index, _)| self.nodes[*index] > 0)
+            .collect();
+        candidates.sort_by_key(|(_, source)| start.distance(source.tile));
+        candidates.into_iter().find_map(|(index, source)| {
+            self.route_to(region, start, source.tile, true)
+                .map(|route| (index, route))
+        })
     }
 
     fn advance_walker(&mut self, walker: &mut Walker, region: &Region, gifts: Gifts, dt: f32) {
@@ -1444,8 +1502,18 @@ impl Settlement {
                     walker.pause = 0.45;
                     if walker.hippo {
                         self.hippo_deliveries = self.hippo_deliveries.saturating_add(1);
-                        self.lesson = Some(Lesson::Delivery(bundle.source));
-                        if gifts.training == 0 {
+                        let completed = walker.job.filter(|job| match *job {
+                            Job::Gather(source) => source == bundle.source,
+                            Job::GatherArea(area, material) => region
+                                .area_sources(area, material)
+                                .any(|(source, _)| source == bundle.source),
+                            _ => false,
+                        });
+                        self.lesson = Some(match completed {
+                            Some(job @ Job::GatherArea(..)) => Lesson::Practiced(job),
+                            _ => Lesson::Delivery(bundle.source),
+                        });
+                        if gifts.training == 0 && completed.is_some() {
                             walker.job = None;
                         }
                     } else {
@@ -1459,22 +1527,32 @@ impl Settlement {
         }
 
         match walker.job {
-            Some(Job::Gather(source)) => {
-                if self.nodes[source] == 0 {
-                    walker.pause = 2.;
-                    return;
-                }
-                let target = region.sources[source].tile;
-                let Some(route) = self.route_to(region, walker.tile(), target, true) else {
-                    walker.pause = 1.;
+            Some(job @ (Job::Gather(_) | Job::GatherArea(..))) => {
+                let next = match job {
+                    Job::Gather(source) if self.nodes[source] > 0 => self
+                        .route_to(region, walker.tile(), region.sources[source].tile, true)
+                        .map(|route| (source, route)),
+                    Job::GatherArea(area, material) if self.can_deposit(material, 1) => {
+                        self.area_collection(region, area, material, walker.tile())
+                    }
+                    _ => None,
+                };
+                let Some((source, route)) = next else {
+                    walker.pause = match job {
+                        Job::Gather(source) if self.nodes[source] > 0 => 1.,
+                        _ => 2.,
+                    };
                     return;
                 };
                 if route.is_empty() {
-                    let count = if walker.hippo {
+                    let mut count = if walker.hippo {
                         5 + u16::from(gifts.training) * 2
                     } else {
                         3
                     };
+                    if let Job::GatherArea(_, material) = job {
+                        count = count.min(self.storage_cap() - self.stock[material.index()]);
+                    }
                     walker.bundle = self.take(source, count);
                     walker.pause = if walker.bundle.is_some() { 0.65 } else { 1.5 };
                 } else {
@@ -1990,6 +2068,39 @@ impl Settlement {
             .min_by_key(|&tile| !self.road_at(region, tile))
     }
 
+    fn gathering_helper(&self, replace_busy: bool) -> Result<usize, &'static str> {
+        let mut eligible = self
+            .walkers
+            .iter()
+            .enumerate()
+            .filter(|(_, walker)| !walker.hippo && !walker.guard && walker.childhood <= 0.);
+        if let Some((index, _)) = eligible.clone().find(|(_, walker)| walker.job.is_none()) {
+            return Ok(index);
+        }
+        let count = eligible.clone().count();
+        if count == 0 {
+            return Err("Es gibt gerade keine erwachsenen Gläubigen für diesen Auftrag.");
+        }
+        if !replace_busy {
+            return Err("Alle Gläubigen haben Aufträge. Beende einen Auftrag oder baue Wohnraum.");
+        }
+        Ok(eligible.nth(self.next_worker % count).unwrap().0)
+    }
+
+    pub fn idle_helper(&self) -> bool {
+        self.gathering_helper(false).is_ok()
+    }
+
+    fn dispatch_gatherer(&mut self, worker: usize, job: Job) {
+        let walker = &mut self.walkers[worker];
+        walker.job = Some(job);
+        walker.route.clear();
+        walker.pause = 0.;
+        if !walker.hippo {
+            self.next_worker = self.next_worker.wrapping_add(1);
+        }
+    }
+
     fn assign(&mut self, region: &Region, tile: Tile, hippo: bool) -> GameResult {
         let index = region
             .source_at(tile)
@@ -1997,22 +2108,7 @@ impl Settlement {
         let worker = if hippo {
             0
         } else {
-            let workers: Vec<_> = self
-                .walkers
-                .iter()
-                .enumerate()
-                .filter(|(_, walker)| !walker.hippo && !walker.guard && walker.childhood <= 0.)
-                .collect();
-            if workers.is_empty() {
-                return Err(
-                    "Es gibt gerade keine erwachsenen Gläubigen für diesen Auftrag.".into(),
-                );
-            }
-            workers
-                .iter()
-                .find(|(_, walker)| walker.job.is_none())
-                .unwrap_or(&workers[self.next_worker % workers.len()])
-                .0
+            self.gathering_helper(true)?
         };
         if self
             .route_to(region, self.walkers[worker].tile(), tile, true)
@@ -2020,13 +2116,7 @@ impl Settlement {
         {
             return Err("Der Übergang zu dieser Quelle ist noch versperrt.".into());
         }
-        let walker = &mut self.walkers[worker];
-        walker.job = Some(Job::Gather(index));
-        walker.route.clear();
-        walker.pause = 0.;
-        if !hippo {
-            self.next_worker = self.next_worker.wrapping_add(1);
-        }
+        self.dispatch_gatherer(worker, Job::Gather(index));
         Ok(format!(
             "{} holt {}.",
             if hippo {
@@ -2036,6 +2126,62 @@ impl Settlement {
             },
             region.kind.material(region.sources[index].material),
         ))
+    }
+
+    fn assign_area(
+        &mut self,
+        region: &Region,
+        area: usize,
+        material: Material,
+        hippo: bool,
+    ) -> GameResult {
+        let place = region.areas.get(area).ok_or("Wähle ein Rohstoffgebiet.")?;
+        if !self.camps[area] {
+            return Err("Baue im Gebiet ein Sammellager für dauerhafte Aufträge.".into());
+        }
+        let worker = if hippo {
+            0
+        } else {
+            self.gathering_helper(false)?
+        };
+        let job = Job::GatherArea(area, material);
+        if self.walkers[worker].job == Some(job) {
+            return Err("Das Nilpferd sammelt diesen Rohstoff bereits.".into());
+        }
+        if self
+            .route_to(region, self.walkers[worker].tile(), place.center, true)
+            .is_none()
+        {
+            return Err("Der Weg zu diesem Sammellager ist versperrt.".into());
+        }
+        self.dispatch_gatherer(worker, job);
+        let gatherer = if hippo {
+            "Das Nilpferd"
+        } else {
+            "Ein Gläubiger"
+        };
+        Ok(format!(
+            "{gatherer} sammelt {} im Gebiet {}.",
+            region.kind.material(material),
+            place.name
+        ))
+    }
+
+    fn cancel_area(&mut self, area: usize, material: Material) -> GameResult {
+        let job = Some(Job::GatherArea(area, material));
+        let mut released = false;
+        for walker in self.walkers.iter_mut().filter(|walker| walker.job == job) {
+            walker.job = None;
+            if walker.bundle.is_none() {
+                walker.route.clear();
+                walker.pause = 0.;
+            }
+            released = true;
+        }
+        if !released {
+            return Err("Für diesen Rohstoff gibt es hier keinen Sammelauftrag.".into());
+        }
+        Ok("Aufträge beendet. Getragene Ladungen werden abgelegt.".into())
     }
 
     fn watch(&mut self, region: &Region, tile: Tile, gifts: Gifts) -> GameResult {
@@ -2171,7 +2317,7 @@ impl Settlement {
             return "Erholt sich";
         }
         match self.walkers[0].job {
-            Some(Job::Gather(_)) => "Sammelt",
+            Some(Job::Gather(_) | Job::GatherArea(..)) => "Sammelt",
             Some(Job::Watch(_)) => "Hält Wache",
             Some(Job::Tend(_)) => "Pflegt ein Feld",
             None if self.walkers[0].bundle.is_some() => "Bringt eine Ladung heim",
@@ -2665,6 +2811,9 @@ impl Campaign {
                             |b: Bundle| b.source < region.sources.len() && b.count > 0;
                         let valid_job = |job| match job {
                             Job::Gather(source) => source < region.sources.len(),
+                            Job::GatherArea(area, _) => {
+                                region.areas.get(area).is_some() && city.camps[area]
+                            }
                             Job::Watch(tile) | Job::Tend(tile) => region.bounds.contains(tile),
                         };
                         city.nodes.len() == region.sources.len()
@@ -2869,6 +3018,10 @@ impl Game {
                 .open_camp(region, index)
                 .inspect(|_| research.earn(1)),
             Action::Assign(tile, hippo) => settlement.assign(region, tile, hippo),
+            Action::AssignArea(area, material, hippo) => {
+                settlement.assign_area(region, area, material, hippo)
+            }
+            Action::CancelArea(area, material) => settlement.cancel_area(area, material),
             Action::Watch(tile) => settlement.watch(region, tile, *gifts),
             Action::Tend(tile) => settlement.tend(region, tile, *gifts),
             Action::Feed => settlement.feed(),
@@ -3317,6 +3470,10 @@ mod tests {
             }
         }
         assert!(game.act(Action::Camp(0)).is_err());
+        assert!(
+            game.act(Action::AssignArea(0, Material::Wood, false))
+                .is_err()
+        );
         let region = game.region().clone();
         let center = region.areas[0].center;
         let (index, source) = region
@@ -3339,6 +3496,70 @@ mod tests {
         game.act(Action::Hand(center)).unwrap();
         game.act(Action::Assign(source.tile, false)).unwrap();
         game.act(Action::Assign(source.tile, true)).unwrap();
+    }
+
+    #[test]
+    fn area_orders_switch_sources_and_deliver_the_last_bundle_after_cancellation() {
+        let mut game = Game::start(Mode::Sandbox(Biome::Aegean));
+        let region = game.region().clone();
+        let area = 1;
+        let material = Material::Stone;
+        let (first, primary) = region.area_sources(area, material).next().unwrap();
+        let (second, _) = region
+            .area_sources(area, material)
+            .find(|(_, source)| source.tile.distance(primary.tile) > 2)
+            .unwrap();
+        let city = game.campaign.settlements[0].as_mut().unwrap();
+        let start = primary
+            .tile
+            .neighbors()
+            .into_iter()
+            .find(|&tile| city.walkable(&region, tile))
+            .unwrap();
+        city.walkers[1].position = start.local().to_array();
+        for (index, _) in region.area_sources(area, material) {
+            city.nodes[index] = 0;
+            city.regrowth[index] = 0.;
+        }
+        city.nodes[first] = 3;
+        city.nodes[second] = 9;
+        city.stock[material.index()] = 0;
+
+        game.act(Action::AssignArea(area, material, false)).unwrap();
+        game.step(0.2);
+        let first_bundle = game.city().walkers[1].bundle.unwrap();
+        assert_eq!((first_bundle.source, first_bundle.count), (first, 3));
+        let supply = game.city().area_supply(&region, area, material);
+        assert_eq!((supply.units, supply.stocked), (9, 1));
+        assert_eq!(game.city().area_crew(area, material), (1, false));
+        assert_eq!(
+            game.city().nearest_store(&region, primary.tile),
+            region.areas[area].center
+        );
+
+        let saved = serde_json::to_vec(&game.saved_games()).unwrap();
+        let mut game = Game::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
+        for _ in 0..180 {
+            game.step(0.2);
+            if game.city().walkers[1]
+                .bundle
+                .is_some_and(|bundle| bundle.source == second)
+            {
+                break;
+            }
+        }
+        let second_bundle = game.city().walkers[1].bundle.unwrap();
+        assert_eq!((second_bundle.source, second_bundle.count), (second, 3));
+        assert_eq!(game.city().stock[material.index()], 3);
+        game.act(Action::CancelArea(area, material)).unwrap();
+        assert_eq!(game.city().area_crew(area, material), (0, false));
+        assert!(game.act(Action::CancelArea(area, material)).is_err());
+        for _ in 0..180 {
+            game.step(0.2);
+        }
+        assert_eq!(game.city().stock[material.index()], 6);
+        assert_eq!(game.city().nodes[second], 6);
+        assert!(game.city().walkers[1].bundle.is_none());
     }
 
     #[test]

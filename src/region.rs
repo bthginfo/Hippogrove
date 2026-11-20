@@ -556,6 +556,18 @@ impl Region {
         self.areas.iter().position(|area| area.center == tile)
     }
 
+    pub fn area_sources(
+        &self,
+        area: usize,
+        material: Material,
+    ) -> impl Iterator<Item = (usize, &Source)> {
+        let center = self.areas.get(area).map(|area| area.center);
+        self.sources.iter().enumerate().filter(move |(_, source)| {
+            source.material == material
+                && center.is_some_and(|center| source.tile.within(center, AREA_RADIUS))
+        })
+    }
+
     pub fn weather(&self, time: f32) -> Weather {
         let offset = match self.kind {
             Biome::Valley => 0.,

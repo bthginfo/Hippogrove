@@ -4,7 +4,7 @@ use crate::{
     civic::{Branch, Civic, Goods, Tech},
     game::{Action, Building, Crop, Game, Miracle, Quest, stock_text},
     modes::Mode,
-    region::{Biome, Tile},
+    region::{Biome, Material, Tile},
     story::{Sequence, Story},
 };
 
@@ -73,6 +73,7 @@ pub enum Panel {
     Closed,
     Journey,
     Map,
+    Area(usize),
     Progress,
     Quests,
     Catalog,
@@ -93,6 +94,8 @@ pub enum UiAction {
     Guide,
     Panel(Panel),
     Focus(Tile),
+    AreaMaterial(Material),
+    AreaSource(usize, Material),
     Landscape,
     ToggleObjective,
     Catalog(Option<Branch>),
@@ -115,6 +118,7 @@ pub struct Play {
     pub story: Option<Story>,
     previous_quest: Quest,
     pub free_build_tab: bool,
+    pub area_material: Material,
     pub option: usize,
     pub rotation: u8,
     pub road_anchor: Option<Tile>,
@@ -153,6 +157,7 @@ impl Play {
             story,
             previous_quest: game.city().quest,
             free_build_tab: game.mode.sandbox(),
+            area_material: Material::Wood,
             option: 0,
             rotation: 0,
             road_anchor: None,
@@ -247,7 +252,7 @@ impl Play {
                 .iter()
                 .find(|site| site.kind == Building::Civic(Civic::Barracks))
                 .map_or(region.start, |site| site.tile),
-            Tool::Hand if city.held.is_some() => region.depot,
+            Tool::Hand if city.held.is_some() => city.nearest_store(region, self.aim),
             Tool::Miracles if self.miracle() == Miracle::Mend => city.walkers[0].tile(),
             Tool::Miracles if self.miracle().offensive() && city.quest == Quest::Bridge => region
                 .guards
@@ -364,6 +369,9 @@ impl Play {
             UiAction::Cancel => {
                 if self.panel == Panel::Modes && !game.campaign.intro_seen {
                     self.choose_mode(game.mode, game, view, now);
+                } else if let Panel::Area(index) = self.panel {
+                    self.panel = Panel::Map;
+                    self.focus = Some(UiAction::Panel(Panel::Area(index)));
                 } else if self.panel != Panel::Closed {
                     self.panel = Panel::Closed;
                     self.focus = None;
@@ -379,19 +387,36 @@ impl Play {
                 view.focus(self.aim);
                 self.pointer = None;
             }
-            UiAction::Focus(tile) => {
-                self.aim = tile;
-                self.tool(Tool::Hand);
-                self.panel = Panel::Closed;
-                self.focus = None;
-                self.pointer = None;
-                view.focus(tile);
+            UiAction::Focus(tile) => self.focus_tile(tile, view),
+            UiAction::AreaMaterial(material) => {
+                self.area_material = material;
+                self.focus = Some(action);
+            }
+            UiAction::AreaSource(index, material) => {
+                let region = game.region();
+                if let Some(area) = region.areas.get(index) {
+                    let city = game.city();
+                    let tile = region
+                        .area_sources(index, material)
+                        .min_by_key(|(source, node)| {
+                            (city.nodes[*source] == 0, node.tile.distance(area.center))
+                        })
+                        .map_or(area.center, |(_, source)| source.tile);
+                    self.focus_tile(tile, view);
+                }
             }
             UiAction::Landscape => {
                 self.panel = Panel::Closed;
                 self.focus = None;
                 view.landscape();
                 self.pointer = None;
+            }
+            UiAction::Panel(Panel::Area(index)) => {
+                if let Some(area) = game.region().areas.get(index) {
+                    self.panel = Panel::Area(index);
+                    self.area_material = area.material;
+                    self.focus = Some(UiAction::AreaMaterial(area.material));
+                }
             }
             UiAction::Panel(panel) => {
                 self.panel = if self.panel == panel {
@@ -413,6 +438,15 @@ impl Play {
             UiAction::Do(action) => return self.execute(action, game, view, now),
         }
         false
+    }
+
+    fn focus_tile(&mut self, tile: Tile, view: &mut CameraRig) {
+        self.aim = tile;
+        self.tool(Tool::Hand);
+        self.panel = Panel::Closed;
+        self.focus = None;
+        self.pointer = None;
+        view.focus(tile);
     }
 
     fn choose_mode(&mut self, mode: Mode, game: &mut Game, view: &mut CameraRig, now: f32) {
