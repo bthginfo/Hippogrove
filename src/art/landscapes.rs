@@ -93,9 +93,11 @@ pub fn landscape(
     city: &Settlement,
 ) {
     let palette = Palette::for_biome(region.kind);
-    let bounds = region.bounds.padded(8);
+    let render_bounds = region.render_bounds();
+    let bounds = render_bounds.padded(8);
+    let sea_bounds = region.island_world().then_some(render_bounds);
     let occupied = occupied_land(city);
-    if region.kind == Biome::Aegean {
+    if region.island_world() {
         // Continue the sea beyond the detailed chunks in the campaign overview.
         let center = (region.bounds.0.world() + region.bounds.1.world()) * 0.5;
         let mut sea = Geometry::default();
@@ -117,7 +119,7 @@ pub fn landscape(
     for z in (north..south).step_by(CHUNK as usize) {
         for x in (left..right).step_by(CHUNK as usize) {
             let end = Tile((x + CHUNK).min(right), (z + CHUNK).min(south));
-            let (ground, water, foam) = chunk(region, &palette, Tile(x, z), end);
+            let (ground, water, foam) = chunk(region, &palette, Tile(x, z), end, sea_bounds);
             for (geometry, material, build_mesh) in [
                 (
                     ground,
@@ -273,6 +275,7 @@ fn chunk(
     palette: &Palette,
     start: Tile,
     end: Tile,
+    sea_bounds: Option<Bounds>,
 ) -> (Geometry, Geometry, Geometry) {
     let mut ground = Geometry::default();
     let mut water = Geometry::default();
@@ -299,7 +302,7 @@ fn chunk(
             };
             let colors = [
                 land_color(region, palette, sample),
-                sea_color(region, palette, sample),
+                sea_color(palette, sample, sea_bounds),
             ];
             samples.push((sample, colors));
         }
@@ -346,7 +349,7 @@ fn chunk(
             let key = hash(x, z, 223);
             if region.water(tile) {
                 if key % 4 == 0 {
-                    ripple(&mut foam, region, tile, key);
+                    ripple(&mut foam, region, tile, key, sea_bounds);
                 }
             } else if region.road(tile) {
                 stones(&mut ground, region, palette, tile, key);
@@ -405,7 +408,7 @@ fn land_color(region: &Region, palette: &Palette, s: Sample) -> Color {
     )
 }
 
-fn sea_color(region: &Region, palette: &Palette, s: Sample) -> Color {
+fn sea_color(palette: &Palette, s: Sample, bounds: Option<Bounds>) -> Color {
     let depth = -s.coast;
     let run = noise(Vec2::new(s.local.x * 0.67, s.local.y * 1.61), 0.98, 80);
     let broad = noise(s.local, 9.5, 86);
@@ -416,18 +419,15 @@ fn sea_color(region: &Region, palette: &Palette, s: Sample) -> Color {
         &rgb(0xc4e8ca),
         smooth((run - 0.54) / 0.46) * (1. - depth_fade) * 0.38,
     );
-    if region.kind != Biome::Aegean {
-        return local_color;
-    }
-    let Tile(west, north) = region.bounds.0;
-    let Tile(east, south) = region.bounds.1;
-    let edge = (s.local.x - f32::from(west))
-        .min(f32::from(east) - s.local.x)
-        .min(s.local.y - f32::from(north))
-        .min(f32::from(south) - s.local.y);
-    palette
-        .open_water()
-        .mix(&local_color, smooth((edge + 7.4) / 7.4))
+    let detail = bounds.map_or(1., |bounds| sea_detail(bounds, s.local));
+    palette.open_water().mix(&local_color, detail)
+}
+
+fn sea_detail(bounds: Bounds, point: Vec2) -> f32 {
+    let edge = (point - bounds.0.local())
+        .min(bounds.1.local() - point)
+        .min_element();
+    smooth((edge + 6.5) / 8.5)
 }
 
 fn shoreline(foam: &mut Geometry, corners: [Sample; 3]) {
@@ -480,20 +480,23 @@ fn shoreline(foam: &mut Geometry, corners: [Sample; 3]) {
     }
 }
 
-fn ripple(foam: &mut Geometry, region: &Region, tile: Tile, key: u32) {
+fn ripple(foam: &mut Geometry, region: &Region, tile: Tile, key: u32, bounds: Option<Bounds>) {
     let p = tile.world().with_y(WATER + 0.013);
     let angle = (key % 31) as f32 * 0.033 - 0.53;
     let length = 0.43 + (key % 19) as f32 * 0.054;
     let along = Vec3::new(angle.cos(), 0., angle.sin()) * length * 0.5;
     let cross = along.cross(Vec3::Y) * 0.13;
     let depth = -terrain::shore(region, Tile::coordinates(p));
-    if depth > 0.29 {
+    let fade = bounds.map_or(1., |bounds| {
+        sea_detail(bounds, tile.local()) * (1. - smooth((depth - 4.) / 17.))
+    });
+    if depth > 0.29 && fade > 0.025 {
         foam.quad(
             p - along,
             p + cross,
             p + along,
             p - cross,
-            rgb(0xc7f4e9).with_alpha(0.18 + 0.12 * (key % 3) as f32),
+            rgb(0xc7f4e9).with_alpha((0.18 + 0.12 * (key % 3) as f32) * fade),
         );
     }
 }

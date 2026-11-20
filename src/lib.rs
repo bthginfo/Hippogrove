@@ -3,12 +3,15 @@ mod atmosphere;
 mod civic;
 mod controls;
 mod game;
+mod growth;
 mod hud;
 mod life;
 mod modes;
 mod play;
+mod practice;
 mod quests;
 mod region;
+mod rivals;
 mod save;
 mod sound;
 mod story;
@@ -29,7 +32,6 @@ use crate::{
     game::Game,
     modes::Mode,
     play::{CameraRig, Panel, Play, Target},
-    region::Biome,
     save::SaveFile,
 };
 
@@ -47,17 +49,12 @@ pub fn main() {
     }
     let mut file = SaveFile::for_device();
     let saved = file.load().and_then(Game::resume);
-    let first_launch = saved.is_none();
     if saved.is_none() {
         file.preserve_unreadable();
     }
-    let game = saved.unwrap_or_else(|| Game::start(Mode::Campaign(Biome::Valley)));
+    let game = saved.unwrap_or_else(|| Game::start(Mode::Tutorial));
     let mut play = Play::new(&game);
     play.mix = file.load_mix();
-    if first_launch {
-        play.panel = Panel::Modes;
-        play.story = None;
-    }
     let mut view = CameraRig::new(&game);
     if let Some(story) = play.story {
         story.frame(game.region(), &mut view);
@@ -117,6 +114,9 @@ pub fn main() {
                 (
                     view::props,
                     view::animate,
+                    view::animate_rival,
+                    view::highlight_guide,
+                    art::style_creature,
                     life::update,
                     view::gates.after(view::animate),
                     view::aim,
@@ -127,6 +127,7 @@ pub fn main() {
                 view::ready_to_show,
                 hud::layout,
                 hud::update,
+                hud::pad_reticle,
                 hud::camera_fade,
                 save::checkpoint,
                 screenshot,
@@ -217,6 +218,11 @@ fn embed_assets(app: &App) {
         embed!("audio/fernwind.wav"),
         embed!("audio/card_hit.wav"),
         embed!("audio/card_shield.wav"),
+        embed!("audio/paw_lift.wav"),
+        embed!("audio/paw_land.wav"),
+        embed!("audio/hippo_care.wav"),
+        embed!("audio/chapter_chime.wav"),
+        embed!("audio/rival_omen.wav"),
     ];
     for (name, data) in files {
         assets.insert_asset(Path::new("assets").join(name), Path::new(name), data);
@@ -238,8 +244,8 @@ fn simulate(
     }
 }
 
-fn refresh_target(game: Res<Game>, play: Res<Play>, mut target: ResMut<Target>) {
-    target.refresh(&play, &game);
+fn refresh_target(game: Res<Game>, play: Res<Play>, time: Res<Time>, mut target: ResMut<Target>) {
+    target.refresh(&play, &game, time.elapsed_secs());
 }
 
 fn screenshot(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>) {

@@ -57,6 +57,7 @@ pub(crate) enum Label {
     Stock(Material),
     Faith,
     Objective,
+    PracticeHint,
     Quest,
     Notice,
     Confirm,
@@ -68,6 +69,7 @@ pub(crate) enum Label {
     LocalQuest,
     Calendar,
     Raid,
+    RaidAlert,
     Mana,
     Creature,
     Helpers,
@@ -92,6 +94,9 @@ pub struct CameraFade;
 #[derive(Component)]
 pub struct LoadingWorld;
 
+#[derive(Component)]
+pub struct PadReticle;
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Layout {
     region: usize,
@@ -99,6 +104,7 @@ struct Layout {
     tool: Tool,
     option: usize,
     panel: Panel,
+    gamepad: bool,
     unlocked: usize,
     quest: Quest,
     side_quest: SideQuest,
@@ -143,6 +149,21 @@ pub fn setup(
 ) {
     hud.regular = assets.load("embedded://fonts/DMSans-Medium.ttf");
     hud.bold = assets.load("embedded://fonts/DMSans-Bold.ttf");
+    commands.spawn((
+        PadReticle,
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Px(13.),
+            height: Val::Px(13.),
+            border: UiRect::all(Val::Px(2.)),
+            ..default()
+        },
+        BorderColor(rgb(LIGHT)),
+        BorderRadius::all(Val::Px(7.)),
+        Outline::new(Val::Px(1.), Val::Px(1.), rgb(DARK)),
+        GlobalZIndex(40),
+        Visibility::Hidden,
+    ));
     commands
         .spawn((
             CameraFade,
@@ -217,6 +238,28 @@ pub fn camera_fade(
     } else {
         Visibility::Hidden
     };
+}
+
+pub fn pad_reticle(
+    play: Res<Play>,
+    game: Res<Game>,
+    scale: Res<UiScale>,
+    camera: Single<(&Camera, &GlobalTransform), With<crate::view::WorldCamera>>,
+    reticle: Single<(&mut Node, &mut Visibility), With<PadReticle>>,
+) {
+    let (mut node, mut visible) = reticle.into_inner();
+    let (camera, pose) = *camera;
+    let position = play
+        .pointer
+        .or_else(|| crate::controls::aim_on_screen(&play, &game, camera, pose));
+    if let Some(point) = position.filter(|_| play.gamepad && play.panel == Panel::Closed) {
+        let logical = point / scale.0;
+        node.left = Val::Px(logical.x - 6.5);
+        node.top = Val::Px(logical.y - 6.5);
+        *visible = Visibility::Visible;
+    } else {
+        *visible = Visibility::Hidden;
+    }
 }
 
 fn chart(region: &Region) -> Image {
@@ -641,6 +684,17 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                                 false,
                                 quick,
                             );
+                            for (name, closer) in [("−", false), ("+", true)] {
+                                styled_button(
+                                    links,
+                                    hud,
+                                    name,
+                                    UiAction::Zoom(closer),
+                                    false,
+                                    false,
+                                    quick,
+                                );
+                            }
                         });
                     if !game.mode.sandbox() {
                         styled_button(
@@ -650,8 +704,15 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                             UiAction::ToggleObjective,
                             false,
                             false,
-                            quick,
+                            ButtonStyle {
+                                caption: (game.mode == Mode::Tutorial)
+                                    .then_some(Label::PracticeHint),
+                                ..quick
+                            },
                         );
+                    }
+                    if game.region().has_rival_creature() && layout.quest == Quest::Bridge {
+                        label(right, hud, Label::RaidAlert, 14., GOLD);
                     }
                 });
         });
@@ -787,6 +848,15 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                         );
                     }
                 });
+            if layout.gamepad {
+                text(
+                    hud_root,
+                    hud,
+                    "Steuerkreuz für Werkzeuge · L1 Optionen · R1 Ziel",
+                    12.,
+                    LIGHT,
+                );
+            }
         });
 }
 
@@ -924,11 +994,12 @@ fn orders_panel(
             }
         });
     if tool == Tool::Hippo {
-        parent.spawn(column_grid(3)).with_children(|care| {
+        parent.spawn(column_grid(4)).with_children(|care| {
             for (name, action) in [
                 ("Loben", Action::Praise),
                 ("Snack", Action::Feed),
                 ("Pause", Action::Rest),
+                ("Streicheln", Action::Pet),
             ] {
                 styled_button(
                     care,
@@ -1008,7 +1079,6 @@ fn map_chart(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
         ))
         .with_children(|map| {
             let towns = [
-                (region.start, DARK),
                 (region.bridge(), 0x8b5b3f),
                 (region.districts[0].center, PAPER),
                 (region.districts[1].center, PAPER),
@@ -1018,7 +1088,10 @@ fn map_chart(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
                 .iter()
                 .zip(game.city().camps)
                 .map(|(area, built)| (area.center, if built { 0xfbe39e } else { 0xb67648 }));
-            for (tile, color) in towns.into_iter().chain(camps) {
+            let markers = std::iter::once((region.start, DARK))
+                .chain(towns.into_iter().filter(|_| !region.tutorial))
+                .chain(camps);
+            for (tile, color) in markers {
                 let offset = tile.local() - region.bounds.0.local() + Vec2::splat(0.5);
                 let p = (size * offset / tiles - Vec2::splat(dot * 0.5))
                     .clamp(Vec2::ZERO, size - Vec2::splat(dot));
@@ -1096,7 +1169,7 @@ fn side_quest_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, l
         if game.region().quests.is_some() && layout.side_quest == SideQuest::Active {
             button(parent, hud, "Zum Ziel", UiAction::Guide, false, true);
         }
-        if game.city().next_raid().is_some() {
+        if game.city().next_raid(game.region()).is_some() {
             label(parent, hud, Label::Raid, 15., MUTED);
         }
     }
@@ -1104,6 +1177,28 @@ fn side_quest_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, l
 
 fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout) {
     let region = game.region();
+    if region.tutorial {
+        map_chart(parent, hud, game, layout.short);
+        parent.spawn(row()).with_children(|nav| {
+            button(
+                nav,
+                hud,
+                "Zum Startschrein",
+                UiAction::Focus(region.start),
+                false,
+                true,
+            );
+            button(
+                nav,
+                hud,
+                "Ganze Insel ansehen",
+                UiAction::Landscape,
+                false,
+                false,
+            );
+        });
+        return;
+    }
     let compact = ButtonStyle {
         compact: layout.short,
         ..default()
@@ -1128,30 +1223,49 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: 
             );
         });
         body.spawn(column).with_children(|destinations| {
-            destinations.spawn(column_grid(2)).with_children(|links| {
-                styled_button(
-                    links,
-                    hud,
-                    "Startdorf",
-                    UiAction::Focus(region.start),
-                    false,
-                    false,
-                    compact,
-                );
-                styled_button(
-                    links,
-                    hud,
-                    if layout.short {
-                        "Übergang"
+            destinations
+                .spawn(column_grid(
+                    if region.has_rival_creature() && !layout.short {
+                        3
                     } else {
-                        "Hauptübergang"
+                        2
                     },
-                    UiAction::Focus(region.bridge()),
-                    false,
-                    false,
-                    compact,
-                );
-            });
+                ))
+                .with_children(|links| {
+                    styled_button(
+                        links,
+                        hud,
+                        "Startdorf",
+                        UiAction::Focus(region.start),
+                        false,
+                        false,
+                        compact,
+                    );
+                    if region.has_rival_creature() && !layout.short {
+                        styled_button(
+                            links,
+                            hud,
+                            "Rivale",
+                            UiAction::Focus(region.rival_lair()),
+                            false,
+                            false,
+                            compact,
+                        );
+                    }
+                    styled_button(
+                        links,
+                        hud,
+                        if layout.short || region.has_rival_creature() {
+                            "Übergang"
+                        } else {
+                            "Hauptübergang"
+                        },
+                        UiAction::Focus(region.bridge()),
+                        false,
+                        false,
+                        compact,
+                    );
+                });
             for (index, district) in region.districts.iter().enumerate() {
                 let caption = if layout.short {
                     Label::DistrictBrief(index)
@@ -1496,8 +1610,25 @@ fn inspection_panel(
 }
 
 fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout) {
+    if game.practice_required() {
+        panel_heading(parent, hud, "Übungsinsel", layout.short);
+        text(
+            parent,
+            hud,
+            "Die Kampagnen stehen nach der kurzen Übung bereit.",
+            17.,
+            INK,
+        );
+        button(parent, hud, "Weiter üben", UiAction::Cancel, false, true);
+        return;
+    }
     parent.spawn(row()).with_children(|header| {
-        panel_heading(header, hud, "Hippogrove", layout.short);
+        let title = if game.mode == Mode::Tutorial && game.campaign_complete() {
+            "Übung abgeschlossen"
+        } else {
+            "Hippogrove"
+        };
+        panel_heading(header, hud, title, layout.short);
         button(
             header,
             hud,
@@ -1518,6 +1649,16 @@ fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
             button(header, hud, "Zurück", UiAction::Cancel, false, true);
         }
     });
+    if game.mode != Mode::Tutorial && !layout.free_build_tab {
+        button(
+            parent,
+            hud,
+            "Übungsinsel",
+            UiAction::SelectMode(Mode::Tutorial),
+            false,
+            false,
+        );
+    }
     parent.spawn(row()).with_children(|cards| {
         for biome in Biome::ALL {
             let mode = if layout.free_build_tab {
@@ -2013,7 +2154,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     });
                     label(box_node,hud,Label::Objective,16.,INK);
                     label(box_node,hud,Label::Raid,15.,MUTED);
-                    if !layout.short {
+                    if !layout.short && !region.tutorial {
                         text(box_node,hud,&region.lore,16.,MUTED);
                         label(box_node,hud,Label::Rival,16.,MUTED);
                     }
@@ -2032,6 +2173,9 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             // The same feedback is visible while purchasing a talent or choosing a chapter.
             if play.panel != Panel::Map && !layout.narrow_modal {
                 label(box_node,hud,Label::Notice,16.,DARK);
+            }
+            if layout.gamepad && !layout.narrow_modal {
+                text(box_node, hud, "Stick oder Steuerkreuz · A wählen · B zurück", 12., MUTED);
             }
         });
     });
@@ -2070,6 +2214,7 @@ pub fn layout(
         tool: play.tool,
         option: play.option,
         panel: play.panel,
+        gamepad: play.gamepad,
         unlocked: game.campaign.unlocked,
         quest: game.city().quest,
         side_quest: if matches!(play.panel, Panel::Map | Panel::Quests | Panel::SideQuest) {
@@ -2180,6 +2325,7 @@ pub fn update(
     let city = game.city();
     let region = game.region();
     let gifts = game.campaign.gifts;
+    let growth = gifts.creature;
     for (tag, mut text) in &mut labels {
         let value = match tag {
             Label::Stock(material) => city.stock[material.index()].to_string(),
@@ -2190,15 +2336,45 @@ pub fn update(
                 city.day_phase().name(),
                 region.weather(city.weather_time).name()
             ),
-            Label::Raid => city.next_raid().map_or_else(String::new, |seconds| {
-                format!(
-                    "Unterwegs zum Übergang · Überfall in {:.0} s",
-                    seconds.ceil()
-                )
+            Label::Raid => city.next_raid(region).map_or_else(String::new, |seconds| {
+                if city.rival_active(region) {
+                    let rival = crate::rivals::Rival::for_biome(region.kind);
+                    format!(
+                        "{} · Angriff in {:.0} s\n{}\nAbwehr mit {}.",
+                        rival.creature,
+                        seconds.ceil(),
+                        rival.warning,
+                        rival.defense
+                    )
+                } else {
+                    format!(
+                        "Unterwegs zum Übergang · Überfall in {:.0} s",
+                        seconds.ceil()
+                    )
+                }
             }),
+            Label::RaidAlert => city
+                .next_raid(region)
+                .filter(|&seconds| seconds <= 10. && city.rival_active(region))
+                .map_or_else(String::new, |seconds| {
+                    format!(
+                        "{} · Angriff in {:.0} s",
+                        crate::rivals::Rival::for_biome(region.kind).creature,
+                        seconds.ceil()
+                    )
+                }),
             Label::Objective => city.objective(region).1,
+            Label::PracticeHint => {
+                let step = crate::practice::Step::current(city);
+                if play.gamepad && step == crate::practice::Step::Grab {
+                    "A halten greift bis zu 18 Holz.".into()
+                } else {
+                    step.hint().into()
+                }
+            }
             Label::Creature => format!(
-                "Rang {} · {:.0}% Kraft · {}",
+                "{} · Rang {} · {:.0}% Kraft · {}",
+                growth.description(),
                 gifts.training,
                 city.energy,
                 city.creature_status()
@@ -2298,10 +2474,11 @@ pub fn update(
                     String::new()
                 }
             }
+            Label::Confirm if play.gamepad => format!("A  {}", target.label),
             Label::Confirm => target.label.clone(),
             Label::Detail => target.detail.clone(),
             Label::Progress => format!(
-                "{} Talentpunkte · {} Erkenntnis · Dorfstufe {}\n{} von {} Wohnplätzen · {} Geburten · Stimmung {}%\n{} Wachen · {} Wege · Lagerplatz {}\nNilpferd-Rang {} · {} · {:.0}% Kraft",
+                "{} Talentpunkte · {} Erkenntnis · Dorfstufe {}\n{} von {} Wohnplätzen · {} Geburten · Stimmung {}%\n{} Wachen · {} Wege · Lagerplatz {}\nStadt · {} ({:+})\nNilpferd · {} · {}\n{} · Rang {} · {} · {:.0}% Kraft",
                 gifts.points,
                 game.campaign.research.insight,
                 city.city_rank(),
@@ -2312,13 +2489,29 @@ pub fn update(
                 city.garrison(),
                 city.roads.len(),
                 city.storage_cap(),
+                city.reputation.tone().name(),
+                city.reputation.score(),
+                growth.description(),
+                growth.nature.tone().name(),
+                growth.next_stage().map_or_else(
+                    || format!("{} Erfahrung", growth.experience()),
+                    |next| format!("{}/{next} Erfahrung", growth.experience())
+                ),
                 gifts.training,
                 city.creature_status(),
                 city.energy
             ),
             Label::Rival if city.outcome.is_none() => format!(
-                "{} · {} · {} {} · Ansehen {}/{}\n{} für den Übergang",
+                "{}{} · {} · {} {} · Ansehen {}/{}\n{} für den Übergang",
                 region.rival,
+                if region.has_rival_creature() {
+                    format!(
+                        " und {}",
+                        crate::rivals::Rival::for_biome(region.kind).creature
+                    )
+                } else {
+                    String::new()
+                },
                 region.request,
                 region.gift.1,
                 region.kind.material(region.gift.0),
@@ -2389,6 +2582,7 @@ pub fn update(
                 .ritual_status(region, Miracle::ALL[index], gifts)
                 .is_some(),
             UiAction::Do(Action::Praise) => city.lesson.is_none(),
+            UiAction::Do(Action::Pet) => !city.pet_ready(),
             UiAction::Do(Action::RecallHelpers) => city.gathering_helpers() == 0,
             UiAction::Do(Action::AssignArea(_, _, false)) => !city.idle_helper(),
             UiAction::Do(Action::AssignArea(area, material, true)) => {

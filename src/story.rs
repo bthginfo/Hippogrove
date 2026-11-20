@@ -164,6 +164,7 @@ pub fn update(
     mut play: ResMut<Play>,
     mut view: ResMut<CameraRig>,
 ) {
+    play.observe_practice(&game, &mut view, time.elapsed_secs());
     play.observe_shelter(&game, &mut view);
     let Some(story) = &mut play.story else {
         return;

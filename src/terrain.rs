@@ -37,6 +37,9 @@ pub fn noise(at: Vec2, size: f32, salt: u32) -> f32 {
 /// Signed horizontal distance to the nearest shoreline in gameplay-grid units.
 /// The rendered shore and the gameplay grid use the same water boundaries.
 pub fn shore(region: &Region, point: Vec2) -> f32 {
+    if region.tutorial {
+        return region.island_shore(point);
+    }
     let left = point.x.floor() as i16;
     let t = smooth(point.x - f32::from(left));
     let near = f32::from(region.river_at(left)).lerp(f32::from(region.river_at(left + 1)), t) - 0.5;
@@ -44,7 +47,7 @@ pub fn shore(region: &Region, point: Vec2) -> f32 {
     let channel = (near - point.y)
         .max(point.y - near - width)
         .min(region.basin_shore(point));
-    if region.kind == Biome::Aegean {
+    if region.island_world() {
         channel.min(region.island_shore(point))
     } else {
         channel
@@ -98,7 +101,7 @@ fn relief(region: &Region, point: Vec2) -> f32 {
             * crests;
         height = height.max(ridge.min(headroom));
     }
-    if region.kind != Biome::Aegean {
+    if !region.island_world() {
         let outside = (f32::from(region.bounds.0.1) - point.y)
             .max(f32::from(region.bounds.0.0) - point.x)
             .max(point.x - f32::from(region.bounds.1.0))

@@ -15,11 +15,15 @@ use crate::{
     terrain::{self, hash},
 };
 
+mod alignment;
 mod landscapes;
 mod nature;
+mod rivals;
 mod settlement_models;
 
+pub(crate) use alignment::{city_decor, companion_decor, style_creature};
 pub use landscapes::{ForestPatch, LandscapeProp, forest_mesh, landscape};
+pub(crate) use rivals::{creature as rival_creature, faction_color, leader as rival_leader};
 
 pub fn rgb(hex: u32) -> Color {
     Color::srgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)

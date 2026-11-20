@@ -8,6 +8,7 @@ use bevy::{
 use crate::{
     art::{self, Art, block, mound, part},
     game::{Building, Crop, Game, MAX_ROAD_RUN, MAX_WALKERS, Miracle, Quest, Walker},
+    growth::{CreatureGrowth, Tone},
     modes::Mode,
     play::{CameraRig, Panel, PawGesture, Play, Target, Tool},
     region::{AREA_COUNT, Biome, CELL, Material, Tile},
@@ -26,6 +27,7 @@ pub struct Board {
     boundary_anchors: usize,
     boundary_camps: [bool; AREA_COUNT],
     roads: Option<(usize, Entity)>,
+    city_decor: Option<(Tone, usize, Entity)>,
     buildings: usize,
     walkers: usize,
     seen_magic: u64,
@@ -58,6 +60,12 @@ pub struct SourceView {
 
 #[derive(Component)]
 pub struct GuardView(usize);
+
+#[derive(Component)]
+pub struct RivalView;
+
+#[derive(Component)]
+pub struct RivalWarning;
 
 #[derive(Component)]
 pub enum Banner {
@@ -116,6 +124,9 @@ pub struct PawDigit(Vec3);
 
 #[derive(Component)]
 pub struct GroundRing(Option<(Mode, usize, Tile, i16, bool)>);
+
+#[derive(Component)]
+pub struct GuideMarker;
 
 #[derive(Clone, Copy, Component)]
 pub enum Blueprint {
@@ -187,6 +198,13 @@ pub fn setup(
         DistanceFog::default(),
     ));
     crate::atmosphere::setup(&mut commands, &mut materials, &art);
+    commands.spawn((
+        GuideMarker,
+        Mesh3d(meshes.add(Cone::new(0.26, 0.66).mesh().resolution(4))),
+        MeshMaterial3d(art.gold.clone()),
+        Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::PI)),
+        Visibility::Hidden,
+    ));
 
     commands
         .spawn((Cloud, Transform::default(), Visibility::Visible))
@@ -322,7 +340,12 @@ fn paw_pulse(play: &Play, now: f32) -> (Option<PawGesture>, f32) {
     let Some((gesture, started)) = play.paw_gesture else {
         return (None, 0.);
     };
-    let t = ((now - started) / 0.48).clamp(0., 1.);
+    let duration = if matches!(gesture, PawGesture::Pet) {
+        0.92
+    } else {
+        0.48
+    };
+    let t = ((now - started) / duration).clamp(0., 1.);
     (
         (t < 1.).then_some(gesture),
         (t * std::f32::consts::PI).sin(),
@@ -343,6 +366,13 @@ pub fn animate_paw(
         Some(PawGesture::Release) => (pulse * 0.17, pulse * 0.35),
         Some(PawGesture::Cast) => (-pulse * 0.13, 0.15),
         Some(PawGesture::Point) => (pulse * 0.14, holding),
+        Some(PawGesture::Pet) => (pulse * 0.31, 0.07),
+        None if play.grab.is_some() => {
+            let hold = play.grab.unwrap();
+            let curl =
+                f32::from(hold.amount(time.elapsed_secs())) / f32::from(crate::game::PAW_LIMIT);
+            (0.13 + curl * 0.23, curl * 0.90)
+        }
         None => (0., holding),
     };
     paw.translation = Vec3::new(0., -reach, reach * 0.49);
@@ -484,9 +514,10 @@ fn spawn_walker(
     index: usize,
     walker: &Walker,
     ground: f32,
+    growth: CreatureGrowth,
 ) {
     let hippo = walker.hippo;
-    let scale = actor_scale(walker);
+    let scale = actor_scale(walker, growth);
     parent
         .spawn((
             WalkerView {
@@ -506,6 +537,7 @@ fn spawn_walker(
             contact_shadow(actor, art, if hippo { 1.26 } else { 0.82 });
             if hippo {
                 actor.spawn((SceneRoot(art.hippo_model.clone()), Transform::default()));
+                art::companion_decor(actor, art);
             } else {
                 villager(actor, art, walker.guard, index);
             }
@@ -594,9 +626,9 @@ fn spawn_walker(
         });
 }
 
-fn actor_scale(walker: &Walker) -> f32 {
+fn actor_scale(walker: &Walker, growth: CreatureGrowth) -> f32 {
     if walker.hippo {
-        1.46
+        growth.scale()
     } else if walker.guard {
         1.0
     } else if walker.childhood > 0. {
@@ -695,10 +727,10 @@ pub fn sync_board(
                             camp.commands().entity(flag).insert(Banner::Camp(index));
                         });
                 }
-                for p in [region.start, region.rival_shrine]
-                    .into_iter()
+                let neighbors = std::iter::once(region.rival_shrine)
                     .chain(region.districts.iter().map(|district| district.center))
-                {
+                    .filter(|_| !region.tutorial);
+                for p in std::iter::once(region.start).chain(neighbors) {
                     parent
                         .spawn((
                             Transform::from_translation(grounded(p)),
@@ -712,7 +744,12 @@ pub fn sync_board(
                             }
                         });
                 }
-                for (index, district) in region.districts.iter().enumerate() {
+                for (index, district) in region
+                    .districts
+                    .iter()
+                    .enumerate()
+                    .filter(|_| !region.tutorial)
+                {
                     for tile in region.district_houses(index) {
                         parent
                             .spawn((
@@ -757,7 +794,11 @@ pub fn sync_board(
                         }
                         art::parcel(p, &art, Material::Food, Vec3::new(0., 0.25, 0.), 0.8);
                     });
-                for tile in region.rival_buildings() {
+                for tile in region
+                    .rival_buildings()
+                    .into_iter()
+                    .filter(|_| !region.tutorial)
+                {
                     parent
                         .spawn((
                             Transform::from_translation(grounded(tile))
@@ -795,6 +836,51 @@ pub fn sync_board(
                             villager(p, &art, true, i);
                         });
                 }
+                if region.has_rival_creature() {
+                    let lair = region.rival_lair();
+                    let leader = [
+                        region.rival_shrine.offset(-1, 0),
+                        region.rival_shrine.offset(1, 0),
+                        region.rival_shrine.offset(0, -1),
+                    ]
+                    .into_iter()
+                    .find(|&tile| {
+                        tile != lair
+                            && !region.water(tile)
+                            && !region.rocky(tile)
+                            && !region.fixed_structure(tile)
+                    })
+                    .unwrap_or(region.rival_shrine.offset(0, 1));
+                    parent
+                        .spawn((
+                            Transform::from_translation(grounded(leader))
+                                .with_scale(Vec3::splat(1.52))
+                                .with_rotation(Quat::from_rotation_y(0.20)),
+                            Visibility::Inherited,
+                        ))
+                        .with_children(|figure| {
+                            contact_shadow(figure, &art, 0.76);
+                            villager(figure, &art, false, 1);
+                            art::rival_leader(figure, &art, region.kind);
+                        });
+                    parent
+                        .spawn((
+                            RivalView,
+                            Transform::from_translation(grounded(lair)),
+                            Visibility::Inherited,
+                        ))
+                        .with_children(|creature| {
+                            contact_shadow(creature, &art, 1.25);
+                            art::rival_creature(creature, &art, region.kind);
+                            creature.spawn((
+                                RivalWarning,
+                                Mesh3d(art.ring.clone()),
+                                MeshMaterial3d(art.invalid.clone()),
+                                Transform::from_xyz(0., 0.045, 0.).with_scale(Vec3::splat(1.63)),
+                                Visibility::Hidden,
+                            ));
+                        });
+                }
                 parent.spawn((
                     PlotMarker,
                     Mesh3d(art.ring.clone()),
@@ -814,6 +900,36 @@ pub fn sync_board(
     }
 
     let root = board.root.unwrap();
+    let tone = city.reputation.tone();
+    if board
+        .city_decor
+        .as_ref()
+        .is_some_and(|(previous, count, _)| *previous != tone || *count != city.buildings.len())
+    {
+        let (_, _, entity) = board.city_decor.take().unwrap();
+        commands.entity(entity).despawn();
+    }
+    if tone != Tone::Neutral && board.city_decor.is_none() {
+        let entity = commands
+            .spawn((ChildOf(root), Transform::default(), Visibility::Inherited))
+            .with_children(|parent| {
+                for side in [-1., 1.] {
+                    let point = region.start.world() + Vec3::new(side * 0.90, 0., 1.04);
+                    art::city_decor(parent, &art, terrain::on_ground(region, point), tone);
+                }
+                for site in city
+                    .buildings
+                    .iter()
+                    .filter(|site| site.kind != Building::Field)
+                {
+                    let point = site.kind.center(site.tile)
+                        + Vec3::new(site.kind.size() as f32 * CELL * 0.48, 0., CELL * 0.41);
+                    art::city_decor(parent, &art, terrain::on_ground(region, point), tone);
+                }
+            })
+            .id();
+        board.city_decor = Some((tone, city.buildings.len(), entity));
+    }
     let flags = [
         city.count(Building::Shrine) > 0,
         city.outcome.is_some(),
@@ -843,10 +959,11 @@ pub fn sync_board(
         board.boundary_anchors = city.count(Building::Waystone);
         board.boundary_camps = city.camps;
     }
-    if board
-        .bridge
-        .as_ref()
-        .is_none_or(|(fixed, _)| *fixed != city.bridge_fixed)
+    if !region.tutorial
+        && board
+            .bridge
+            .as_ref()
+            .is_none_or(|(fixed, _)| *fixed != city.bridge_fixed)
     {
         if let Some((_, entity)) = board.bridge.take() {
             commands.entity(entity).despawn();
@@ -985,6 +1102,7 @@ pub fn sync_board(
                 index,
                 walker,
                 terrain::actor_height(region, walker.world(), city.bridge_fixed),
+                game.campaign.gifts.creature,
             )
         });
     }
@@ -1136,6 +1254,9 @@ pub fn props(
                 match outcome {
                     Some(crate::game::Outcome::Alliance) => art.valid.clone(),
                     Some(crate::game::Outcome::Victory) => art.amber.clone(),
+                    None if region.has_rival_creature() => {
+                        art::faction_color(&art, region.kind).clone()
+                    }
                     None => art.blue.clone(),
                 }
             }
@@ -1146,12 +1267,14 @@ pub fn props(
 pub fn animate(
     time: Res<Time>,
     game: Res<Game>,
+    play: Res<Play>,
     mut actors: Query<(&mut WalkerView, &mut Transform), Without<Limb>>,
     mut limbs: Query<(&Limb, &mut Transform), Without<WalkerView>>,
 ) {
     let delta = time.delta_secs().clamp(0.0001, 0.10);
     let city = game.city();
     let region = game.region();
+    let (gesture, pulse) = paw_pulse(&play, time.elapsed_secs());
     let mut motion = [(0., 0.); MAX_WALKERS];
     for (mut meta, mut pose) in &mut actors {
         let Some(walker) = game.city().walkers.get(meta.index) else {
@@ -1177,12 +1300,21 @@ pub fn animate(
         meta.holding = holding;
         meta.gathering = (meta.gathering - delta).max(0.);
         let bow = (meta.gathering / 0.48 * std::f32::consts::PI).sin() * 0.20;
-        pose.rotation = meta.facing * Quat::from_rotation_x(bow);
+        let relax = if walker.hippo && matches!(gesture, Some(PawGesture::Pet)) {
+            pulse
+        } else {
+            0.
+        };
+        pose.rotation = meta.facing
+            * Quat::from_rotation_x(bow + relax * 0.14)
+            * Quat::from_rotation_z(relax * 0.10);
         let bob = meta.phase.sin().abs() * 0.040 * meta.speed;
         let next = pose.translation + travel;
         let ground = terrain::actor_height(region, next, city.bridge_fixed);
         pose.translation = next.with_y(ground + bob);
-        pose.scale = Vec3::splat(actor_scale(walker));
+        let target_scale = Vec3::splat(actor_scale(walker, game.campaign.gifts.creature))
+            * Vec3::new(1. + relax * 0.025, 1. - relax * 0.035, 1. + relax * 0.025);
+        pose.scale = pose.scale.lerp(target_scale, 1. - (-3.8 * delta).exp());
         if let Some(state) = motion.get_mut(meta.index) {
             *state = (meta.phase, meta.speed);
         }
@@ -1206,6 +1338,71 @@ pub fn animate(
         if !limb.arm {
             pose.translation.y += (swing * 0.11).max(0.);
         }
+    }
+}
+
+pub fn animate_rival(
+    time: Res<Time>,
+    game: Res<Game>,
+    mut rivals: Query<(&mut Transform, &mut Visibility), (With<RivalView>, Without<RivalWarning>)>,
+    mut warnings: Query<&mut Visibility, (With<RivalWarning>, Without<RivalView>)>,
+) {
+    let region = game.region();
+    let city = game.city();
+    let alert =
+        city.rival_active(region) && city.next_raid(region).is_some_and(|seconds| seconds <= 10.);
+    let facing = region.bridge().world() - region.rival_lair().world();
+    let phase = time.elapsed_secs();
+    for (mut pose, mut visibility) in &mut rivals {
+        let world = city.rival_world(region);
+        let ground = terrain::actor_height(region, world, city.bridge_fixed);
+        let flight = if matches!(region.kind, Biome::Aegean | Biome::Terraces) && alert {
+            0.60 + (phase * 5.).sin() * 0.16
+        } else {
+            (phase * if alert { 8. } else { 2.2 }).sin().abs() * if alert { 0.14 } else { 0.034 }
+        };
+        let blend = 1. - (-5. * time.delta_secs().min(0.1)).exp();
+        pose.translation = pose.translation.lerp(world.with_y(ground + flight), blend);
+        pose.rotation = Quat::from_rotation_y(
+            facing.x.atan2(facing.z) + (phase * 4.).sin() * if alert { 0.10 } else { 0.036 },
+        );
+        pose.scale = Vec3::splat(1.85 + region.chapter() as f32 * 0.17);
+        *visibility = if city.rival_resolve > 0 {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for mut visible in &mut warnings {
+        *visible = if alert {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+pub fn highlight_guide(
+    game: Res<Game>,
+    play: Res<Play>,
+    time: Res<Time>,
+    view: Res<CameraRig>,
+    marker: Single<(&mut Transform, &mut Visibility), With<GuideMarker>>,
+) {
+    let (mut pose, mut visible) = marker.into_inner();
+    let now = time.elapsed_secs();
+    if let Some((tile, until)) = play
+        .guide_marker
+        .filter(|(_, until)| now < *until && play.panel == Panel::Closed)
+    {
+        let ground = terrain::on_ground(game.region(), tile.world());
+        let scale = (view.rendered_height / 25.).clamp(0.8, 2.6);
+        let pulse = (now * 6.).sin() * 0.15;
+        pose.translation = ground + Vec3::Y * ((2.5 + pulse) * scale);
+        pose.scale = Vec3::splat(scale * ((until - now).min(0.35) / 0.35));
+        *visible = Visibility::Inherited;
+    } else {
+        *visible = Visibility::Hidden;
     }
 }
 
@@ -1270,13 +1467,22 @@ pub fn aim(
         Some(PawGesture::Grab | PawGesture::Release) => -0.41 * pulse,
         Some(PawGesture::Cast) => 0.21 * pulse,
         Some(PawGesture::Point) => -0.15 * pulse,
+        Some(PawGesture::Pet) => -0.12 * pulse,
         None => 0.,
     };
-    let destination = p + Vec3::new(
-        0.18,
-        1.53 + time.elapsed_secs().sin() * 0.057 + bounce,
-        -0.23,
-    );
+    let destination = if matches!(gesture, Some(PawGesture::Pet)) {
+        let hippo = city.walkers[0].world();
+        let ground = terrain::actor_height(region, hippo, city.bridge_fixed);
+        let stroke = (time.elapsed_secs() * 12.).sin() * pulse * 0.35;
+        hippo.with_y(ground + 1.53 * game.campaign.gifts.creature.scale())
+            + Vec3::new(stroke, bounce, 0.22)
+    } else {
+        p + Vec3::new(
+            0.18,
+            1.53 + time.elapsed_secs().sin() * 0.057 + bounce,
+            -0.23,
+        )
+    };
     let speed = if cloud_pose.translation.distance_squared(destination) > 150. {
         1.
     } else {

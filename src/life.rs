@@ -107,8 +107,15 @@ fn fauna_piece(
 }
 
 pub(crate) fn spawn(parent: &mut ChildSpawnerCommands, art: &Art, region: &Region) {
-    signs(parent, art, region);
-    for (district, anchor) in region.districts.iter().enumerate() {
+    if !region.tutorial {
+        signs(parent, art, region);
+    }
+    for (district, anchor) in region
+        .districts
+        .iter()
+        .enumerate()
+        .filter(|_| !region.tutorial)
+    {
         for index in 0..3 {
             let number = district * 3 + index;
             parent

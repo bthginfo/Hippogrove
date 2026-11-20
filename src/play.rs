@@ -2,8 +2,9 @@ use bevy::prelude::*;
 
 use crate::{
     civic::{Branch, Civic, Goods, Tech},
-    game::{Action, Building, Crop, Game, Miracle, Quest, stock_text},
+    game::{Action, Building, Crop, Game, Miracle, PAW_BUNDLE, PAW_LIMIT, Quest, stock_text},
     modes::Mode,
+    practice::Step as PracticeStep,
     quests::Goal,
     region::{Biome, Material, Tile},
     sound::{Bus, Cue, Mix},
@@ -103,6 +104,7 @@ pub enum UiAction {
     Confirm,
     Cancel,
     Rotate,
+    Zoom(bool),
     Guide,
     Panel(Panel),
     Focus(Tile),
@@ -129,6 +131,25 @@ pub enum PawGesture {
     Release,
     Cast,
     Point,
+    Pet,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GrabHold {
+    tile: Tile,
+    started: f32,
+    limit: u16,
+}
+
+impl GrabHold {
+    pub fn amount(self, now: f32) -> u16 {
+        let extra = ((now - self.started - 0.18).max(0.) * 18.) as u16;
+        PAW_BUNDLE.saturating_add(extra).min(self.limit)
+    }
+
+    pub fn limit(self) -> u16 {
+        self.limit
+    }
 }
 
 #[derive(Resource)]
@@ -159,6 +180,9 @@ pub struct Play {
     pub pointer: Option<Vec2>,
     pub paused: bool,
     pub revision: u64,
+    pub grab: Option<GrabHold>,
+    pub guide_marker: Option<(Tile, f32)>,
+    practice_step: Option<PracticeStep>,
 }
 
 impl Play {
@@ -201,6 +225,9 @@ impl Play {
             pointer: None,
             paused: false,
             revision: 0,
+            grab: None,
+            guide_marker: None,
+            practice_step: None,
         }
     }
 
@@ -252,6 +279,7 @@ impl Play {
             {
                 Action::Camp(region.area_at(self.aim).unwrap())
             }
+            Tool::Hand if city.held.is_none() && self.aim == city.walkers[0].tile() => Action::Pet,
             Tool::Hand => Action::Hand(self.aim),
             Tool::Build => Action::Build(self.building(), self.aim, self.rotation),
             Tool::Helpers if self.option == 1 => Action::Muster(self.aim),
@@ -270,11 +298,48 @@ impl Play {
         }
     }
 
+    pub fn start_grab(&mut self, game: &Game, now: f32) -> bool {
+        if self.panel != Panel::Closed
+            || self.grab.is_some()
+            || self.target(game) != Action::Hand(self.aim)
+        {
+            return false;
+        }
+        let limit = game.city().paw_limit(game.region(), self.aim);
+        if limit == 0 {
+            return false;
+        }
+        self.grab = Some(GrabHold {
+            tile: self.aim,
+            started: now,
+            limit,
+        });
+        true
+    }
+
+    pub fn finish_grab(&mut self, game: &mut Game, view: &mut CameraRig, now: f32) -> bool {
+        let Some(hold) = self.grab.take() else {
+            return false;
+        };
+        if self.panel != Panel::Closed || self.target(game) != Action::Hand(hold.tile) {
+            return false;
+        }
+        self.execute(Action::Grab(hold.tile, hold.amount(now)), game, view, now)
+    }
+
     fn guide_tile(&self, game: &Game) -> Tile {
         let city = game.city();
         let region = game.region();
         match self.tool {
             Tool::Build if self.building() == Building::Shrine => region.frontier,
+            Tool::Build => {
+                let origin = if city.influence(region, self.aim) {
+                    self.aim
+                } else {
+                    region.start
+                };
+                Self::building_tile(game, self.building(), origin, false)
+            }
             Tool::Helpers if self.option == 1 => city
                 .buildings
                 .iter()
@@ -282,6 +347,15 @@ impl Play {
                 .map_or(region.start, |site| site.tile),
             Tool::Hand if city.held.is_some() => city.nearest_store(region, self.aim),
             Tool::Hippo if self.option == 6 => region.start,
+            Tool::Hippo if self.option == 1 && city.quest == Quest::Bridge => {
+                region.bridge().offset(0, 1)
+            }
+            Tool::Hippo if self.option == 2 => city
+                .buildings
+                .iter()
+                .filter(|site| site.kind == Building::Field)
+                .min_by_key(|site| self.aim.distance(site.tile))
+                .map_or(region.start, |site| site.tile),
             Tool::Miracles if self.miracle() == Miracle::Mend => city.walkers[0].tile(),
             Tool::Miracles if self.miracle() == Miracle::Ward => region.start,
             Tool::Miracles if self.miracle() == Miracle::Rain => city
@@ -314,6 +388,14 @@ impl Play {
                     .filter(|&tile| city.influence(region, tile))
                     .min_by_key(|&tile| self.aim.distance(tile))
                     .unwrap_or(region.start)
+            }
+            Tool::Miracles
+                if self.miracle().offensive()
+                    && city.quest == Quest::Bridge
+                    && city.rival_active(region) =>
+            {
+                city.rival_target(region, self.miracle().radius(game.campaign.gifts))
+                    .unwrap_or(region.bridge())
             }
             Tool::Miracles if self.miracle().offensive() && city.quest == Quest::Bridge => city
                 .guards
@@ -352,34 +434,45 @@ impl Play {
     }
 
     fn guide_building(&mut self, game: &Game, kind: Building, roadside: bool) -> Tile {
-        let region = game.region();
-        let city = game.city();
         self.tool(Tool::Build);
         self.choose(kind.index());
+        Self::building_tile(game, kind, game.region().start, roadside)
+    }
+
+    fn building_tile(game: &Game, kind: Building, origin: Tile, roadside: bool) -> Tile {
+        let region = game.region();
+        let city = game.city();
         region
             .bounds
             .tiles()
-            .filter(|tile| tile.within(region.start, 8))
-            .filter(|&tile| game.building_plan(kind, tile).is_ok())
+            .filter(|tile| tile.within(origin, 8))
+            .filter(|&tile| city.placement_site(region, kind, tile))
             .min_by_key(|&tile| {
                 let connected = kind
                     .tiles(tile)
                     .flat_map(Tile::neighbors)
                     .any(|cell| city.road_at(region, cell) && city.walkable(region, cell));
-                (roadside && !connected, tile.distance(region.start))
+                (roadside && !connected, tile.distance(origin))
             })
-            .unwrap_or(region.start)
+            .unwrap_or(origin)
     }
 
     fn guide_quest(&mut self, game: &Game) -> Option<Tile> {
+        if game.mode == Mode::Tutorial {
+            return Some(self.practice_target(game, PracticeStep::current(game.city())));
+        }
         let city = game.city();
         let region = game.region();
+        let main =
+            self.panel == Panel::Quests || (self.panel == Panel::Closed && self.tool == Tool::Hand);
         let step = match self.panel {
-            Panel::Quests => city.quest_step(region),
             Panel::SideQuest => region.quests.map(|quests| &quests.side),
-            _ => None,
-        }?;
-        let goal = step.pending(city, region)?;
+            _ if main => city.quest_step(region),
+            _ => return None,
+        };
+        if main && self.tool == Tool::Hand && city.held.is_some() {
+            return Some(city.nearest_store(region, self.aim));
+        }
         let supply = |material| {
             region
                 .sources
@@ -392,6 +485,41 @@ impl Play {
                 })
                 .min_by_key(|(source, _)| self.aim.distance(source.tile))
                 .map_or(region.start, |(source, _)| source.tile)
+        };
+        let goal = if let Some(goal) = step.and_then(|step| step.pending(city, region)) {
+            goal
+        } else if main {
+            match city.quest {
+                Quest::Shelter if city.hand_deliveries == 0 => {
+                    let tile = supply(Material::Wood);
+                    self.tool(Tool::Hand);
+                    return Some(tile);
+                }
+                Quest::Shelter if city.count(Building::House) == 0 => {
+                    return Some(self.guide_building(game, Building::House, false));
+                }
+                Quest::Shelter if city.count(Building::Store) == 0 => {
+                    return Some(self.guide_building(game, Building::Store, false));
+                }
+                Quest::Shelter => Goal::HippoDeliveries { count: 1 },
+                Quest::Fields if step.is_none() => Goal::Harvests { count: 1 },
+                Quest::Bridge if city.count(Building::Shrine) == 0 => {
+                    self.tool(Tool::Build);
+                    self.choose(Building::Shrine.index());
+                    return Some(region.frontier);
+                }
+                Quest::Bridge if !self.miracle().offensive() || self.tool != Tool::Miracles => {
+                    self.tool(Tool::Hand);
+                    return Some(region.bridge());
+                }
+                Quest::Districts => {
+                    self.tool(Tool::Hand);
+                    return Some(self.guide_tile(game));
+                }
+                _ => return None,
+            }
+        } else {
+            return None;
         };
         let tile = match goal {
             Goal::Harvests { .. } => {
@@ -512,6 +640,48 @@ impl Play {
         Some(tile)
     }
 
+    fn practice_target(&mut self, game: &Game, step: PracticeStep) -> Tile {
+        let (tool, option) = match step {
+            PracticeStep::House => (Tool::Build, Building::House.index()),
+            PracticeStep::Field => (Tool::Build, Building::Field.index()),
+            PracticeStep::Rain => (Tool::Miracles, Miracle::Rain as usize),
+            PracticeStep::SendHippo | PracticeStep::Delivery => (Tool::Hippo, 0),
+            _ => (Tool::Hand, 0),
+        };
+        self.tool(tool);
+        self.choose(option);
+        step.tile(game)
+    }
+
+    pub fn observe_practice(&mut self, game: &Game, view: &mut CameraRig, now: f32) {
+        if game.mode != Mode::Tutorial || self.panel != Panel::Closed {
+            return;
+        }
+        let step = PracticeStep::current(game.city());
+        if step == PracticeStep::Complete
+            && self
+                .paw_gesture
+                .is_some_and(|(gesture, at)| matches!(gesture, PawGesture::Pet) && now - at < 0.95)
+        {
+            return;
+        }
+        let previous = self.practice_step.replace(step);
+        if previous == Some(step) {
+            return;
+        }
+        if step == PracticeStep::Complete {
+            self.revision = self.revision.wrapping_add(1);
+            self.last_sound = Some((Cue::Reward, self.revision));
+            self.open_panel(Panel::Modes);
+            self.focus = Some(UiAction::SelectMode(Mode::Campaign(Biome::Valley)));
+        } else if !matches!(step, PracticeStep::Grow | PracticeStep::Delivery) {
+            self.aim = self.practice_target(game, step);
+            self.guide_marker = Some((self.aim, now + 6.));
+            self.pointer = None;
+            view.focus_practice(self.aim);
+        }
+    }
+
     pub fn activate(
         &mut self,
         action: UiAction,
@@ -519,6 +689,7 @@ impl Play {
         view: &mut CameraRig,
         now: f32,
     ) -> bool {
+        self.grab = None;
         if self.story.is_some() {
             if matches!(
                 action,
@@ -566,7 +737,14 @@ impl Play {
                 }
                 self.catalog_branch = branch;
                 self.catalog_page = 0;
-                self.focus = None;
+                self.focus = branch.and_then(|branch| {
+                    Civic::ALL
+                        .into_iter()
+                        .find(|&kind| {
+                            kind.spec().branch == branch && kind.available_in(game.region().kind)
+                        })
+                        .map(|kind| UiAction::SelectBuilding(Building::Civic(kind)))
+                });
             }
             UiAction::CatalogPage(index) => self.catalog_page = index,
             UiAction::SelectBuilding(kind) => {
@@ -585,10 +763,24 @@ impl Play {
             UiAction::SelectTech(tech) => {
                 self.tech = tech;
                 self.panel = Panel::Research;
+                self.focus = Some(
+                    if self.gamepad
+                        && game
+                            .campaign
+                            .research
+                            .available(tech, game.city().city_rank())
+                            .is_ok()
+                    {
+                        UiAction::Do(Action::Research(tech))
+                    } else {
+                        UiAction::SelectTech(tech)
+                    },
+                );
             }
             UiAction::ResearchBranch(branch) => {
                 self.tech = branch.topics()[0];
                 self.panel = Panel::Research;
+                self.focus = Some(UiAction::SelectTech(self.tech));
             }
             UiAction::Confirm
                 if self.panel == Panel::Closed
@@ -638,13 +830,21 @@ impl Play {
                 }
             }
             UiAction::Rotate => self.rotation = (self.rotation + 1) % 4,
+            UiAction::Zoom(closer) => {
+                view.zoom_toward(if closer { 0.24 } else { -0.24 }, Some(self.aim.world()))
+            }
             UiAction::Guide => {
                 self.aim = self
                     .guide_quest(game)
                     .unwrap_or_else(|| self.guide_tile(game));
                 self.close_panels();
-                view.focus(self.aim);
+                if game.mode == Mode::Tutorial {
+                    view.focus_practice(self.aim);
+                } else {
+                    view.focus(self.aim);
+                }
                 self.pointer = None;
+                self.guide_marker = Some((self.aim, now + 6.));
             }
             UiAction::Focus(tile) => self.focus_tile(tile, view),
             UiAction::AreaMaterial(material) => {
@@ -721,9 +921,24 @@ impl Play {
         self.focus = match panel {
             Panel::Menu => Some(UiAction::Panel(Panel::Map)),
             Panel::Map => Some(UiAction::Landscape),
-            Panel::Orders(Tool::Hippo) => Some(UiAction::Order(Tool::Hippo, 6)),
-            Panel::Orders(tool) => Some(UiAction::Order(tool, 0)),
-            Panel::Spells => Some(UiAction::Order(Tool::Miracles, 0)),
+            Panel::Orders(tool) => Some(UiAction::Order(
+                tool,
+                if self.tool == tool { self.option } else { 0 },
+            )),
+            Panel::Spells => Some(UiAction::Order(
+                Tool::Miracles,
+                if self.tool == Tool::Miracles {
+                    self.option
+                } else {
+                    0
+                },
+            )),
+            Panel::Quests => Some(UiAction::Guide),
+            Panel::Research => Some(UiAction::SelectTech(self.tech)),
+            Panel::Progress => Some(UiAction::Do(Action::Learn(crate::game::Talent::Rain))),
+            Panel::Catalog if self.catalog_branch.is_none() => {
+                Some(UiAction::SelectBuilding(Building::House))
+            }
             _ => None,
         };
     }
@@ -794,6 +1009,8 @@ impl Play {
             self.revision = self.revision.wrapping_add(1);
             let cue = match action {
                 Action::Hand(_) if carried => Some(Cue::Drop),
+                Action::Grab(..) | Action::Hand(_) if game.city().held.is_some() => Some(Cue::Lift),
+                Action::Pet => Some(Cue::Pet),
                 Action::Hand(tile) if game.region().source_at(tile).is_none() => Some(Cue::Gather),
                 Action::Cast(spell, _) => Some(Cue::Cast(spell)),
                 Action::Build(..) | Action::Upgrade(_) | Action::Road(..) | Action::Repair => {
@@ -811,8 +1028,11 @@ impl Play {
             }
             let gesture = match action {
                 Action::Hand(_) if carried => Some(PawGesture::Release),
-                Action::Hand(_) if game.city().held.is_some() => Some(PawGesture::Grab),
+                Action::Grab(..) | Action::Hand(_) if game.city().held.is_some() => {
+                    Some(PawGesture::Grab)
+                }
                 Action::Cast(..) => Some(PawGesture::Cast),
+                Action::Pet => Some(PawGesture::Pet),
                 Action::Build(..) | Action::MoveHippo(_) | Action::Assign(..) => {
                     Some(PawGesture::Point)
                 }
@@ -820,6 +1040,15 @@ impl Play {
             };
             if let Some(gesture) = gesture {
                 self.paw_gesture = Some((gesture, now));
+            }
+            if action == Action::Pet {
+                self.close_panels();
+                self.aim = game.city().walkers[0].tile();
+                if game.mode == Mode::Tutorial {
+                    view.focus_practice(self.aim);
+                } else {
+                    view.focus(self.aim);
+                }
             }
             if matches!(action, Action::Road(..)) {
                 self.road_anchor = None;
@@ -918,6 +1147,7 @@ pub struct CameraRig {
     pub cover: f32,
     min: Vec3,
     max: Vec3,
+    landscape_center: Vec3,
     max_height: f32,
 }
 
@@ -929,6 +1159,9 @@ impl CameraRig {
 
     pub fn new(game: &Game) -> Self {
         let region = game.region();
+        let scenery = region.render_bounds();
+        let from = scenery.0.world();
+        let to = scenery.1.world();
         Self {
             target: region.start.world() + Vec3::new(-0.95, 0., -4.55),
             height: 22.,
@@ -937,10 +1170,12 @@ impl CameraRig {
             cover: 0.,
             min: region.bounds.0.world(),
             max: region.bounds.1.world(),
-            max_height: ((region.bounds.1.world() - region.bounds.0.world())
-                .dot(Vec3::new(0.35, 0., 0.57))
-                + 26.)
-                .max(150.),
+            landscape_center: (from + to) * 0.5,
+            max_height: if region.tutorial {
+                49.
+            } else {
+                ((to - from).dot(Vec3::new(0.35, 0., 0.57)) + 26.).max(150.)
+            },
         }
     }
 
@@ -964,9 +1199,14 @@ impl CameraRig {
         self.height = self.height.clamp(22., 29.);
     }
 
+    fn focus_practice(&mut self, tile: Tile) {
+        self.focus(tile);
+        self.target = (self.target + Vec3::new(1.9, 0., 5.1)).clamp(self.min, self.max);
+    }
+
     pub fn landscape(&mut self) {
         self.jump = true;
-        self.target = (self.min + self.max) * 0.5;
+        self.target = self.landscape_center;
         self.height = self.max_height;
     }
 
@@ -1003,7 +1243,7 @@ struct PlacementKey {
 }
 
 impl Target {
-    pub fn refresh(&mut self, play: &Play, game: &Game) {
+    pub fn refresh(&mut self, play: &Play, game: &Game, now: f32) {
         let city = game.city();
         let region = game.region();
         let tile = play.aim;
@@ -1203,6 +1443,16 @@ impl Target {
                 self.detail = "2 Nahrung · stellt bis zu 55 Kraft wieder her".into();
                 "Snack geben".into()
             }
+            Action::Pet => {
+                self.legal = city.pet_ready();
+                self.detail = if self.legal {
+                    "Das Nilpferd ist bei dir · Streicheln erholt es ein wenig"
+                } else {
+                    "Das Nilpferd braucht einen Moment Ruhe"
+                }
+                .into();
+                "Streicheln".into()
+            }
             Action::Rest => {
                 self.detail = "Beendet den Auftrag. Die Kreatur erholt sich.".into();
                 "Pause einlegen".into()
@@ -1222,18 +1472,48 @@ impl Target {
             }
             Action::Hand(_) if city.held.is_some() => {
                 self.legal = city.can_store_at(region, tile);
-                self.detail = "Ablage am Sammelplatz oder im Lager".into();
+                let bundle = city.held.unwrap();
+                if region.source_at(tile) == Some(bundle.source) {
+                    self.legal = true;
+                    self.detail = "Lege die Ladung wieder an der Quelle ab.".into();
+                    return self.label = "Zurücklegen".into();
+                }
+                let material = region.sources[bundle.source].material;
+                let room = city
+                    .storage_cap()
+                    .saturating_sub(city.stock[material.index()]);
+                self.legal &= room >= bundle.count;
+                self.detail = if room < bundle.count {
+                    format!(
+                        "Im Lager sind nur {room} Plätze frei. Du kannst das Bündel zur Quelle zurückbringen."
+                    )
+                } else {
+                    format!(
+                        "{} {} in der Pfote · Ablage am Sammelplatz oder Lager",
+                        bundle.count,
+                        region.kind.material(material)
+                    )
+                };
                 "Ablegen".into()
             }
             Action::Hand(_) if region.source_at(tile).is_some() => {
                 let index = region.source_at(tile).unwrap();
                 self.legal = city.influence(region, tile) && city.nodes[index] > 0;
-                self.detail = format!(
-                    "{} · {} verfügbar",
-                    region.kind.material(region.sources[index].material),
-                    city.nodes[index]
-                );
-                "Greifen".into()
+                let material = region.kind.material(region.sources[index].material);
+                if let Some(hold) = play.grab {
+                    self.detail = format!(
+                        "{material} · {} von {} · beim Loslassen greifen",
+                        hold.amount(now),
+                        hold.limit()
+                    );
+                    "Loslassen".into()
+                } else {
+                    self.detail = format!(
+                        "{material} · {} verfügbar · Halten bis {PAW_LIMIT}",
+                        city.nodes[index]
+                    );
+                    "Greifen".into()
+                }
             }
             Action::Hand(_)
                 if city

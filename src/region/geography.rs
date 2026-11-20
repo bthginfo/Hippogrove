@@ -10,6 +10,7 @@ pub enum WorldLayout {
     #[default]
     Classic,
     Regional,
+    Islands,
 }
 
 #[derive(Deserialize)]

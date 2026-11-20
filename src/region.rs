@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 use crate::{modes::Layout, quests::CampaignQuests, terrain};
 
 mod geography;
+mod islands;
 use geography::Geography;
 pub use geography::WorldLayout;
+use islands::Islands;
 
 const ORIGIN: Vec2 = Vec2::new(17., 13.);
 pub const CELL: f32 = 1.65;
@@ -287,11 +289,17 @@ pub struct Region {
     #[serde(skip)]
     pub sandbox: bool,
     #[serde(skip)]
+    pub tutorial: bool,
+    #[serde(skip)]
     pub quests: Option<&'static CampaignQuests>,
     #[serde(skip)]
     layout: Layout,
     #[serde(skip)]
     geography: Option<Geography>,
+    #[serde(skip)]
+    islands: Option<Islands>,
+    #[serde(skip)]
+    world_layout: WorldLayout,
     #[serde(skip)]
     cells: Vec<u8>,
     #[serde(skip)]
@@ -315,6 +323,42 @@ impl Region {
             region.extend(frontier, WorldLayout::Classic);
         }
         regions
+    }
+
+    pub fn practice() -> Self {
+        let (mut regions, _) = Self::authored();
+        let mut region = regions.remove(0);
+        region.name = "Übungsinsel".into();
+        region.subtitle = "Die ersten Schritte".into();
+        region.lore = "Ein geschützter Garten für deine ersten Schritte als Inselgott.".into();
+        region.tutorial = true;
+        region.bounds = Bounds(Tile(1, 5), Tile(33, 32));
+        region.start = Tile(17, 20);
+        region.depot = Tile(14, 21);
+        region.frontier = Tile(19, 15);
+        region.cross_x = 18;
+        region.river = 10;
+        region.initial = [13, 12, 6];
+        region.starter_plots.clear();
+        region.guards.clear();
+        region.highlands = vec![(Tile(13, 12), 4), (Tile(24, 12), 3)];
+        region.sources = [
+            (Tile(12, 18), Material::Wood, 52),
+            (Tile(19, 16), Material::Wood, 44),
+            (Tile(22, 22), Material::Stone, 54),
+            (Tile(11, 22), Material::Stone, 50),
+            (Tile(16, 25), Material::Food, 44),
+        ]
+        .into_iter()
+        .map(|(tile, material, stock)| Source {
+            tile,
+            material,
+            stock,
+        })
+        .collect();
+        region.original_sources = region.sources.len();
+        region.cache_terrain();
+        region
     }
 
     pub fn themed(biome: Biome, stage: usize, world_layout: WorldLayout) -> Self {
@@ -370,7 +414,7 @@ impl Region {
             }
         }
         region.extend(frontier, world_layout);
-        if stage > 0 || world_layout == WorldLayout::Regional {
+        if stage > 0 || world_layout != WorldLayout::Classic {
             region.keep_starter_plots_clear();
         }
         region
@@ -428,11 +472,37 @@ impl Region {
     }
 
     pub fn world_layout(&self) -> WorldLayout {
-        if self.geography.is_some() {
-            WorldLayout::Regional
-        } else {
-            WorldLayout::Classic
-        }
+        self.world_layout
+    }
+
+    pub fn island_world(&self) -> bool {
+        self.tutorial || self.islands.is_some() || self.kind == Biome::Aegean
+    }
+
+    pub fn render_bounds(&self) -> Bounds {
+        let Some(islands) = &self.islands else {
+            return self.bounds;
+        };
+        let Bounds(from, to) = islands.bounds();
+        let a = self.layout.tile(from);
+        let b = self.layout.tile(to);
+        Bounds(
+            Tile(self.bounds.0.0.min(a.0.min(b.0)), self.bounds.0.1.min(a.1)),
+            Tile(self.bounds.1.0.max(a.0.max(b.0)), self.bounds.1.1.max(b.1)),
+        )
+    }
+
+    pub fn has_rival_creature(&self) -> bool {
+        !self.sandbox && self.world_layout == WorldLayout::Islands
+    }
+
+    pub fn rival_lair(&self) -> Tile {
+        let offset = if self.layout.mirror { -1 } else { 1 };
+        [(2, -1), (-2, 1), (1, -2), (-1, 0), (0, 2)]
+            .into_iter()
+            .map(|(x, z)| self.rival_shrine.offset(x * offset, z))
+            .find(|&tile| !self.water(tile) && !self.rocky(tile) && !self.fixed_structure(tile))
+            .unwrap_or(self.rival_shrine)
     }
 
     fn extend(&mut self, frontier: Frontier, world_layout: WorldLayout) {
@@ -441,29 +511,14 @@ impl Region {
         self.bounds = frontier.bounds;
         self.ridges = frontier.ridges;
         self.areas = frontier.areas.into();
-        if world_layout == WorldLayout::Regional {
+        self.world_layout = world_layout;
+        if world_layout != WorldLayout::Classic {
             self.geography = Some(Geography::apply_to(self));
         }
-        self.cells = self
-            .bounds
-            .tiles()
-            .map(|tile| {
-                let wet = self.sample_water(tile);
-                u8::from(wet) * WET
-                    | u8::from(self.sample_rock(tile)) * ROCK
-                    | u8::from(wet && self.bridge_cell(tile)) * CROSSING
-                    | u8::from(self.fixed_structure(tile)) * OCCUPIED
-            })
-            .collect();
-        self.source_grid = vec![0; self.bounds.len()];
-        for (index, source) in self.sources.iter().enumerate() {
-            let cell = self
-                .bounds
-                .index(source.tile)
-                .expect("All old sources fit the larger map");
-            self.source_grid[cell] = index as u16 + 1;
-            self.cells[cell] |= OCCUPIED;
+        if world_layout == WorldLayout::Islands {
+            self.islands = Some(Islands::for_region(self));
         }
+        self.cache_terrain();
         let mut accessible = vec![false; self.bounds.len()];
         let walk = self.walk_grid(true);
         let mut queue: VecDeque<_> = self
@@ -509,12 +564,17 @@ impl Region {
                 }
             }
         }
+        let spacing = if world_layout == WorldLayout::Islands {
+            24
+        } else {
+            53
+        };
         let mut wildlands: Vec<_> = self
             .bounds
             .tiles()
             .filter(|tile| !self.original_bounds().contains(*tile))
             .filter(|tile| !self.areas.iter().any(|area| tile.within(area.center, 10)))
-            .filter(|&Tile(x, z)| terrain::hash(x, z, 297) % 53 == 0)
+            .filter(|&Tile(x, z)| terrain::hash(x, z, 297) % spacing == 0)
             .collect();
         wildlands.sort_by_key(|&Tile(x, z)| terrain::hash(x, z, 593));
         for tile in wildlands {
@@ -532,8 +592,36 @@ impl Region {
         }
     }
 
+    fn cache_terrain(&mut self) {
+        self.cells = self
+            .bounds
+            .tiles()
+            .map(|tile| {
+                let wet = self.sample_water(tile);
+                u8::from(wet) * WET
+                    | u8::from(self.sample_rock(tile)) * ROCK
+                    | u8::from(wet && self.bridge_cell(tile)) * CROSSING
+                    | u8::from(self.fixed_structure(tile)) * OCCUPIED
+            })
+            .collect();
+        self.source_grid = vec![0; self.bounds.len()];
+        for (index, source) in self.sources.iter().enumerate() {
+            let cell = self
+                .bounds
+                .index(source.tile)
+                .expect("Authored sources fit the map");
+            self.source_grid[cell] = index as u16 + 1;
+            self.cells[cell] |= OCCUPIED;
+        }
+    }
+
     fn free_source_tile(&self, tile: Tile, accessible: &[bool]) -> bool {
-        !self.original_bounds().contains(tile)
+        let bridge_approach = self.world_layout == WorldLayout::Islands && self.crossing(tile) && {
+            let bank = self.river_at(tile.0);
+            (bank - 2..=bank + self.river_span(tile.0) + 1).contains(&tile.1)
+        };
+        !bridge_approach
+            && !self.original_bounds().contains(tile)
             && !self.road(tile)
             && self
                 .bounds
@@ -648,7 +736,7 @@ impl Region {
     }
 
     fn sample_water(&self, tile: Tile) -> bool {
-        if self.geography.is_some() {
+        if self.tutorial || self.geography.is_some() {
             return terrain::shore(self, tile.local()) < 0.;
         }
         self.in_channel(tile)
@@ -661,6 +749,14 @@ impl Region {
     }
 
     pub fn island_shore(&self, place: Vec2) -> f32 {
+        if self.tutorial {
+            let shore = (place - Vec2::new(17., 19.)) / Vec2::new(12., 9.5);
+            let bay = (place - Vec2::new(26.7, 14.3)) / Vec2::new(5., 3.2);
+            return ((1. - shore.length_squared()) * 4.75).min((bay.length_squared() - 1.) * 1.60);
+        }
+        if let Some(islands) = &self.islands {
+            return islands.shore(self.layout.original_point(place));
+        }
         let islets = self
             .geography
             .as_ref()
@@ -735,7 +831,7 @@ impl Region {
     }
 
     pub fn crossing(&self, tile: Tile) -> bool {
-        tile.0 == self.cross_x || self.crossings.contains(&tile.0)
+        !self.tutorial && (tile.0 == self.cross_x || self.crossings.contains(&tile.0))
     }
 
     pub fn bridge_cell(&self, tile: Tile) -> bool {
@@ -745,7 +841,7 @@ impl Region {
     pub fn district_at(&self, tile: Tile) -> Option<usize> {
         self.districts
             .iter()
-            .position(|district| district.center == tile)
+            .position(|district| !self.tutorial && district.center == tile)
     }
 
     pub fn district_houses(&self, index: usize) -> [Tile; 3] {
@@ -758,6 +854,9 @@ impl Region {
     }
 
     pub fn fixed_structure(&self, tile: Tile) -> bool {
+        if self.tutorial {
+            return [self.start, self.depot].contains(&tile);
+        }
         [self.start, self.depot, self.rival_shrine].contains(&tile)
             || self.area_at(tile).is_some()
             || self.rival_buildings().contains(&tile)
@@ -766,6 +865,10 @@ impl Region {
     }
 
     pub fn road(&self, tile: Tile) -> bool {
+        if self.tutorial {
+            return (tile.0 == self.cross_x && (17..=24).contains(&tile.1))
+                || (tile.1 == self.depot.1 && (self.depot.0..self.cross_x).contains(&tile.0));
+        }
         let center_path =
             tile.0 == self.cross_x && (self.rival_shrine.1..=self.start.1 + 5).contains(&tile.1);
         let plaza_path = tile.1 == self.depot.1

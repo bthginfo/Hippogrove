@@ -13,12 +13,14 @@ pub enum Mode {
     Chronicle,
     Campaign(Biome),
     Sandbox(Biome),
+    Tutorial,
 }
 
 impl Mode {
     pub fn name(self) -> &'static str {
         match self {
             Self::Chronicle => "Die Schreine am Wasser",
+            Self::Tutorial => "Übungsinsel",
             Self::Campaign(Biome::Valley) => "Das Weidenland",
             Self::Campaign(Biome::Fjord) => "Die Lichter des Fjords",
             Self::Campaign(Biome::Terraces) => "Die Kanäle der Jade",
@@ -35,6 +37,7 @@ impl Mode {
     pub fn regions(self, world_layout: impl Fn(usize) -> WorldLayout) -> Vec<Region> {
         let biome = match self {
             Self::Chronicle => return Region::campaign(),
+            Self::Tutorial => return vec![Region::practice()],
             Self::Campaign(biome) | Self::Sandbox(biome) => biome,
         };
         static THEMES: OnceLock<[Theme; 5]> = OnceLock::new();
@@ -70,7 +73,7 @@ impl Mode {
                         "die Siedlungen sind friedlich und die Baupläne liegen bereit."
                     )
                     .into();
-                } else if layout == WorldLayout::Regional {
+                } else if layout != WorldLayout::Classic {
                     let quests = &chapter.quests;
                     region.request.clone_from(&quests.request);
                     region.gift = quests.offering;
@@ -82,6 +85,9 @@ impl Mode {
                         }
                     }
                     region.quests = Some(quests);
+                    if layout == WorldLayout::Islands {
+                        region.rival = crate::rivals::Rival::for_biome(biome).name.into();
+                    }
                 } else if index > 0 {
                     region.gift.1 = region.gift.1.saturating_add(index as u16 + 2);
                     let needs = [

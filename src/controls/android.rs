@@ -3,7 +3,7 @@ use std::{ffi::c_void, sync::Mutex};
 use bevy::prelude::Vec2;
 use ndk_sys::*;
 
-use super::{DOWN, EAST, GUIDE, LEFT, MENU, PROGRESS, RIGHT, ROTATE, SOUTH, UP, native_pad};
+use super::{DOWN, EAST, GUIDE, LEFT, MAP, MENU, PROGRESS, RIGHT, ROTATE, SOUTH, UP, native_pad};
 
 struct Controller {
     id: Option<i32>,
@@ -48,6 +48,7 @@ fn key_bit(code: u32) -> Option<u32> {
         AKEYCODE_DPAD_UP => UP,
         AKEYCODE_DPAD_DOWN => DOWN,
         AKEYCODE_BUTTON_START => MENU,
+        AKEYCODE_BUTTON_SELECT => MAP,
         AKEYCODE_BUTTON_X => ROTATE,
         AKEYCODE_BUTTON_R1 => GUIDE,
         AKEYCODE_BUTTON_L1 => PROGRESS,

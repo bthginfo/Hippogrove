@@ -71,7 +71,10 @@ impl Mix {
 pub enum Cue {
     Harvest(Material),
     Gather,
+    Lift,
     Drop,
+    Pet,
+    Omen(Biome),
     Build,
     Order,
     Cast(Miracle),
@@ -96,9 +99,16 @@ pub struct Sound {
     food: Handle<AudioSource>,
     wind: Handle<AudioSource>,
     light: Handle<AudioSource>,
+    lift: Handle<AudioSource>,
+    land: Handle<AudioSource>,
+    care: Handle<AudioSource>,
+    chime: Handle<AudioSource>,
+    omen: Handle<AudioSource>,
     last_revision: u64,
     last_harvest: f32,
     variant: usize,
+    growth: Option<(crate::modes::Mode, usize)>,
+    alert: Option<(crate::modes::Mode, usize)>,
 }
 
 fn source(assets: &AssetServer, file: &str) -> Handle<AudioSource> {
@@ -124,9 +134,16 @@ pub fn setup(mut commands: Commands, assets: Res<AssetServer>) {
         food: source(&assets, "harvest_sound.wav"),
         wind: source(&assets, "card_hit.wav"),
         light: source(&assets, "card_shield.wav"),
+        lift: source(&assets, "paw_lift.wav"),
+        land: source(&assets, "paw_land.wav"),
+        care: source(&assets, "hippo_care.wav"),
+        chime: source(&assets, "chapter_chime.wav"),
+        omen: source(&assets, "rival_omen.wav"),
         last_revision: 0,
         last_harvest: -1.,
         variant: 0,
+        growth: None,
+        alert: None,
     });
 }
 
@@ -136,7 +153,14 @@ fn play_cue(commands: &mut Commands, sound: &mut Sound, cue: Cue, attenuation: f
         Cue::Harvest(Material::Stone) => (&sound.stone, 0.31, 0.96),
         Cue::Harvest(Material::Food) => (&sound.food, 0.30, 1.08),
         Cue::Gather => (&sound.food, 0.18, 1.25),
-        Cue::Drop => (&sound.wood, 0.24, 0.73),
+        Cue::Lift => (&sound.lift, 0.27, 1.),
+        Cue::Drop => (&sound.land, 0.29, 1.),
+        Cue::Pet => (&sound.care, 0.41, 1.),
+        Cue::Omen(biome) => (
+            &sound.omen,
+            0.34,
+            [1.06, 0.83, 1.27, 0.75, 1.48][biome as usize],
+        ),
         Cue::Build => (&sound.stone, 0.35, 0.74),
         Cue::Order => (&sound.food, 0.14, 0.89),
         Cue::Cast(Miracle::Wind) => (&sound.wind, 0.42, 1.13),
@@ -145,14 +169,14 @@ fn play_cue(commands: &mut Commands, sound: &mut Sound, cue: Cue, attenuation: f
         Cue::Cast(Miracle::Bloom) => (&sound.light, 0.27, 1.23),
         Cue::Cast(Miracle::Mend) => (&sound.light, 0.27, 1.03),
         Cue::Cast(Miracle::Ward) => (&sound.light, 0.32, 0.72),
-        Cue::Reward => (&sound.light, 0.24, 1.15),
+        Cue::Reward => (&sound.chime, 0.32, 1.),
     };
     let variation = [1., 0.94, 1.05, 0.97, 1.09][sound.variant];
     sound.variant = (sound.variant + 1) % 5;
     commands.spawn((
         AudioPlayer::new(clip.clone()),
         PlaybackSettings::DESPAWN
-            .with_volume(Volume::Linear(level * attenuation))
+            .with_volume(Volume::Linear(level * attenuation * 1.35))
             .with_speed(pitch * variation),
     ));
 }
@@ -170,7 +194,7 @@ pub fn update(
     let region = game.region();
     let city = game.city();
     let rain = city.rainfall > 0. || region.weather(city.weather_time) == Weather::Showers;
-    let coast = if matches!(region.kind, Biome::Aegean | Biome::Fjord | Biome::Lake) {
+    let coast = if region.island_world() || matches!(region.kind, Biome::Fjord | Biome::Lake) {
         let shore = terrain::shore(region, crate::region::Tile::coordinates(view.target));
         1. - terrain::smooth(shore / 8.)
     } else {
@@ -181,7 +205,16 @@ pub fn update(
     } else {
         0.55
     };
-    let music = if play.story.is_some() { 0.31 } else { 0.44 };
+    let alert = (city.rival_active(region)
+        && city.next_raid(region).is_some_and(|seconds| seconds <= 10.))
+    .then_some((game.mode, game.campaign.active));
+    let music = if play.story.is_some() {
+        0.31
+    } else if alert.is_some() {
+        0.35
+    } else {
+        0.44
+    };
     let ambient = quiet
         * if city.day_phase() == DayPhase::Night {
             0.64
@@ -197,7 +230,7 @@ pub fn update(
             Bed::Rain => (Bus::Ambient, if rain { ambient * 0.28 } else { 0. }),
         };
         let wanted = if play.mix.enabled(bus) && !play.paused {
-            level
+            level * 1.82
         } else {
             0.
         };
@@ -207,6 +240,19 @@ pub fn update(
         }
     }
     let enabled = play.mix.enabled(Bus::Effects) && !play.paused && !beds.is_empty();
+    if alert.is_some() && alert != state.alert && enabled {
+        play_cue(&mut commands, &mut state, Cue::Omen(region.kind), 1.);
+    }
+    state.alert = alert;
+    let stage = game.campaign.gifts.creature.stage();
+    if state
+        .growth
+        .replace((game.mode, stage))
+        .is_some_and(|(mode, earlier)| mode == game.mode && earlier < stage)
+        && enabled
+    {
+        play_cue(&mut commands, &mut state, Cue::Reward, 0.77);
+    }
     if let Some((cue, revision)) = play.last_sound {
         if state.last_revision != revision {
             state.last_revision = revision;
