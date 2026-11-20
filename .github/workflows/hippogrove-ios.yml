@@ -31,6 +31,8 @@ jobs:
             xcrun simctl launch "$device" game.hippogrove
             sleep 12
             xcrun simctl io "$device" screenshot "$RUNNER_TEMP/hippogrove-$family.png"
+            sips -s format jpeg -s formatOptions 74 -Z 640 "$RUNNER_TEMP/hippogrove-$family.png" --out "$RUNNER_TEMP/preview-$family.jpg" > /dev/null
+            base64 -i "$RUNNER_TEMP/preview-$family.jpg" | fold -w 800 | awk -v family="$family" '{print "HIPPO_PREVIEW " family " " $0}'
             xcrun simctl shutdown "$device"
           done
       - uses: actions/upload-artifact@v4
