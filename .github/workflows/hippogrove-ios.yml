@@ -1,0 +1,37 @@
+name: Hippogrove 1.0 iOS verification
+on: push
+permissions:
+  contents: read
+jobs:
+  simulator:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Rust and Xcode
+        run: |
+          xcodebuild -version
+          rustup update stable
+          rustup default stable
+          if [[ $(uname -m) == arm64 ]]; then target=aarch64-apple-ios-sim; else target=x86_64-apple-ios; fi
+          rustup target add "$target"
+      - name: Build the app
+        run: tools/build-ios.sh
+      - name: Open the app on iPhone and iPad
+        run: |
+          set -euo pipefail
+          xcrun simctl list -j devices available > "$RUNNER_TEMP/simulators.json"
+          for family in iPhone iPad; do
+            device=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["devices"]; print(next(x["udid"] for k in sorted(d, reverse=True) for x in d[k] if x["name"].startswith(sys.argv[2])))' "$RUNNER_TEMP/simulators.json" "$family")
+            xcrun simctl boot "$device"
+            xcrun simctl bootstatus "$device" -b
+            xcrun simctl install "$device" build/ios/iphonesimulator/Hippogrove.app
+            xcrun simctl launch "$device" game.hippogrove
+            sleep 12
+            xcrun simctl io "$device" screenshot "$RUNNER_TEMP/hippogrove-$family.png"
+            xcrun simctl shutdown "$device"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hippogrove-apple-simulators
+          path: ${{ runner.temp }}/hippogrove-*.png
