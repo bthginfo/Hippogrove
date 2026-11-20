@@ -240,6 +240,18 @@ pub enum DistrictNeed {
     Patrol,
 }
 
+impl DistrictNeed {
+    pub fn building(self) -> crate::game::Building {
+        use crate::game::Building;
+        match self {
+            Self::Water => Building::Well,
+            Self::Trade => Building::Market,
+            Self::Shelter => Building::House,
+            Self::Patrol => Building::Tower,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct District {
     pub name: String,

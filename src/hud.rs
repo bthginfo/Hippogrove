@@ -2015,6 +2015,81 @@ fn map_chart(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
         });
 }
 
+fn departure_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: bool) {
+    let region = game.region();
+    let city = game.city();
+    let next = game.campaign.active + 1;
+    let complete = next == game.regions.len();
+    island_heading(
+        parent,
+        hud,
+        region.kind,
+        if complete {
+            "Kampagne vollendet"
+        } else {
+            "Insel gesichert"
+        },
+        &region.name,
+        short,
+    );
+    for (district, state) in region.districts.iter().zip(&city.districts) {
+        let (icon, result) = if state.outcome == Some(Outcome::Alliance) {
+            (2, "Bündnis")
+        } else {
+            (1, "Wachen vertrieben")
+        };
+        parent.spawn(row()).with_children(|line| {
+            glyph(line, hud, icon, 18.);
+            text(
+                line,
+                hud,
+                &format!("{} · {result}", district.name),
+                16.,
+                INK,
+            );
+        });
+    }
+    if let Some(destination) = game.regions.get(next) {
+        if game.campaign.settlements[next].is_none() {
+            text(
+                parent,
+                hud,
+                &format!(
+                    "Für die Überfahrt schicken deine Nachbarn {}.",
+                    stock_text(city.departure_supplies())
+                ),
+                16.,
+                MUTED,
+            );
+        }
+        button(
+            parent,
+            hud,
+            &format!("Weiter nach {}", destination.name),
+            UiAction::Do(Action::Travel(next)),
+            false,
+            true,
+        );
+    } else {
+        button(
+            parent,
+            hud,
+            "Kampagnen ansehen",
+            UiAction::Panel(Panel::Modes),
+            false,
+            false,
+        );
+    }
+    button(
+        parent,
+        hud,
+        "Auf dieser Insel bleiben",
+        UiAction::Resume,
+        false,
+        complete,
+    );
+}
+
 fn quest_journal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout) {
     let city = game.city();
     let region = game.region();
@@ -2075,10 +2150,25 @@ fn quest_journal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layo
         ..default()
     };
     parent.spawn(row()).with_children(|actions| {
+        if city.quest == Quest::Bridge && city.count(Building::Shrine) > 0 {
+            styled_button(
+                actions,
+                hud,
+                "Wachen anvisieren",
+                UiAction::Confront,
+                false,
+                false,
+                compact,
+            );
+        }
         styled_button(
             actions,
             hud,
-            "Zum Auftragsziel",
+            if city.quest == Quest::Bridge {
+                "Bündnis vorbereiten"
+            } else {
+                "Zum Auftragsziel"
+            },
             UiAction::Guide,
             false,
             true,
@@ -3577,7 +3667,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             },
             BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
-            if !matches!(play.panel, Panel::MainMenu | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection | Panel::Briefing | Panel::Graduation) {
+            if !matches!(play.panel, Panel::MainMenu | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection | Panel::Briefing | Panel::Graduation | Panel::Departure) {
                 let actions = if play.panel == Panel::Menu {
                     [("Hauptmenü", UiAction::MainMenu, false), ("Fortsetzen", UiAction::Resume, true)]
                 } else {
@@ -3624,6 +3714,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 Panel::Controls => controls_panel(box_node, hud, play.gamepad, layout.short),
                 Panel::Orders(tool) => orders_panel(box_node,hud,play,tool,layout.short),
                 Panel::Spells => spellbook(box_node,hud,play,layout.short),
+                Panel::Departure => departure_panel(box_node, hud, game, layout.short),
                 Panel::Journey => {
                     box_node.spawn(row()).with_children(|heading| {
                         panel_heading(heading,hud,if game.campaign_complete() { "Die Schreine sind vereint" } else { game.mode.name() },layout.short);
@@ -3637,7 +3728,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                             let result=game.campaign.settlements[index].as_ref().filter(|place| place.quest == Quest::Complete).and_then(|place|place.outcome);
                             let suffix=if index>game.campaign.unlocked {" · verschlossen"}
                                 else if let Some(outcome)=result { if outcome==Outcome::Alliance {" · Bündnis"} else {" · befreit"} }
-                                else {""};
+                                else if index == game.campaign.active + 1 && city.quest == Quest::Complete {" · Weiterreise"} else {""};
                             chapters.spawn(Node { width: Val::Percent(48.), flex_direction: FlexDirection::Column, ..default() }).with_children(|card| {
                                 button(card,hud,&format!("{}{suffix}",candidate.name),UiAction::Do(Action::Travel(index)),index==game.campaign.active,false);
                                 if !layout.short { text(card,hud,&candidate.subtitle,14.,MUTED); }
@@ -3673,7 +3764,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             if !matches!(play.panel, Panel::MainMenu | Panel::Controls | Panel::Map | Panel::FirstDelivery | Panel::Modes | Panel::Catalog | Panel::Inspection) && !layout.narrow_modal {
                 feedback_toast(box_node, hud, Node::default(), false);
             }
-            if layout.gamepad && !layout.narrow_modal && !matches!(play.panel, Panel::Controls | Panel::Catalog | Panel::Inspection | Panel::Quests | Panel::SideQuest | Panel::Graduation | Panel::Briefing) {
+            if layout.gamepad && !layout.narrow_modal && !matches!(play.panel, Panel::Controls | Panel::Catalog | Panel::Inspection | Panel::Quests | Panel::SideQuest | Panel::Graduation | Panel::Departure | Panel::Briefing) {
                 text(box_node, hud, "Stick oder Steuerkreuz · A wählen · B zurück", 12., MUTED);
             }
         });
@@ -4017,13 +4108,25 @@ pub(crate) fn update(
                 }
             }
             Label::CampaignHint => city.campaign_hint(region, play.gamepad),
-            Label::Creature => format!(
-                "{} · Rang {} · {:.0}% Kraft · {}",
-                growth.description(),
-                gifts.training,
-                city.energy,
-                city.creature_status()
-            ),
+            Label::Creature => {
+                let learned = Material::ALL
+                    .into_iter()
+                    .filter(|&m| gifts.supplies(m))
+                    .map(|m| region.kind.material(m))
+                    .collect::<Vec<_>>();
+                let help = if learned.is_empty() {
+                    "Lerne durch Lob nach einer Lieferung".into()
+                } else {
+                    format!("Vorratshilfe · {}", learned.join(", "))
+                };
+                format!(
+                    "{} · Rang {} · {:.0}% Kraft · {}\n{help}",
+                    growth.description(),
+                    gifts.training,
+                    city.energy,
+                    city.creature_status()
+                )
+            }
             Label::Helpers => format!(
                 "{} sammeln · {}",
                 city.gathering_helpers(),

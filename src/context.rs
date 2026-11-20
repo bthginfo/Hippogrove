@@ -92,8 +92,8 @@ impl ObjectMenu {
                 menu.choices.push(primary);
             } else {
                 menu.choices.push(Choice::new(
-                    "Zum Lager",
-                    UiAction::Focus(city.nearest_store(region, tile)),
+                    "Ablageziel zeigen",
+                    UiAction::Focus(city.carry_destination(region, tile).unwrap_or(region.depot)),
                     14,
                 ));
             }
@@ -106,7 +106,10 @@ impl ObjectMenu {
             }
             if city.lesson.is_some() {
                 menu.choices.push(Choice::new(
-                    "Für die Arbeit loben",
+                    city.supply_lesson(region).map_or_else(
+                        || "Für die Arbeit loben".into(),
+                        |material| format!("{} · Loben", region.kind.material(material)),
+                    ),
                     UiAction::Do(Action::Praise),
                     13,
                 ));
@@ -134,8 +137,62 @@ impl ObjectMenu {
                     8,
                 ));
             }
+            if city.idle_helper() && city.influence(region, tile) && city.nodes[i] > 0 {
+                menu.choices.push(Choice::new(
+                    "Dorfbewohner einteilen",
+                    UiAction::Do(Action::Assign(tile, false)),
+                    11,
+                ));
+            }
+        } else if city.quest == crate::game::Quest::Bridge
+            && tile.within(region.bridge(), 1)
+            && city.count(Building::Shrine) > 0
+        {
+            menu.title = region.crossing.to_string();
+            menu.detail = city.objective(region).1;
+            if target.legal && !city.gift_given {
+                menu.choices.push(primary);
+            }
+            if !target.legal || city.gift_given {
+                menu.choices
+                    .push(Choice::new("Bündnis vorbereiten", UiAction::Guide, 14));
+            }
+            menu.choices
+                .push(Choice::new("Wachen vertreiben", UiAction::Confront, 9));
+        } else if let Some(index) = region.district_at(tile) {
+            let district = &region.districts[index];
+            menu.title = district.name.clone();
+            menu.detail = match city.district_plan(region, index) {
+                Ok(outcome) => {
+                    menu.choices.push(primary);
+                    outcome.name().into()
+                }
+                Err(reason) => reason,
+            };
+            if city.outcome.is_some() && city.districts[index].outcome.is_none() {
+                if city.district_plan(region, index).is_err() {
+                    menu.choices.push(Choice::new(
+                        format!(
+                            "{} vorbereiten",
+                            crate::game::Settlement::district_need(district.need)
+                        ),
+                        UiAction::HelpDistrict(index),
+                        6,
+                    ));
+                }
+                if city.districts[index].resolve > 0 {
+                    menu.choices
+                        .push(Choice::new("Windstoß anvisieren", UiAction::Confront, 9));
+                }
+            }
         } else if let Some(site) = site {
             menu.title = site.kind.name().into();
+            if let Some(name) = site.kind.civic().and_then(crate::civic::Civic::production) {
+                if target.legal {
+                    menu.choices
+                        .push(Choice::new(name, UiAction::Do(Action::Produce(tile)), 12));
+                }
+            }
             if city.influence(region, tile) && site.kind == Building::Field {
                 match site.crop {
                     Crop::Dry => menu.choices.push(Choice::new(

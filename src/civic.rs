@@ -287,6 +287,16 @@ impl Civic {
         ) || self == Self::regional(biome)
     }
 
+    pub fn production(self) -> Option<&'static str> {
+        match self {
+            Self::Sawmill => Some("Bretter sägen"),
+            Self::Masonry => Some("Quader hauen"),
+            Self::Forge => Some("Werkzeug schmieden"),
+            Self::OlivePress => Some("Oliven pressen"),
+            _ => None,
+        }
+    }
+
     pub fn beds(self) -> usize {
         match self {
             Self::Lodge => 3,

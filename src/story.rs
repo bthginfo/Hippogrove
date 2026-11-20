@@ -180,7 +180,7 @@ pub fn update(
     mut view: ResMut<CameraRig>,
 ) {
     play.observe_practice(&game, &mut view, time.elapsed_secs());
-    play.observe_wood_help(&game, time.elapsed_secs());
+    play.observe_deliveries(&game, time.elapsed_secs());
     play.observe_quests(&game, &mut view, time.elapsed_secs());
     let Some(story) = &mut play.story else {
         return;

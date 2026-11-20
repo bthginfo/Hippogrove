@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::{
-    civic::{Branch, Civic, Goods, Tech},
+    civic::{Branch, Civic, Goods, Tech, goods_text},
     game::{
         Action, Building, Crop, FARM_REWARD, FirstDelivery, Game, Miracle, PAW_BUNDLE, PAW_LIMIT,
         Quest, SideQuest, stock_text,
@@ -91,6 +91,7 @@ pub enum Panel {
     Orders(Tool),
     Spells,
     Journey,
+    Departure,
     Map,
     Area(usize),
     Progress,
@@ -124,6 +125,8 @@ pub enum UiAction {
     Zoom(bool),
     Guide,
     ToolTarget,
+    Confront,
+    HelpDistrict(usize),
     Panel(Panel),
     Focus(Tile),
     AreaMaterial(Material),
@@ -219,7 +222,7 @@ pub struct Play {
     pub grab: Option<GrabHold>,
     pub guide_marker: Option<(Tile, f32)>,
     pub hippo_happy_at: Option<f32>,
-    wood_help: Option<u16>,
+    supply_help: Option<Material>,
     hippo_deliveries: u16,
     pub(crate) practice_step: Option<PracticeStep>,
     lesson_tile: Option<Tile>,
@@ -272,10 +275,7 @@ impl Play {
             grab: None,
             guide_marker: None,
             hippo_happy_at: None,
-            wood_help: game
-                .city()
-                .wood_help_active()
-                .then_some(game.city().hippo_deliveries),
+            supply_help: game.city().automatic_supply(game.region()),
             hippo_deliveries: game.city().hippo_deliveries,
             practice_step: None,
             lesson_tile: None,
@@ -368,9 +368,10 @@ impl Play {
                 if city.held.is_none()
                     && self.aim.within(region.bridge(), 1)
                     && city.quest == Quest::Bridge
+                    && !city.gift_given
                     && city.count(Building::Shrine) > 0 =>
             {
-                if city.bridge_fixed {
+                if city.bridge_fixed && !city.gift_given {
                     Action::Give
                 } else {
                     Action::Repair
@@ -388,6 +389,14 @@ impl Play {
                 Action::Camp(region.area_at(self.aim).unwrap())
             }
             Tool::Hand if city.held.is_none() && self.aim == city.walkers[0].tile() => Action::Pet,
+            Tool::Hand
+                if city.held.is_none()
+                    && city.building_at(self.aim).is_some_and(|site| {
+                        site.kind.civic().and_then(Civic::production).is_some()
+                    }) =>
+            {
+                Action::Produce(self.aim)
+            }
             Tool::Hand => Action::Hand(self.aim),
             Tool::Build => Action::Build(self.building(), self.aim, self.rotation),
             Tool::Helpers if self.option == 1 => Action::Muster(self.aim),
@@ -550,30 +559,116 @@ impl Play {
         }
     }
 
-    fn guide_building(&mut self, game: &Game, kind: Building, roadside: bool) -> Tile {
+    fn guide_cost(&mut self, game: &Game, price: crate::game::Stock) -> Option<Tile> {
         let city = game.city();
         let region = game.region();
-        if let Some(material) = city.missing_for(kind) {
-            if city.held.is_some() {
-                self.tool(Tool::Hand);
-                return city.nearest_store(region, self.aim);
+        let missing = Material::ALL
+            .into_iter()
+            .find(|m| city.stock[m.index()] < price[m.index()])?;
+        self.tool(Tool::Hand);
+        if let Some(bundle) = city.held {
+            let m = region.sources[bundle.source].material;
+            return Some(if city.stock[m.index()] < city.storage_cap() {
+                city.nearest_store(region, self.aim)
+            } else {
+                region.sources[bundle.source].tile
+            });
+        }
+        region
+            .sources
+            .iter()
+            .zip(&city.nodes)
+            .filter(|(source, left)| {
+                source.material == missing && **left > 0 && city.influence(region, source.tile)
+            })
+            .min_by_key(|(source, _)| source.tile.distance(self.aim))
+            .map(|(source, _)| source.tile)
+    }
+
+    fn guide_district(&mut self, game: &Game, index: usize) -> Tile {
+        let city = game.city();
+        let region = game.region();
+        let district = &region.districts[index];
+        let center = district.center;
+        let kind = district.need.building();
+        self.tool(Tool::Hand);
+        if city.districts[index].resolve == 0 || city.districts[index].outcome.is_some() {
+            return center;
+        }
+        let local = city.district_site(region, index);
+        let upgrade = district.need == crate::region::DistrictNeed::Shelter;
+        if local.is_some_and(|site| !upgrade || site.upgraded) {
+            return self.guide_cost(game, district.gift).unwrap_or(center);
+        }
+        if city.city_rank() < 2 {
+            let prerequisite = if city.count(Building::Store) == 0 {
+                Building::Store
+            } else {
+                Building::Field
+            };
+            return self.guide_building(game, prerequisite, false);
+        }
+        if kind != Building::Well && city.city_rank() < 3 {
+            return self.guide_building(game, Building::Workshop, false);
+        }
+        if let Some(site) = local {
+            let cost = kind.upgrade().expect("district shelter upgrade");
+            if city.inhabitants() < cost.believers {
+                return self.guide_building(game, Building::House, false);
             }
-            if let Some((source, _)) = region
-                .sources
-                .iter()
-                .zip(&city.nodes)
-                .filter(|(source, left)| {
-                    source.material == material && **left > 0 && city.influence(region, source.tile)
-                })
-                .min_by_key(|(source, _)| source.tile.distance(self.aim))
-            {
-                self.tool(Tool::Hand);
-                return source.tile;
+            if let Some(tile) = self.guide_cost(game, cost.materials) {
+                return tile;
             }
+            self.tool(Tool::Plan);
+            self.choose(1);
+            return site.tile;
+        }
+        if let Some(tile) = self.guide_cost(game, kind.price()) {
+            return tile;
         }
         self.tool(Tool::Build);
         self.choose(kind.index());
-        Self::building_tile(game, kind, region.start, roadside)
+        Self::nearby_building_tile(game, kind, center, true, None).unwrap_or(center)
+    }
+
+    fn guide_building(&mut self, game: &Game, kind: Building, roadside: bool) -> Tile {
+        let region = game.region();
+        if let Some(civic) = kind.civic() {
+            let city = game.city();
+            let producer = [Civic::Sawmill, Civic::Masonry, Civic::Forge];
+            if let Some(i) = (0..3).find(|&i| city.society.goods[i] < civic.spec().goods[i]) {
+                let industry = Building::Civic(producer[i]);
+                if city.count(industry) == 0 && kind != industry {
+                    return self.guide_building(game, industry, true);
+                }
+                if let Some(site) = city
+                    .buildings
+                    .iter()
+                    .find(|s| s.kind == industry && city.connected(game.region(), s))
+                {
+                    let price = match producer[i] {
+                        Civic::Sawmill => [2, 0, 0],
+                        Civic::Masonry => [0, 2, 0],
+                        _ => [0, 1, 0],
+                    };
+                    if let Some(tile) = self.guide_cost(game, price) {
+                        return tile;
+                    }
+                    self.tool(Tool::Hand);
+                    return site.tile;
+                }
+            }
+        }
+        if let Some(tile) = self.guide_cost(game, kind.price()) {
+            return tile;
+        }
+        self.tool(Tool::Build);
+        self.choose(kind.index());
+        if kind == Building::Shrine {
+            region.frontier
+        } else {
+            Self::building_tile(game, kind, region.start, roadside)
+        }
     }
 
     fn building_tile(game: &Game, kind: Building, origin: Tile, roadside: bool) -> Tile {
@@ -592,7 +687,12 @@ impl Play {
         let mut nearby: Vec<_> = Bounds(origin.offset(-8, -8), origin.offset(8, 8))
             .tiles()
             .filter(|tile| {
-                Some(*tile) != skip && region.bounds.contains(*tile) && tile.within(origin, 8)
+                let radius = if region.district_at(origin).is_some() {
+                    crate::game::DISTRICT_RADIUS
+                } else {
+                    8
+                };
+                Some(*tile) != skip && region.bounds.contains(*tile) && tile.within(origin, radius)
             })
             .map(|tile| {
                 let disconnected = roadside
@@ -662,13 +762,39 @@ impl Play {
                 Quest::Shelter => Goal::HippoDeliveries { count: 1 },
                 Quest::Fields if step.is_none() => Goal::Harvests { count: 1 },
                 Quest::Bridge if city.count(Building::Shrine) == 0 => {
-                    self.tool(Tool::Build);
-                    self.choose(Building::Shrine.index());
-                    return Some(region.frontier);
+                    return Some(self.guide_building(game, Building::Shrine, false));
                 }
-                Quest::Bridge if !self.miracle().offensive() || self.tool != Tool::Miracles => {
+                Quest::Bridge
+                    if self.panel == Panel::Quests
+                        || !self.miracle().offensive()
+                        || self.tool != Tool::Miracles =>
+                {
+                    if city.gift_given {
+                        let kind = [
+                            Building::Field,
+                            Building::Workshop,
+                            Building::Well,
+                            Building::House,
+                        ]
+                        .into_iter()
+                        .find(|&kind| city.count(kind) == 0)
+                        .unwrap_or(Building::House);
+                        return Some(self.guide_building(game, kind, false));
+                    }
+                    let due = city.crossing_due(region);
+                    let tile = if city.held.is_some() {
+                        city.carry_destination(region, self.aim)
+                            .unwrap_or(region.depot)
+                    } else if let Some(material) = Material::ALL
+                        .into_iter()
+                        .find(|m| due[m.index()] > city.stock[m.index()])
+                    {
+                        supply(material)
+                    } else {
+                        region.bridge()
+                    };
                     self.tool(Tool::Hand);
-                    return Some(region.bridge());
+                    return Some(tile);
                 }
                 Quest::Districts => {
                     self.tool(Tool::Hand);
@@ -722,12 +848,43 @@ impl Play {
                 self.tool(Tool::Hand);
                 tile
             }
-            Goal::Roads { .. } => {
+            Goal::Roads { count } => {
+                if let Some(tile) = self.guide_cost(game, [0, 1, 0]) {
+                    return Some(tile);
+                }
+                let length = (count.saturating_sub(city.roads.len() as u16)).clamp(1, 3) as i16;
+                let mut starts: Vec<_> =
+                    Bounds(region.start.offset(-8, -8), region.start.offset(8, 8))
+                        .tiles()
+                        .filter(|&t| city.road_at(region, t) && city.walkable(region, t))
+                        .collect();
+                starts.sort_by_key(|t| t.distance(self.aim));
                 self.tool(Tool::Plan);
                 self.choose(0);
-                Tile(region.cross_x, region.start.1 + 4)
+                for n in (1..=length).rev() {
+                    for start in &starts {
+                        for end in [
+                            start.offset(n, 0),
+                            start.offset(-n, 0),
+                            start.offset(0, n),
+                            start.offset(0, -n),
+                        ] {
+                            if city
+                                .road_plan(region, *start, end)
+                                .is_ok_and(|(cells, _)| cells.len() == n as usize)
+                            {
+                                self.road_anchor = Some(*start);
+                                return Some(end);
+                            }
+                        }
+                    }
+                }
+                self.aim
             }
             Goal::Camps { .. } => {
+                if let Some(tile) = self.guide_cost(game, [crate::game::CAMP_WOOD, 0, 0]) {
+                    return Some(tile);
+                }
                 self.tool(Tool::Hand);
                 region
                     .areas
@@ -782,6 +939,14 @@ impl Play {
                 }) {
                     self.tool(Tool::Plan);
                     if city.connected(region, site) {
+                        if let Some(upgrade) = kind.upgrade() {
+                            if city.inhabitants() < upgrade.believers {
+                                return Some(self.guide_building(game, Building::House, false));
+                            }
+                            if let Some(tile) = self.guide_cost(game, upgrade.materials) {
+                                return Some(tile);
+                            }
+                        }
                         self.choose(1);
                         site.tile
                     } else {
@@ -939,8 +1104,10 @@ impl Play {
                     self.set_catalog_page(game, self.catalog_page);
                 }
                 if self.panel == Panel::Orders(Tool::Hippo)
-                    && !game.campaign.gifts.gathers_low_wood
-                    && game.city().practiced_wood(game.region())
+                    && game
+                        .city()
+                        .supply_lesson(game.region())
+                        .is_some_and(|m| !game.campaign.gifts.supplies(m))
                 {
                     self.focus = Some(UiAction::Do(Action::Praise));
                 }
@@ -1105,6 +1272,33 @@ impl Play {
             UiAction::ToolTarget if self.panel == Panel::Closed && self.tool == Tool::Build => {
                 self.suggest_plot(game, view, now);
             }
+            UiAction::HelpDistrict(index) => {
+                if index < game.region().districts.len() && game.city().outcome.is_some() {
+                    let tile = self.guide_district(game, index);
+                    self.close_panels();
+                    self.pointer = None;
+                    self.aim = tile;
+                    view.focus_action(tile);
+                    self.guide_marker = Some((tile, now + 6.));
+                    self.sound_cues.push(Cue::Choose);
+                }
+            }
+            UiAction::Confront => {
+                self.close_panels();
+                self.tool(Tool::Miracles);
+                self.choose(Miracle::Wind as usize);
+                if game.city().quest == Quest::Bridge {
+                    self.aim = self.guide_tile(game);
+                }
+                self.pointer = None;
+                view.focus_action(self.aim);
+                self.guide_marker = Some((self.aim, now + 6.));
+                self.notify(
+                    "Windstoß ist bereit. Bestätige am markierten Gegner.",
+                    Feedback::Selection,
+                    now + 4.,
+                );
+            }
             UiAction::Guide | UiAction::ToggleObjective | UiAction::ToolTarget => {
                 let city = game.city();
                 if matches!(action, UiAction::Guide | UiAction::ToggleObjective)
@@ -1113,7 +1307,7 @@ impl Play {
                     && !game.region().sandbox
                 {
                     if city.quest == Quest::Complete {
-                        self.open_panel(Panel::Journey);
+                        self.open_departure(game);
                         return false;
                     }
                     if city.quest == Quest::Districts
@@ -1122,14 +1316,83 @@ impl Play {
                             .and_then(|step| step.pending(city, game.region()))
                             .is_none()
                     {
-                        self.open_panel(Panel::Map);
-                        return false;
+                        if let Some(index) = city
+                            .districts
+                            .iter()
+                            .position(|state| state.outcome.is_none())
+                        {
+                            self.aim = self.guide_district(game, index);
+                            self.close_panels();
+                            self.pointer = None;
+                            view.focus_action(self.aim);
+                            self.guide_marker = Some((self.aim, now + 6.));
+                            self.sound_cues.push(Cue::Choose);
+                            return false;
+                        }
                     }
                 }
                 let tool_target = action == UiAction::ToolTarget
                     && self.panel == Panel::Closed
                     && self.tool != Tool::Hand
                     && game.mode != Mode::Tutorial;
+                if !tool_target
+                    && matches!(self.panel, Panel::Closed | Panel::Quests | Panel::SideQuest)
+                {
+                    let goal = if self.panel == Panel::SideQuest {
+                        city.local_next(game.region())
+                    } else {
+                        city.quest_step(game.region())
+                            .and_then(|step| step.pending(city, game.region()))
+                    };
+                    let civic = match goal {
+                        Some(Goal::Building {
+                            kind: Building::Civic(kind),
+                            ..
+                        }) => Some(kind),
+                        Some(Goal::OlivePressings { .. }) => Some(Civic::OlivePress),
+                        _ => None,
+                    };
+                    let civic = civic.map(|kind| {
+                        let producer = [Civic::Sawmill, Civic::Masonry, Civic::Forge];
+                        let needed = (0..3).find(|&i| {
+                            city.society.goods[i] < kind.spec().goods[i]
+                                && city.count(Building::Civic(producer[i])) == 0
+                        });
+                        if game.campaign.research.knows(kind.spec().unlock) {
+                            needed.map_or(kind, |i| producer[i])
+                        } else {
+                            kind
+                        }
+                    });
+                    if let Some(mut tech) = civic
+                        .map(|kind| kind.spec().unlock)
+                        .filter(|&tech| !game.campaign.research.knows(tech))
+                    {
+                        while let Some(&parent) = tech
+                            .parents()
+                            .iter()
+                            .find(|&&p| !game.campaign.research.knows(p))
+                        {
+                            tech = parent;
+                        }
+                        self.open_panel(Panel::Research);
+                        self.tech = tech;
+                        let readiness = game.campaign.research.available(tech, city.city_rank());
+                        self.focus = Some(if readiness.is_ok() {
+                            UiAction::Do(Action::Research(tech))
+                        } else {
+                            UiAction::SelectTech(tech)
+                        });
+                        self.notify(
+                            readiness.err().unwrap_or_else(|| {
+                                format!("{} für den Bauplan erforschen", tech.name())
+                            }),
+                            Feedback::Selection,
+                            now + 5.,
+                        );
+                        return false;
+                    }
+                }
                 if !tool_target
                     && matches!(
                         self.panel,
@@ -1409,6 +1672,16 @@ impl Play {
         self.focus = None;
     }
 
+    fn open_departure(&mut self, game: &Game) {
+        self.open_panel(Panel::Departure);
+        let next = game.campaign.active + 1;
+        self.focus = Some(if next <= game.campaign.unlocked {
+            UiAction::Do(Action::Travel(next))
+        } else {
+            UiAction::Resume
+        });
+    }
+
     fn open_delivery(&mut self, game: &Game) {
         self.open_panel(Panel::FirstDelivery);
         let region = game.region();
@@ -1491,6 +1764,9 @@ impl Play {
             if shows_world_receipt(action) && previous == game.campaign.active {
                 let city = game.city();
                 let mut changes = Vec::new();
+                if matches!(action, Action::Produce(_)) {
+                    changes.push(self.notice.clone());
+                }
                 for material in Material::ALL {
                     let i = material.index();
                     let change = i32::from(city.stock[i]) - i32::from(stock_before[i]);
@@ -1536,7 +1812,7 @@ impl Play {
                 Action::Hand(_) if carried => Cue::Drop,
                 Action::Grab(..) | Action::Hand(_) if game.city().held.is_some() => Cue::Lift,
                 Action::Pet | Action::Praise => Cue::Pet,
-                Action::ShareMeal(_) => Cue::Reward,
+                Action::ShareMeal(_) | Action::Produce(_) => Cue::Reward,
                 Action::Hand(tile) if game.region().source_at(tile).is_none() => Cue::Gather,
                 Action::Cast(spell, _) => Cue::Cast(spell),
                 Action::Build(..) | Action::Upgrade(_) | Action::Road(..) | Action::Repair => {
@@ -1576,6 +1852,7 @@ impl Play {
                     self.open_delivery(game);
                 } else if let Some(store) = game.city().carry_destination(game.region(), self.aim) {
                     self.aim = store;
+                    self.guide_marker = Some((store, now + 6.));
                     self.pointer = None;
                 }
             }
@@ -1613,17 +1890,14 @@ impl Play {
                 self.road_anchor = None;
                 self.last_magic = None;
                 self.aim = game.region().sources[0].tile;
-                self.notify(&game.region().subtitle, Feedback::Selection, now + 8.);
+                self.notice_until = now + 8.;
                 *view = CameraRig::new(game);
                 view.jump = true;
                 self.previous_quest = game.city().quest;
                 self.previous_side_quest = game.city().side_quest(game.region());
                 self.hippo_happy_at = None;
                 self.hippo_deliveries = game.city().hippo_deliveries;
-                self.wood_help = game
-                    .city()
-                    .wood_help_active()
-                    .then_some(self.hippo_deliveries);
+                self.supply_help = game.city().automatic_supply(game.region());
             } else if matches!(action, Action::Travel(_)) {
                 self.close_panels();
             }
@@ -1639,34 +1913,43 @@ impl Play {
         success
     }
 
-    pub fn observe_wood_help(&mut self, game: &Game, now: f32) {
+    pub fn observe_deliveries(&mut self, game: &Game, now: f32) {
         let city = game.city();
-        let delivered = city.hippo_deliveries;
-        let active = city.wood_help_active().then_some(delivered);
-        let finished = self
-            .wood_help
-            .is_some_and(|previous| active.is_none() && delivered > previous);
-        let learned = game.campaign.gifts.gathers_low_wood;
-        let notice = if finished {
+        let region = game.region();
+        let active = city.automatic_supply(region);
+        if city.hippo_deliveries > self.hippo_deliveries && !region.tutorial {
+            let material = city.supply_lesson(region);
+            let name = material.map_or("Vorräte", |m| region.kind.material(m));
+            let learned = material.is_some_and(|m| game.campaign.gifts.supplies(m));
+            let message = if self.supply_help.is_some() {
+                format!("{} selbstständig nachgefüllt", name)
+            } else if !learned {
+                format!(
+                    "{name} geliefert · Lobe dein Nilpferd, damit es bei Knappheit selbst sammelt."
+                )
+            } else {
+                format!("{name} im Lager angekommen")
+            };
+            self.receipt = Some((
+                city.walkers[0].tile(),
+                now,
+                format!("+{} {name}", city.last_hippo_load),
+            ));
             self.hippo_happy_at = Some(now);
-            self.revision = self.revision.wrapping_add(1);
-            self.sound_cues.push(Cue::Pet);
-            Some("Dein Nilpferd hat das Holz selbst ins Lager gebracht.")
-        } else if active.is_some() && self.wood_help.is_none() {
-            Some("Das Holz wird knapp. Dein Nilpferd holt jetzt selbst Nachschub.")
-        } else if delivered > self.hippo_deliveries
-            && !learned
-            && city.practiced_wood(game.region())
-        {
-            Some("Holz geliefert! Unter Nilpferd → Loben lernt es, selbst Holz zu holen.")
-        } else {
-            None
-        };
-        self.wood_help = active;
-        self.hippo_deliveries = delivered;
-        if let Some(notice) = notice {
-            self.notify(notice, Feedback::Action, now + 5.5);
+            self.sound_cues.push(Cue::Gather);
+            self.notify(message, Feedback::Action, now + 5.5);
+        } else if let Some(m) = active.filter(|_| self.supply_help.is_none()) {
+            self.notify(
+                format!(
+                    "{} wird knapp · Dein Nilpferd holt Nachschub",
+                    region.kind.material(m)
+                ),
+                Feedback::Action,
+                now + 4.,
+            );
         }
+        self.supply_help = active;
+        self.hippo_deliveries = city.hippo_deliveries;
     }
 
     pub fn observe_quests(&mut self, game: &Game, view: &mut CameraRig, now: f32) {
@@ -1706,6 +1989,14 @@ impl Play {
             && quest == Quest::Fields
         {
             self.start_story(Sequence::Shelter, game, view);
+        }
+        if self.previous_quest != quest
+            && quest == Quest::Complete
+            && !region.tutorial
+            && !region.sandbox
+            && self.panel == Panel::Closed
+        {
+            self.open_departure(game);
         }
         self.previous_quest = quest;
     }
@@ -1757,6 +2048,7 @@ fn shows_world_receipt(action: Action) -> bool {
     matches!(
         action,
         Action::Hand(_)
+            | Action::Produce(_)
             | Action::ShareMeal(_)
             | Action::Grab(..)
             | Action::Build(..)
@@ -2077,25 +2369,51 @@ impl Target {
                 "Streicheln".into()
             }
             Action::Rest => {
-                self.detail = if game.campaign.gifts.gathers_low_wood {
-                    "Stoppt auch die Holzhilfe. Sammeln oder Lob setzt sie fort."
-                } else {
-                    "Beendet den Auftrag. Die Kreatur erholt sich."
-                }
-                .into();
+                self.detail = "Stoppt den Auftrag und die Vorratshilfe. Sammeln oder neues Lob setzt sie fort.".into();
                 "Pause einlegen".into()
             }
+            Action::Produce(tile) => {
+                let site = city
+                    .building_at(tile)
+                    .expect("targeted production building");
+                match city.production_plan(region, site) {
+                    Ok((cost, inputs, outputs)) => {
+                        let result = if site.kind == Building::Civic(Civic::OlivePress) {
+                            "Öl und Glauben".into()
+                        } else {
+                            goods_text(outputs)
+                        };
+                        let costs = [stock_text(cost), goods_text(inputs)]
+                            .into_iter()
+                            .filter(|s| !s.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(" + ");
+                        self.detail = format!("{costs} → {result}");
+                    }
+                    Err(reason) => {
+                        self.detail = reason;
+                        self.legal = false;
+                    }
+                }
+                site.kind
+                    .civic()
+                    .and_then(Civic::production)
+                    .unwrap_or("Fertigen")
+                    .into()
+            }
             Action::Repair => {
-                self.detail = stock_text(region.rebuild);
+                let due = city.crossing_due(region);
+                self.legal = (0..3).all(|i| city.stock[i] >= due[i]);
+                self.detail = format!(
+                    "Aus dem Lager · {}. Bündel sind auch einzeln willkommen.",
+                    stock_text(due)
+                );
                 format!("{} reparieren", region.crossing)
             }
             Action::Give => {
-                self.detail = format!(
-                    "{} {} · {}",
-                    region.gift.1,
-                    region.kind.material(region.gift.0),
-                    region.request
-                );
+                let due = city.crossing_due(region);
+                self.legal = (0..3).all(|i| city.stock[i] >= due[i]);
+                self.detail = format!("{} · {}", stock_text(due), region.request);
                 "Bitte erfüllen".into()
             }
             Action::Hand(_) if first_delivery.is_some() => {
@@ -2129,6 +2447,23 @@ impl Target {
             Action::Hand(_) if city.held.is_some() => {
                 self.legal = city.can_store_at(region, tile) && city.influence(region, tile);
                 let bundle = city.held.unwrap();
+                let owed =
+                    city.crossing_due(region)[region.sources[bundle.source].material.index()];
+                if tile.within(region.bridge(), 1) && owed > 0 {
+                    self.legal = city.influence(region, tile);
+                    self.detail = format!(
+                        "{} {} für {} · Rest bleibt in der Pfote",
+                        bundle.count.min(owed),
+                        region.kind.material(region.sources[bundle.source].material),
+                        region.crossing
+                    );
+                    return self.label = if city.bridge_fixed {
+                        "Zur Dorfgabe legen"
+                    } else {
+                        "Zur Baustelle bringen"
+                    }
+                    .into();
+                }
                 if region.source_at(tile) == Some(bundle.source) {
                     self.legal = true;
                     self.detail = "Lege die Ladung wieder an der Quelle ab.".into();
@@ -2138,10 +2473,13 @@ impl Target {
                 let room = city
                     .storage_cap()
                     .saturating_sub(city.stock[material.index()]);
-                self.legal &= room >= bundle.count;
-                self.detail = if room < bundle.count {
+                self.legal &= room > 0;
+                self.detail = if room == 0 {
+                    "Lager voll · Bündel an die Quelle zurücklegen".into()
+                } else if room < bundle.count {
                     format!(
-                        "Im Lager sind nur {room} Plätze frei. Du kannst das Bündel zur Quelle zurückbringen."
+                        "{room} ablegen · {} bleiben in der Pfote",
+                        bundle.count - room
                     )
                 } else {
                     format!(

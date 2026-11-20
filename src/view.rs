@@ -1438,7 +1438,7 @@ pub fn animate(
         let stride = if walker.hippo { 1.44 } else { 1.20 };
         meta.phase = (meta.phase + travel.length() * std::f32::consts::TAU / stride)
             .rem_euclid(std::f32::consts::TAU);
-        let looking = walker.hippo && city.looking_at_wood_store();
+        let looking = walker.hippo && city.looking_at_store();
         let heading = if looking {
             (region.depot.world() - pose.translation).with_y(0.)
         } else {
