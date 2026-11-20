@@ -68,6 +68,9 @@ pub(crate) enum Label {
     Refined(usize),
     Carried,
     Capacity,
+    AreaCamp(usize),
+    AreaSupply(usize, Material),
+    AreaCrew(usize, Material),
     Subtitle,
 }
 
@@ -100,6 +103,7 @@ struct Layout {
     insight: u16,
     carried: Option<Material>,
     free_build_tab: bool,
+    area: Option<(Material, bool)>,
 }
 
 #[derive(Resource, Default)]
@@ -291,6 +295,10 @@ fn button(
         SURFACE
     };
     let tool = matches!(action, UiAction::Tool(_));
+    let area_order = matches!(
+        action,
+        UiAction::AreaSource(..) | UiAction::Do(Action::AssignArea(..) | Action::CancelArea(..))
+    );
     parent
         .spawn((
             Button,
@@ -309,7 +317,10 @@ fn button(
                 } else {
                     48.
                 }),
-                padding: UiRect::axes(Val::Px(if tool { 7. } else { 11. }), Val::Px(5.)),
+                padding: UiRect::axes(
+                    Val::Px(if tool || area_order { 7. } else { 11. }),
+                    Val::Px(5.),
+                ),
                 border: UiRect::all(Val::Px(2.)),
                 flex_direction: if tool {
                     FlexDirection::Column
@@ -867,7 +878,7 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
                 camps,
                 hud,
                 &area.name,
-                UiAction::Focus(area.center),
+                UiAction::Panel(Panel::Area(index)),
                 game.city().camps[index],
                 false,
             );
@@ -1323,6 +1334,128 @@ fn material_glyph(biome: Biome, material: Material) -> usize {
     }
 }
 
+fn area_panel(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    game: &Game,
+    layout: Layout,
+    index: usize,
+) {
+    let region = game.region();
+    let area = &region.areas[index];
+    let (selected, active) = layout.area.unwrap();
+    parent
+        .spawn(Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.),
+            ..default()
+        })
+        .with_children(|head| {
+            head.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                ..default()
+            })
+            .with_children(|title| {
+                panel_heading(title, hud, &area.name, layout.short);
+                label(title, hud, Label::AreaCamp(index), 15., DARK);
+            });
+            head.spawn(row()).with_children(|nav| {
+                button(
+                    nav,
+                    hud,
+                    "Zum Lager",
+                    UiAction::Focus(area.center),
+                    false,
+                    false,
+                );
+                button(nav, hud, "Landkarte", UiAction::Cancel, false, false);
+            });
+        });
+    parent
+        .spawn(Node {
+            column_gap: Val::Px(8.),
+            ..default()
+        })
+        .with_children(|cards| {
+            for material in Material::ALL {
+                let chosen = selected == material;
+                cards
+                    .spawn((
+                        Button,
+                        HitArea,
+                        ControlButton {
+                            action: UiAction::AreaMaterial(material),
+                            selected: chosen,
+                            strong: false,
+                        },
+                        Node {
+                            flex_grow: 1.,
+                            flex_basis: Val::Px(0.),
+                            min_width: Val::Px(0.),
+                            flex_direction: FlexDirection::Column,
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            row_gap: Val::Px(2.),
+                            padding: UiRect::all(Val::Px(6.)),
+                            min_height: Val::Px(if layout.short { 117. } else { 145. }),
+                            border: UiRect::all(Val::Px(2.)),
+                            ..default()
+                        },
+                        BackgroundColor(rgb(if chosen { JADE } else { 0xfcf3de })),
+                        BorderColor(rgb(if chosen { GOLD } else { BRASS })),
+                        Outline::new(Val::Px(3.), Val::Px(2.), Color::NONE),
+                        BorderRadius::all(Val::Px(11.)),
+                    ))
+                    .with_children(|card| {
+                        glyph(
+                            card,
+                            hud,
+                            material_glyph(region.kind, material),
+                            if layout.short { 52. } else { 68. },
+                        );
+                        text(card, hud, region.kind.material(material), 16., INK);
+                        let supply = text(card, hud, "", 14., DARK);
+                        card.commands().entity(supply).insert((
+                            Label::AreaSupply(index, material),
+                            TextLayout::new_with_justify(JustifyText::Center),
+                        ));
+                    });
+            }
+        });
+    if active {
+        label(parent, hud, Label::AreaCrew(index, selected), 15., DARK);
+    }
+    parent.spawn(row()).with_children(|actions| {
+        button(
+            actions,
+            hud,
+            "Zur Quelle",
+            UiAction::AreaSource(index, selected),
+            false,
+            true,
+        );
+        if active {
+            for (name, action) in [
+                ("Helfer senden", Action::AssignArea(index, selected, false)),
+                ("Nilpferd senden", Action::AssignArea(index, selected, true)),
+                ("Beenden", Action::CancelArea(index, selected)),
+            ] {
+                button(actions, hud, name, UiAction::Do(action), false, false);
+            }
+        } else {
+            button(
+                actions,
+                hud,
+                "Sammellager bauen",
+                UiAction::Do(Action::Camp(index)),
+                false,
+                false,
+            );
+        }
+    });
+}
+
 fn inventory_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout, kind: Biome) {
     parent
         .spawn(Node {
@@ -1497,7 +1630,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             },
             BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
-            if !matches!(play.panel, Panel::Inventory | Panel::Modes) {
+            if !matches!(play.panel, Panel::Inventory | Panel::Modes | Panel::Area(_)) {
                 box_node.spawn(row()).with_children(|nav| {
                 button(nav,hud,"Kapitel",UiAction::Panel(Panel::Journey),play.panel==Panel::Journey,false);
                 button(nav,hud,"Landkarte",UiAction::Panel(Panel::Map),play.panel==Panel::Map,false);
@@ -1529,6 +1662,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     });
                 }
                 Panel::Map => map_panel(box_node,hud,game,layout.short),
+                Panel::Area(index) => area_panel(box_node,hud,game,layout,index),
                 Panel::Catalog => catalog_panel(box_node,hud,game,play,layout.short),
                 Panel::Research => research_panel(box_node,hud,game,play.tech,layout.short),
                 Panel::Inspection => inspection_panel(box_node,hud,game,play,layout.short),
@@ -1628,6 +1762,10 @@ pub fn layout(
             None
         },
         free_build_tab: play.free_build_tab,
+        area: match play.panel {
+            Panel::Area(index) => Some((play.area_material, game.city().camps[index])),
+            _ => None,
+        },
     };
     if hud.layout == Some(key) {
         return;
@@ -1718,6 +1856,40 @@ pub fn update(
                 },
             ),
             Label::Capacity => format!("{} Lagerplatz je Rohstoff", city.storage_cap()),
+            Label::AreaCamp(index) => if city.camps[*index] {
+                "Sammellager aktiv"
+            } else {
+                city.camp_plan(*index)
+                    .err()
+                    .unwrap_or("Sammellager · 5 Holz · 6 Glauben")
+            }
+            .into(),
+            Label::AreaSupply(area, material) => {
+                let supply = city.area_supply(region, *area, *material);
+                format!(
+                    "{} verfügbar\n{} von {} Quellen",
+                    supply.units, supply.stocked, supply.sources
+                )
+            }
+            Label::AreaCrew(area, material) => {
+                let (helpers, hippo) = city.area_crew(*area, *material);
+                let mut activity = match (helpers, hippo) {
+                    (0, false) => "Kein aktiver Auftrag für diesen Rohstoff".into(),
+                    (0, true) => "Das Nilpferd sammelt hier".into(),
+                    (1, false) => "Ein Gläubiger sammelt hier".into(),
+                    (1, true) => "Ein Gläubiger und das Nilpferd sammeln hier".into(),
+                    (count, false) => format!("{count} Gläubige sammeln hier"),
+                    (count, true) => format!("{count} Gläubige und das Nilpferd sammeln hier"),
+                };
+                if helpers > 0 || hippo {
+                    if city.stock[material.index()] >= city.storage_cap() {
+                        activity.push_str(" · Lager voll");
+                    } else if city.area_supply(region, *area, *material).units == 0 {
+                        activity.push_str(" · Quellen erholen sich");
+                    }
+                }
+                activity
+            }
             Label::Subtitle => play
                 .story
                 .map_or_else(String::new, |story| story.caption(region).into()),
@@ -1834,6 +2006,14 @@ pub fn update(
                 .research
                 .available(tech, city.city_rank())
                 .is_err(),
+            UiAction::Do(Action::Camp(index)) => city.camp_plan(index).is_err(),
+            UiAction::Do(Action::AssignArea(_, _, false)) => !city.idle_helper(),
+            UiAction::Do(Action::AssignArea(area, material, true)) => {
+                city.area_crew(area, material).1
+            }
+            UiAction::Do(Action::CancelArea(area, material)) => {
+                city.area_crew(area, material) == (0, false)
+            }
             _ => false,
         };
         let shade = if unavailable {
@@ -1843,6 +2023,8 @@ pub fn update(
                 0xffe5b2
             } else if button.selected {
                 0xe5f2cc
+            } else if matches!(button.action, UiAction::AreaMaterial(_)) {
+                0xf5e5c3
             } else {
                 0x4a6855
             }
@@ -1850,6 +2032,8 @@ pub fn update(
             GOLD
         } else if button.selected {
             JADE
+        } else if matches!(button.action, UiAction::AreaMaterial(_)) {
+            0xfcf3de
         } else {
             SURFACE
         };
