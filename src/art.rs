@@ -1,9 +1,12 @@
 use bevy::{asset::RenderAssetUsages, prelude::*, render::mesh::PrimitiveTopology};
 
 use crate::{
+    civic::Civic,
     game::{Building, Settlement},
     region::{Biome, CELL, Material, Region, Tile},
 };
+
+mod settlement_models;
 
 pub fn rgb(hex: u32) -> Color {
     Color::srgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -53,7 +56,7 @@ pub struct Art {
     pub stone: Handle<StandardMaterial>,
     pub warm_stone: Handle<StandardMaterial>,
     pub door: Handle<StandardMaterial>,
-    pub roof_color: [Handle<StandardMaterial>; 4],
+    pub roof_color: [Handle<StandardMaterial>; 5],
     pub ridge: Handle<StandardMaterial>,
     pub amber: Handle<StandardMaterial>,
     pub white: Handle<StandardMaterial>,
@@ -66,6 +69,8 @@ pub struct Art {
     pub ripple: Handle<StandardMaterial>,
     pub blue: Handle<StandardMaterial>,
     pub red: Handle<StandardMaterial>,
+    pub limestone: Handle<StandardMaterial>,
+    pub cobalt: Handle<StandardMaterial>,
     pub valid: Handle<StandardMaterial>,
     pub invalid: Handle<StandardMaterial>,
     pub ghost: Handle<StandardMaterial>,
@@ -117,6 +122,7 @@ impl Art {
                 paint(mats, 0x485969),
                 paint(mats, 0x51796c),
                 paint(mats, 0xc69c57),
+                paint(mats, 0xce764d),
             ],
             ridge: paint(mats, 0xd18d54),
             amber: glow(mats, 0xffd38a, 1.),
@@ -130,6 +136,8 @@ impl Art {
             ripple: glow(mats, 0x92decc, 0.62),
             blue: paint(mats, 0x526988),
             red: paint(mats, 0xa75548),
+            limestone: paint(mats, 0xecdec5),
+            cobalt: paint(mats, 0x3d74a7),
             valid: glow(mats, 0xc2ebbd, 1.),
             invalid: glow(mats, 0xffb29b, 1.),
             ghost: glow(mats, 0x8fc4a4, 0.44),
@@ -375,6 +383,7 @@ fn relief(region: &Region, x: i16, z: i16) -> f32 {
         Biome::Fjord => 1.92,
         Biome::Terraces => 1.36,
         Biome::Lake => 1.24,
+        Biome::Aegean => 1.12,
     };
     let mut height: f32 = 0.;
     for &(center, radius) in &region.highlands {
@@ -395,7 +404,7 @@ fn relief(region: &Region, x: i16, z: i16) -> f32 {
     let outside = (region.bounds.0.1 - z)
         .max(region.bounds.0.0 - x)
         .max(x - region.bounds.1.0);
-    if outside > 0 {
+    if outside > 0 && region.kind != Biome::Aegean {
         let roll = ((point.x * 0.32 + point.y * 0.45).sin()
             + (point.x * 0.11 - point.y * 0.27).cos())
             * 0.28;
@@ -426,6 +435,11 @@ pub fn landscape(region: &Region) -> Mesh {
             &[0xd9b88c, 0xccb083, 0xc6a97f],
             &[0x53a8a5, 0x60b3ad, 0x489b9d, 0x6cbab0],
         ),
+        Biome::Aegean => (
+            &[0xb9b47a, 0xa9b66a, 0xc7bc89, 0xa4ae70],
+            &[0xe8d6b3, 0xdbc5a5, 0xe7cfaa],
+            &[0x2c94b3, 0x389eb4, 0x2d88a9, 0x4aaab8],
+        ),
     };
     let mut ground = Geometry::default();
     let half = CELL * 0.5;
@@ -441,6 +455,12 @@ pub fn landscape(region: &Region) -> Mesh {
             land
         };
         let center = tile.world() + Vec3::Y * if wet { -0.26 } else { 0. };
+        let beach = region.kind == Biome::Aegean
+            && !wet
+            && tile
+                .neighbors()
+                .into_iter()
+                .any(|neighbor| region.water(neighbor));
         let corner = |dx: i16, dz: i16| {
             let dx_offset = (hash(x + dx, z + dz, 90) % 21) as f32 * 0.018 - 0.18;
             let dz_offset = (hash(x + dx, z + dz, 47) % 21) as f32 * 0.018 - 0.18;
@@ -464,13 +484,18 @@ pub fn landscape(region: &Region) -> Mesh {
                 let neighbor = rgb(land[(seed as usize + 1) % land.len()]);
                 let mixing =
                     ((corners[i].x * 0.14).sin() * (corners[i].z * 0.13).cos() + 1.) * 0.35;
-                let base = color.mix(&neighbor, mixing);
+                let base = if beach {
+                    rgb(0xdac79c)
+                } else {
+                    color.mix(&neighbor, mixing)
+                };
                 let y = corners[i].y;
                 let cliff = match region.kind {
                     Biome::Valley => rgb(0x9b9279),
                     Biome::Fjord => rgb(0x8a98a9),
                     Biome::Terraces => rgb(0x7f9854),
                     Biome::Lake => rgb(0xce9267),
+                    Biome::Aegean => rgb(0xd2bfa5),
                 };
                 let color = base.mix(&cliff, ((y - 0.55) / 2.2).clamp(0., 0.96));
                 if region.kind == Biome::Fjord {
@@ -513,7 +538,12 @@ pub fn landscape(region: &Region) -> Mesh {
                 if region.water(adjacent) {
                     let a = corners[left];
                     let b = corners[right];
-                    ground.quad(b, a, a - Vec3::Y * 0.27, b - Vec3::Y * 0.27, rgb(0x9a876b));
+                    let bank = if region.kind == Biome::Aegean {
+                        0xd5bba1
+                    } else {
+                        0x9a876b
+                    };
+                    ground.quad(b, a, a - Vec3::Y * 0.27, b - Vec3::Y * 0.27, rgb(bank));
                 }
             }
         }
@@ -589,6 +619,8 @@ fn broadleaf(parent: &mut ChildSpawnerCommands, art: &Art, p: Vec3, scale: f32, 
         };
         let spread = if biome == Biome::Lake {
             Vec3::new(1.9, 0.63, 1.45)
+        } else if biome == Biome::Aegean {
+            Vec3::new(1.49, 0.82, 1.24)
         } else {
             Vec3::new(1.55, 1.54, 1.35)
         };
@@ -623,7 +655,12 @@ pub fn scenery(parent: &mut ChildSpawnerCommands, art: &Art, region: &Region) {
         let choice = hash(x, z, 93);
         let near_water = tile.neighbors().into_iter().any(|q| region.water(q));
         if region.water(tile) {
-            if choice % 11 == 0 && !region.crossing(tile) {
+            let divisor = if region.kind == Biome::Aegean && !near_water {
+                53
+            } else {
+                11
+            };
+            if choice % divisor == 0 && !region.bridge_cell(tile) {
                 block(
                     parent,
                     art,
@@ -635,6 +672,7 @@ pub fn scenery(parent: &mut ChildSpawnerCommands, art: &Art, region: &Region) {
                     let (surface, y, size) = match region.kind {
                         Biome::Fjord => (&art.white, -0.20, Vec3::new(0.72, 0.14, 0.44)),
                         Biome::Terraces => (&art.leaf[0], -0.24, Vec3::new(0.46, 0.07, 0.38)),
+                        Biome::Aegean => (&art.ripple, -0.25, Vec3::new(0.88, 0.035, 0.12)),
                         _ => (&art.leaf[2], -0.24, Vec3::new(0.27, 0.06, 0.23)),
                     };
                     mound(parent, art, surface, p + Vec3::Y * y, size);
@@ -658,7 +696,11 @@ pub fn scenery(parent: &mut ChildSpawnerCommands, art: &Art, region: &Region) {
             mound(
                 parent,
                 art,
-                &art.warm_stone,
+                if region.kind == Biome::Aegean {
+                    &art.limestone
+                } else {
+                    &art.warm_stone
+                },
                 p + Vec3::Y * 0.11,
                 Vec3::new(1.15, 0.45, 0.69),
             );
@@ -677,7 +719,23 @@ pub fn scenery(parent: &mut ChildSpawnerCommands, art: &Art, region: &Region) {
             && choice % if inner { 6 } else { 23 } == 0
         {
             let scale = 0.58 + (choice % 39) as f32 * 0.023;
-            if region.kind == Biome::Lake
+            if region.kind == Biome::Aegean && hash(x, z, 57) % 4 == 0 {
+                part(
+                    parent,
+                    &art.cone,
+                    &art.evergreen[0],
+                    p + Vec3::Y * 1.32 * scale,
+                    Vec3::new(0.65, 2.64, 0.63) * scale,
+                    Quat::IDENTITY,
+                );
+                mound(
+                    parent,
+                    art,
+                    &art.evergreen[1],
+                    p + Vec3::new(0.07, 1.01 * scale, 0.04),
+                    Vec3::new(0.72, 1.69, 0.61) * scale,
+                );
+            } else if region.kind == Biome::Lake
                 || (region.kind != Biome::Fjord && hash(x, z, 69) % 5 != 0)
             {
                 broadleaf(parent, art, p, scale, region.kind);
@@ -924,6 +982,14 @@ pub fn shrine(parent: &mut ChildSpawnerCommands, art: &Art, frontier: bool) {
 }
 
 pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind: Building) {
+    if let Building::Civic(kind) = kind {
+        settlement_models::draw(parent, art, biome, kind);
+        return;
+    }
+    if biome == Biome::Aegean && kind == Building::Shrine {
+        settlement_models::draw(parent, art, biome, Civic::Oracle);
+        return;
+    }
     if kind == Building::Shrine {
         shrine(parent, art, true);
         return;
@@ -1034,7 +1100,9 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
         return;
     }
 
-    let wall = if kind == Building::Store || biome == Biome::Fjord {
+    let wall = if biome == Biome::Aegean {
+        &art.limestone
+    } else if kind == Building::Store || biome == Biome::Fjord {
         &art.timber
     } else {
         &art.plaster
@@ -1420,6 +1488,55 @@ pub fn bridge(
     fixed: bool,
 ) {
     let start = Tile(column, region.river_at(column)).world();
+    if region.kind == Biome::Aegean {
+        let steps = region.river_span(column) * 3 + 2;
+        for i in 0..steps {
+            if !fixed && (3..steps - 3).contains(&i) {
+                continue;
+            }
+            let z = start.z - CELL / 2. + f32::from(i) * CELL / 3.;
+            let at = Vec3::new(start.x, 0.085, z);
+            block(
+                parent,
+                art,
+                if i % 3 == 0 {
+                    &art.white
+                } else {
+                    &art.limestone
+                },
+                at,
+                Vec3::new(1.59, 0.17, 0.54),
+            );
+            for x in [-0.75, 0.75] {
+                if i % 4 == 0 {
+                    block(
+                        parent,
+                        art,
+                        &art.limestone,
+                        at + Vec3::new(x, 0.16, 0.),
+                        Vec3::new(0.19, 0.62, 0.27),
+                    );
+                    block(
+                        parent,
+                        art,
+                        &art.cobalt,
+                        at + Vec3::new(x, 0.43, 0.),
+                        Vec3::new(0.23, 0.09, 0.30),
+                    );
+                }
+                if fixed {
+                    block(
+                        parent,
+                        art,
+                        &art.limestone,
+                        at + Vec3::new(x, 0.31, 0.),
+                        Vec3::new(0.07, 0.14, 0.56),
+                    );
+                }
+            }
+        }
+        return;
+    }
     let boards = region.river_span(column) * 6 + 3;
     for index in 0..boards {
         if !fixed && (5..boards - 5).contains(&index) {

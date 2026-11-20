@@ -7,7 +7,7 @@ use bevy::{
 
 use crate::{
     art::{self, Art, block, mound, part},
-    game::{Building, Crop, Game, MAX_ROAD_RUN, MAX_WALKERS, Miracle, Quest},
+    game::{Building, Crop, Game, MAX_ROAD_RUN, MAX_WALKERS, Miracle, Quest, Walker},
     play::{CameraRig, Panel, Play, Target, Tool},
     region::{Biome, CELL, Material, Weather},
 };
@@ -113,7 +113,7 @@ pub fn setup(
                 viewport_height: view.height,
             },
             near: 0.01,
-            far: 330.,
+            far: 410.,
             ..OrthographicProjection::default_3d()
         }),
         Transform::from_translation(view.target + Vec3::new(13., 22., 26.))
@@ -333,14 +333,9 @@ fn villager(parent: &mut ChildSpawnerCommands, art: &Art, guard: bool) {
     }
 }
 
-fn spawn_walker(
-    parent: &mut ChildSpawnerCommands,
-    art: &Art,
-    index: usize,
-    hippo: bool,
-    point: Vec3,
-) {
-    let scale = if hippo { 1.46 } else { 0.90 };
+fn spawn_walker(parent: &mut ChildSpawnerCommands, art: &Art, index: usize, walker: &Walker) {
+    let hippo = walker.hippo;
+    let scale = actor_scale(walker);
     parent
         .spawn((
             WalkerView {
@@ -348,7 +343,7 @@ fn spawn_walker(
                 speed: 0.,
                 phase: 0.,
             },
-            Transform::from_translation(point)
+            Transform::from_translation(walker.world())
                 .with_scale(Vec3::splat(scale))
                 .with_rotation(Quat::from_rotation_y(0.44)),
             Visibility::Visible,
@@ -358,7 +353,7 @@ fn spawn_walker(
             if hippo {
                 actor.spawn((SceneRoot(art.hippo_model.clone()), Transform::default()));
             } else {
-                villager(actor, art, false);
+                villager(actor, art, walker.guard);
             }
             for side in [-1., 1.] {
                 let leg_origin = Vec3::new(side * if hippo { 0.18 } else { 0.13 }, 0.40, 0.);
@@ -445,6 +440,18 @@ fn spawn_walker(
         });
 }
 
+fn actor_scale(walker: &Walker) -> f32 {
+    if walker.hippo {
+        1.46
+    } else if walker.guard {
+        1.0
+    } else if walker.childhood > 0. {
+        0.62 + 0.26 * (1. - (walker.childhood / 46.).min(1.))
+    } else {
+        0.90
+    }
+}
+
 pub fn sync_board(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -501,7 +508,13 @@ pub fn sync_board(
                 {
                     parent
                         .spawn((Transform::from_translation(p.world()), Visibility::Visible))
-                        .with_children(|p| art::shrine(p, &art, false));
+                        .with_children(|p| {
+                            if region.kind == Biome::Aegean {
+                                art::building(p, &art, region.kind, Building::Shrine);
+                            } else {
+                                art::shrine(p, &art, false);
+                            }
+                        });
                 }
                 for (index, district) in region.districts.iter().enumerate() {
                     for tile in region.district_houses(index) {
@@ -737,9 +750,9 @@ pub fn sync_board(
     }
     board.buildings = city.buildings.len();
     for (index, walker) in city.walkers.iter().enumerate().skip(board.walkers) {
-        commands.entity(root).with_children(|parent| {
-            spawn_walker(parent, &art, index, walker.hippo, walker.world())
-        });
+        commands
+            .entity(root)
+            .with_children(|parent| spawn_walker(parent, &art, index, walker));
     }
     board.walkers = city.walkers.len();
 }
@@ -842,6 +855,7 @@ pub fn animate(
         }
         let bob = meta.phase.sin().abs() * 0.055 * meta.speed;
         pose.translation = (pose.translation + offset * blend).with_y(bob);
+        pose.scale = Vec3::splat(actor_scale(walker));
         if let Some(state) = motion.get_mut(meta.index) {
             *state = (meta.phase, meta.speed);
         }
@@ -950,7 +964,7 @@ pub fn aim(
         }
         let kind = play.building();
         let enabled = match layer {
-            Blueprint::Roof => kind.size() == 2 && kind != Building::Field,
+            Blueprint::Roof => kind.size() >= 2 && kind != Building::Field,
             Blueprint::Obstruction => !target.legal,
             _ => true,
         };
@@ -979,14 +993,19 @@ pub fn aim(
                 } else if kind == Building::Field {
                     Vec3::new(3.25, 0.18, 3.21)
                 } else {
-                    Vec3::new(2.84, 1.45, 2.64)
+                    let span = f32::from(kind.size()) * CELL;
+                    Vec3::new(span * 0.86, 1.45, span * 0.80)
                 };
                 pose.translation = center + Vec3::Y * size.y * 0.5;
                 pose.scale = size;
             }
             Blueprint::Roof => {
                 pose.translation = center + Vec3::Y * 1.46;
-                pose.scale = Vec3::new(3.0, 1.14, 2.75);
+                pose.scale = Vec3::new(
+                    1.50 * f32::from(kind.size()),
+                    1.14,
+                    1.37 * f32::from(kind.size()),
+                );
                 mesh.0 = if game.region().kind == Biome::Terraces {
                     art.curved_roof.clone()
                 } else {
@@ -1010,11 +1029,17 @@ pub fn aim(
 pub fn weather(
     time: Res<Time>,
     mut ambient: ResMut<AmbientLight>,
+    mut background: ResMut<ClearColor>,
     game: Res<Game>,
     view: Res<CameraRig>,
     mut flakes: Query<(&WeatherParticle, &mut Transform, &mut Visibility)>,
 ) {
     let city = game.city();
+    background.0 = art::rgb(if game.region().kind == Biome::Aegean {
+        0x73b6c8
+    } else {
+        0xc9d1a7
+    });
     let weather = game.region().weather(city.weather_time);
     let ambient_goal = match weather {
         Weather::Snow | Weather::Mist => 745.,

@@ -17,6 +17,7 @@ use bevy::{
 };
 
 use crate::{
+    civic::Civic,
     game::{Building, Game, Miracle},
     hud::{self, HitTest},
     play::{CameraRig, Panel, Play, Tool, UiAction},
@@ -260,7 +261,9 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
                 }
             }
         };
-        if matches!(play.tool, Tool::Hand | Tool::Helpers | Tool::Hippo) {
+        if play.tool == Tool::Hand
+            || (matches!(play.tool, Tool::Helpers | Tool::Hippo) && play.option == 0)
+        {
             for source in &region.sources {
                 consider(source.tile, source.tile.world() + Vec3::Y * 0.35);
             }
@@ -272,10 +275,7 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
                 consider(district.center, district.center.world() + Vec3::Y * 0.55);
             }
             for site in &city.buildings {
-                if matches!(
-                    site.kind,
-                    Building::Store | Building::Granary | Building::Field
-                ) {
+                if city.held.is_none() || city.can_store_at(region, site.tile) {
                     let center = site.kind.center(site.tile);
                     let adjust = if site.kind == Building::Field {
                         0.19
@@ -283,6 +283,13 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
                         1.05
                     };
                     consider(site.tile, center + Vec3::Y * adjust);
+                }
+            }
+        }
+        if play.tool == Tool::Helpers && play.option == 1 {
+            for site in &city.buildings {
+                if site.kind == Building::Civic(Civic::Barracks) {
+                    consider(site.tile, site.kind.center(site.tile) + Vec3::Y * 0.82);
                 }
             }
         }
@@ -576,6 +583,8 @@ pub fn collect(
         (KeyCode::KeyM, UiAction::Panel(Panel::Map)),
         (KeyCode::KeyP, UiAction::Panel(Panel::Progress)),
         (KeyCode::KeyQ, UiAction::Panel(Panel::Quests)),
+        (KeyCode::KeyB, UiAction::Panel(Panel::Catalog)),
+        (KeyCode::KeyT, UiAction::Panel(Panel::Research)),
     ] {
         if keys.just_pressed(key) {
             play.activate(action, &mut game, &mut view, now);
@@ -663,12 +672,17 @@ pub fn collect(
             }
         }
     }
+    let progress_panel = if play.panel == Panel::Closed && play.tool == Tool::Build {
+        Panel::Catalog
+    } else {
+        Panel::Progress
+    };
     for (bit, action) in [
         (EAST, UiAction::Cancel),
         (MENU, UiAction::Panel(Panel::Map)),
         (ROTATE, UiAction::Rotate),
         (GUIDE, UiAction::Guide),
-        (PROGRESS, UiAction::Panel(Panel::Progress)),
+        (PROGRESS, UiAction::Panel(progress_panel)),
     ] {
         if pressed & bit != 0 {
             play.activate(action, &mut game, &mut view, now);
