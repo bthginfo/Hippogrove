@@ -450,9 +450,18 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
             Toast,
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(if layout.compact { 106. } else { 78. }),
-                left: Val::Percent(31.),
-                width: Val::Percent(36.),
+                top: if layout.compact {
+                    Val::Auto
+                } else {
+                    Val::Px(78.)
+                },
+                bottom: if layout.compact {
+                    Val::Px(155.)
+                } else {
+                    Val::Auto
+                },
+                left: Val::Percent(if layout.compact { 28. } else { 31. }),
+                width: Val::Percent(if layout.compact { 34. } else { 36. }),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
                 padding: UiRect::axes(Val::Px(12.), Val::Px(7.)),
