@@ -59,7 +59,9 @@ pub fn main() {
             ..default()
         });
     #[cfg(target_os = "android")]
-    let plugins = plugins.set(android_renderer());
+    let plugins = plugins
+        .set(android_renderer())
+        .add_after::<bevy::render::RenderPlugin>(AndroidMeshPreparation);
     app.add_plugins(plugins)
         .insert_resource(ClearColor(art::rgb(0xc9d1a7)))
         .insert_resource(Time::<Fixed>::from_hz(24.))
@@ -111,6 +113,29 @@ fn android_renderer() -> bevy::render::RenderPlugin {
         }
         .into(),
         ..default()
+    }
+}
+
+#[cfg(target_os = "android")]
+struct AndroidMeshPreparation;
+
+#[cfg(target_os = "android")]
+impl Plugin for AndroidMeshPreparation {
+    fn build(&self, _app: &mut App) {}
+
+    fn finish(&self, app: &mut App) {
+        use bevy::render::{
+            RenderApp,
+            batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport},
+        };
+
+        // Bevy 0.16's GPU mesh layout needs more buffers than the mobile compatibility profile.
+        // Select the same CPU path for both mesh preparation and render phase batching.
+        if let Some(renderer) = app.get_sub_app_mut(RenderApp) {
+            renderer.insert_resource(GpuPreprocessingSupport {
+                max_supported_mode: GpuPreprocessingMode::None,
+            });
+        }
     }
 }
 
