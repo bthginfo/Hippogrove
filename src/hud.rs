@@ -71,7 +71,7 @@ pub(crate) enum Label {
     Capacity,
     AreaCamp(usize),
     AreaSupply(usize, Material),
-    AreaCrew(usize, Material),
+    AreaStatus(usize, Material, bool),
     Subtitle,
 }
 
@@ -96,7 +96,7 @@ struct Layout {
     road_started: bool,
     compact: bool,
     short: bool,
-    map_narrow: bool,
+    narrow_modal: bool,
     safe: [u16; 4],
     catalog: Option<Branch>,
     catalog_page: usize,
@@ -272,6 +272,7 @@ fn text(
                 ..default()
             },
             TextColor(rgb(color)),
+            TextLayout::new_with_justify(JustifyText::Center),
         ))
         .id()
 }
@@ -1045,7 +1046,8 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: 
                 game.city().camps[index],
                 false,
                 ButtonStyle {
-                    icon: (!layout.map_narrow).then(|| material_glyph(region.kind, area.material)),
+                    icon: (!layout.narrow_modal)
+                        .then(|| material_glyph(region.kind, area.material)),
                     ..compact
                 },
             );
@@ -1485,6 +1487,17 @@ fn area_panel(
     let region = game.region();
     let area = &region.areas[index];
     let (selected, active) = layout.area.unwrap();
+    let style = ButtonStyle {
+        compact: layout.narrow_modal,
+        ..default()
+    };
+    let (card_height, icon_size) = if layout.narrow_modal {
+        (103., 42.)
+    } else if layout.short {
+        (117., 52.)
+    } else {
+        (145., 68.)
+    };
     parent
         .spawn(Node {
             justify_content: JustifyContent::SpaceBetween,
@@ -1498,19 +1511,20 @@ fn area_panel(
                 ..default()
             })
             .with_children(|title| {
-                panel_heading(title, hud, &area.name, layout.short);
+                panel_heading(title, hud, &area.name, layout.short || layout.narrow_modal);
                 label(title, hud, Label::AreaCamp(index), 15., DARK);
             });
             head.spawn(row()).with_children(|nav| {
-                button(
+                styled_button(
                     nav,
                     hud,
                     "Zum Lager",
                     UiAction::Focus(area.center),
                     false,
                     false,
+                    style,
                 );
-                button(nav, hud, "Landkarte", UiAction::Cancel, false, false);
+                styled_button(nav, hud, "Landkarte", UiAction::Cancel, false, false, style);
             });
         });
     parent
@@ -1539,7 +1553,7 @@ fn area_panel(
                             align_items: AlignItems::Center,
                             row_gap: Val::Px(2.),
                             padding: UiRect::all(Val::Px(6.)),
-                            min_height: Val::Px(if layout.short { 117. } else { 145. }),
+                            min_height: Val::Px(card_height),
                             border: UiRect::all(Val::Px(2.)),
                             ..default()
                         },
@@ -1549,13 +1563,14 @@ fn area_panel(
                         BorderRadius::all(Val::Px(11.)),
                     ))
                     .with_children(|card| {
-                        glyph(
+                        glyph(card, hud, material_glyph(region.kind, material), icon_size);
+                        text(
                             card,
                             hud,
-                            material_glyph(region.kind, material),
-                            if layout.short { 52. } else { 68. },
+                            region.kind.material(material),
+                            if layout.narrow_modal { 15. } else { 16. },
+                            INK,
                         );
-                        text(card, hud, region.kind.material(material), 16., INK);
                         let supply = text(card, hud, "", 14., DARK);
                         card.commands().entity(supply).insert((
                             Label::AreaSupply(index, material),
@@ -1564,17 +1579,29 @@ fn area_panel(
                     });
             }
         });
-    if active {
-        label(parent, hud, Label::AreaCrew(index, selected), 15., DARK);
+    if active || layout.narrow_modal {
+        label(
+            parent,
+            hud,
+            Label::AreaStatus(index, selected, layout.narrow_modal),
+            if layout.narrow_modal { 14. } else { 15. },
+            DARK,
+        );
     }
-    parent.spawn(row()).with_children(|actions| {
-        button(
+    let buttons = if layout.narrow_modal {
+        column_grid(if active { 4 } else { 2 })
+    } else {
+        row()
+    };
+    parent.spawn(buttons).with_children(|actions| {
+        styled_button(
             actions,
             hud,
             "Zur Quelle",
             UiAction::AreaSource(index, selected),
             false,
             true,
+            style,
         );
         if active {
             for (name, action) in [
@@ -1582,16 +1609,25 @@ fn area_panel(
                 ("Nilpferd senden", Action::AssignArea(index, selected, true)),
                 ("Beenden", Action::CancelArea(index, selected)),
             ] {
-                button(actions, hud, name, UiAction::Do(action), false, false);
+                styled_button(
+                    actions,
+                    hud,
+                    name,
+                    UiAction::Do(action),
+                    false,
+                    false,
+                    style,
+                );
             }
         } else {
-            button(
+            styled_button(
                 actions,
                 hud,
                 "Sammellager bauen",
                 UiAction::Do(Action::Camp(index)),
                 false,
                 false,
+                style,
             );
         }
     });
@@ -1757,7 +1793,7 @@ fn cutscene(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout) {
 fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play, layout: Layout) {
     let region = game.region();
     let city = game.city();
-    let short_map = play.panel == Panel::Map && layout.short;
+    let tight = layout.narrow_modal || (play.panel == Panel::Map && layout.short);
     parent.spawn((
         Node{width:Val::Percent(100.),height:Val::Percent(100.),align_items:AlignItems::Center,
             justify_content:JustifyContent::Center,..default()},
@@ -1766,9 +1802,9 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
         shade.spawn((
             HitArea,
             Node{
-                width:Val::Percent(if layout.map_narrow { 94. } else { 92. }),max_width:Val::Px(720.),flex_direction:FlexDirection::Column,
-                padding:UiRect::all(Val::Px(if short_map { 8. } else if layout.short { 12. } else { 21. })),
-                border:UiRect::all(Val::Px(2.)),row_gap:Val::Px(if short_map { 5. } else if layout.short { 6. } else { 10. }),..default()
+                width:Val::Percent(if layout.narrow_modal { 94. } else { 92. }),max_width:Val::Px(720.),flex_direction:FlexDirection::Column,
+                padding:UiRect::all(Val::Px(if tight { 8. } else if layout.short { 12. } else { 21. })),
+                border:UiRect::all(Val::Px(2.)),row_gap:Val::Px(if tight { 5. } else if layout.short { 6. } else { 10. }),..default()
             },
             BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
@@ -1830,7 +1866,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 Panel::Closed | Panel::Story => {}
             }
             // The same feedback is visible while purchasing a talent or choosing a chapter.
-            if play.panel != Panel::Map {
+            if play.panel != Panel::Map && !layout.narrow_modal {
                 label(box_node,hud,Label::Notice,16.,DARK);
             }
         });
@@ -1882,7 +1918,11 @@ pub fn layout(
         road_started: play.road_anchor.is_some(),
         compact: size.x / scale.0 < 920.,
         short: size.y / scale.0 < 490. || (play.panel == Panel::Map && size.x / scale.0 < 690.),
-        map_narrow: play.panel == Panel::Map && size.x / scale.0 < 550.,
+        narrow_modal: match play.panel {
+            Panel::Map => size.x / scale.0 < 550.,
+            Panel::Area(_) => size.x / scale.0 < 550. || size.y / scale.0 < 320.,
+            _ => false,
+        },
         safe,
         catalog: play.catalog_branch,
         catalog_page: play.catalog_page,
@@ -2010,7 +2050,13 @@ pub fn update(
                     supply.units, supply.stocked, supply.sources
                 )
             }
-            Label::AreaCrew(area, material) => {
+            Label::AreaStatus(_, _, true)
+                if time.elapsed_secs() < play.notice_until && !play.notice.is_empty() =>
+            {
+                play.notice.clone()
+            }
+            Label::AreaStatus(area, _, _) if !city.camps[*area] => String::new(),
+            Label::AreaStatus(area, material, _) => {
                 let (helpers, hippo) = city.area_crew(*area, *material);
                 let mut activity = match (helpers, hippo) {
                     (0, false) => "Kein aktiver Auftrag für diesen Rohstoff".into(),
