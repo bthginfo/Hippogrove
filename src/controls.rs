@@ -1,0 +1,595 @@
+use std::collections::BTreeMap;
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+use bevy::input::gamepad::{GamepadAxis, GamepadButton};
+use bevy::{
+    input::{
+        ButtonState,
+        gamepad::Gamepad,
+        mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel},
+        touch::{TouchInput, TouchPhase},
+    },
+    prelude::*,
+    window::{AppLifecycle, PrimaryWindow, WindowFocused},
+};
+
+use crate::{
+    game::{Building, Game, Miracle},
+    hud::{self, HitTest},
+    play::{CameraRig, Panel, Play, Tool, UiAction},
+    region::{CELL, Tile},
+    view::WorldCamera,
+};
+
+const SOUTH: u32 = 1;
+const EAST: u32 = 2;
+const LEFT: u32 = 4;
+const RIGHT: u32 = 8;
+const UP: u32 = 16;
+const DOWN: u32 = 32;
+const MENU: u32 = 64;
+const ROTATE: u32 = 128;
+const GUIDE: u32 = 256;
+const PROGRESS: u32 = 512;
+
+#[derive(Clone, Copy, Default)]
+struct Pad {
+    left: Vec2,
+    right: Vec2,
+    zoom: f32,
+    buttons: u32,
+    connected: bool,
+}
+
+#[cfg(any(target_os = "ios", target_os = "android"))]
+static MOBILE_PAD: std::sync::Mutex<Pad> = std::sync::Mutex::new(Pad {
+    left: Vec2::ZERO,
+    right: Vec2::ZERO,
+    zoom: 0.,
+    buttons: 0,
+    connected: false,
+});
+
+#[cfg(any(target_os = "ios", target_os = "android"))]
+fn native_pad(
+    left_x: f32,
+    left_y: f32,
+    right_x: f32,
+    right_y: f32,
+    zoom: f32,
+    buttons: u32,
+    connected: bool,
+) {
+    let mut state = MOBILE_PAD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *state = if connected {
+        Pad {
+            left: Vec2::new(left_x, left_y),
+            right: Vec2::new(right_x, right_y),
+            zoom,
+            buttons,
+            connected,
+        }
+    } else {
+        Pad::default()
+    };
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_game_hippogrove_GameActivity_publishController(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+    lx: f32,
+    ly: f32,
+    rx: f32,
+    ry: f32,
+    zoom: f32,
+    buttons: i32,
+    connected: u8,
+) {
+    native_pad(lx, ly, rx, ry, zoom, buttons as u32, connected != 0);
+}
+
+#[cfg(target_os = "ios")]
+#[unsafe(no_mangle)]
+pub extern "C" fn hippogrove_controller_state(
+    lx: f32,
+    ly: f32,
+    rx: f32,
+    ry: f32,
+    zoom: f32,
+    buttons: u32,
+    connected: u32,
+) {
+    native_pad(lx, ly, rx, ry, zoom, buttons, connected != 0);
+}
+
+#[cfg(target_os = "ios")]
+#[link(name = "HippogroveController", kind = "static")]
+unsafe extern "C" {
+    fn hippogrove_start_controllers();
+}
+
+#[cfg(target_os = "ios")]
+#[link(name = "GameController", kind = "framework")]
+unsafe extern "C" {}
+
+#[cfg(target_os = "ios")]
+pub fn setup_native() {
+    // The shim installs Game Controller callbacks on the Apple main thread.
+    unsafe { hippogrove_start_controllers() };
+}
+
+fn read_pad(gamepads: &Query<&Gamepad>) -> Pad {
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = gamepads;
+        *MOBILE_PAD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        let Some(pad) = gamepads.iter().next() else {
+            return Pad::default();
+        };
+        let pressed = |button, bit| if pad.pressed(button) { bit } else { 0 };
+        let axis = |axis| pad.get(axis).unwrap_or(0.);
+        Pad {
+            left: Vec2::new(axis(GamepadAxis::LeftStickX), axis(GamepadAxis::LeftStickY)),
+            right: Vec2::new(
+                axis(GamepadAxis::RightStickX),
+                axis(GamepadAxis::RightStickY),
+            ),
+            zoom: pad.get(GamepadButton::RightTrigger2).unwrap_or(0.)
+                - pad.get(GamepadButton::LeftTrigger2).unwrap_or(0.),
+            buttons: pressed(GamepadButton::South, SOUTH)
+                | pressed(GamepadButton::East, EAST)
+                | pressed(GamepadButton::DPadLeft, LEFT)
+                | pressed(GamepadButton::DPadRight, RIGHT)
+                | pressed(GamepadButton::DPadUp, UP)
+                | pressed(GamepadButton::DPadDown, DOWN)
+                | pressed(GamepadButton::Start, MENU)
+                | pressed(GamepadButton::West, ROTATE)
+                | pressed(GamepadButton::RightTrigger, GUIDE)
+                | pressed(GamepadButton::LeftTrigger, PROGRESS),
+            connected: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Drag {
+    start: Vec2,
+    last: Vec2,
+    over_ui: bool,
+    dragging: bool,
+}
+
+impl Drag {
+    fn new(position: Vec2, over_ui: bool) -> Self {
+        Self {
+            start: position,
+            last: position,
+            over_ui,
+            dragging: false,
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct Controls {
+    fingers: BTreeMap<u64, Vec2>,
+    touch: Option<(u64, Drag)>,
+    mouse: Option<Drag>,
+    pad_buttons: u32,
+    resume_pad: bool,
+}
+
+fn unproject(camera: &Camera, pose: &GlobalTransform, screen: Vec2) -> Option<Vec3> {
+    let ray = camera.viewport_to_world(pose, screen).ok()?;
+    let distance = -ray.origin.y / ray.direction.y;
+    (distance.is_finite() && distance >= 0.).then(|| ray.get_point(distance))
+}
+
+fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform, screen: Vec2) {
+    let Some(point) = unproject(camera, pose, screen) else {
+        return;
+    };
+    let mut tile = Tile::from_world(point);
+    let region = game.region();
+    let city = game.city();
+    if play.tool == Tool::Build {
+        if play.building() == Building::Shrine && tile.within(region.frontier, 1) {
+            tile = region.frontier;
+        }
+    } else {
+        let world_scale = camera
+            .world_to_viewport(pose, point + Vec3::X * CELL)
+            .map_or(19., |other| other.distance(screen));
+        let mut best = (world_scale * 0.58).clamp(9., 30.);
+        let mut consider = |candidate: Tile, p: Vec3| {
+            if let Ok(projected) = camera.world_to_viewport(pose, p) {
+                let distance = projected.distance(screen);
+                if distance < best {
+                    best = distance;
+                    tile = candidate;
+                }
+            }
+        };
+        if matches!(play.tool, Tool::Hand | Tool::Helpers | Tool::Hippo) {
+            for source in &region.sources {
+                consider(source.tile, source.tile.world() + Vec3::Y * 0.35);
+            }
+        }
+        if play.tool == Tool::Hand {
+            consider(region.depot, region.depot.world() + Vec3::Y * 0.21);
+            consider(region.bridge(), region.bridge().world() + Vec3::Y * 0.23);
+            for site in &city.buildings {
+                if matches!(
+                    site.kind,
+                    Building::Store | Building::Granary | Building::Field
+                ) {
+                    let center = site.kind.center(site.tile);
+                    let adjust = if site.kind == Building::Field {
+                        0.19
+                    } else {
+                        1.05
+                    };
+                    consider(site.tile, center + Vec3::Y * adjust);
+                }
+            }
+        }
+        if play.tool == Tool::Miracles && play.miracle() == Miracle::Wind {
+            for (&tile, &spirit) in region.guards.iter().zip(&city.guards) {
+                if spirit > 0 {
+                    consider(tile, tile.world() + Vec3::Y * 0.65);
+                }
+            }
+        }
+    }
+    if tile.inside_map() {
+        play.aim = tile;
+    }
+}
+
+fn drag(
+    gesture: &mut Drag,
+    position: Vec2,
+    play: &mut Play,
+    game: &Game,
+    view: &mut CameraRig,
+    camera: &Camera,
+    pose: &GlobalTransform,
+    height: f32,
+) {
+    let delta = position - gesture.last;
+    if !gesture.dragging && gesture.start.distance(position) > 9. {
+        gesture.dragging = true;
+    }
+    if gesture.dragging && !gesture.over_ui && play.panel == Panel::Closed {
+        if play.tool.aims_with_drag() {
+            select(play, game, camera, pose, position);
+        } else {
+            let scale = view.height / height.max(120.);
+            view.pan(-delta.x * scale, delta.y * scale);
+        }
+    }
+    gesture.last = position;
+}
+
+fn release(
+    gesture: Drag,
+    position: Vec2,
+    play: &mut Play,
+    game: &mut Game,
+    view: &mut CameraRig,
+    camera: &Camera,
+    pose: &GlobalTransform,
+    areas: &HitTest,
+    scale: f32,
+    now: f32,
+) {
+    let (over_ui, action) = hud::hit(areas, position, scale);
+    if !gesture.dragging && gesture.start.distance(position) <= 15. {
+        if gesture.over_ui {
+            if let Some(action) = action {
+                play.activate(action, game, view, now);
+            }
+        } else if !over_ui && play.panel == Panel::Closed {
+            select(play, game, camera, pose, position);
+        }
+    }
+}
+
+fn deadzone(stick: Vec2) -> Vec2 {
+    let distance = stick.length().min(1.);
+    if distance < 0.17 {
+        Vec2::ZERO
+    } else {
+        stick.normalize_or_zero() * ((distance - 0.17) / 0.83).powf(1.45)
+    }
+}
+
+pub fn collect(
+    mut touches: EventReader<TouchInput>,
+    mut mouse: EventReader<MouseButtonInput>,
+    mut wheel: EventReader<MouseWheel>,
+    mut focus: EventReader<WindowFocused>,
+    mut lifecycle: EventReader<AppLifecycle>,
+    window: Single<(Entity, &Window), With<PrimaryWindow>>,
+    camera: Single<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    areas: HitTest,
+    gamepads: Query<&Gamepad>,
+    time: Res<Time>,
+    mut controls: ResMut<Controls>,
+    mut play: ResMut<Play>,
+    mut game: ResMut<Game>,
+    mut view: ResMut<CameraRig>,
+) {
+    let (entity, window) = *window;
+    let (camera, pose) = *camera;
+    let now = time.elapsed_secs();
+    let dt = time.delta_secs().min(0.08);
+    let scale = window.scale_factor();
+    let size = Vec2::new(window.width(), window.height());
+    for event in lifecycle.read() {
+        match event {
+            AppLifecycle::WillSuspend | AppLifecycle::Suspended => play.paused = true,
+            AppLifecycle::Running => play.paused = false,
+            _ => {}
+        }
+    }
+    for event in focus.read().filter(|event| event.window == entity) {
+        play.paused = !event.focused;
+    }
+    if play.paused {
+        controls.fingers.clear();
+        controls.touch = None;
+        controls.mouse = None;
+        controls.resume_pad = true;
+        touches.clear();
+        mouse.clear();
+        wheel.clear();
+        return;
+    }
+
+    let mut touched = false;
+    for event in touches.read().filter(|event| event.window == entity) {
+        touched = true;
+        play.gamepad = false;
+        play.pointer = Some(event.position);
+        match event.phase {
+            TouchPhase::Started => {
+                controls.fingers.insert(event.id, event.position);
+                if controls.fingers.len() == 1 {
+                    controls.touch = Some((
+                        event.id,
+                        Drag::new(event.position, hud::hit(&areas, event.position, scale).0),
+                    ));
+                } else {
+                    controls.touch = None;
+                }
+            }
+            TouchPhase::Moved => {
+                let span = |points: &BTreeMap<u64, Vec2>| {
+                    let mut pair = points.values();
+                    Some(pair.next()?.distance(*pair.next()?).max(12.))
+                };
+                let before = span(&controls.fingers);
+                if let Some(pos) = controls.fingers.get_mut(&event.id) {
+                    *pos = event.position;
+                }
+                if let (Some(before), Some(after)) = (before, span(&controls.fingers)) {
+                    if play.panel == Panel::Closed {
+                        view.zoom((after / before).ln());
+                    }
+                } else if let Some((finger, gesture)) = &mut controls.touch {
+                    if *finger == event.id {
+                        drag(
+                            gesture,
+                            event.position,
+                            &mut play,
+                            &game,
+                            &mut view,
+                            camera,
+                            pose,
+                            size.y,
+                        );
+                    }
+                }
+            }
+            TouchPhase::Ended | TouchPhase::Canceled => {
+                controls.fingers.remove(&event.id);
+                if controls
+                    .touch
+                    .as_ref()
+                    .is_some_and(|(id, _)| *id == event.id)
+                {
+                    let (_, gesture) = controls.touch.take().unwrap();
+                    if event.phase == TouchPhase::Ended {
+                        release(
+                            gesture,
+                            event.position,
+                            &mut play,
+                            &mut game,
+                            &mut view,
+                            camera,
+                            pose,
+                            &areas,
+                            scale,
+                            now,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    for event in mouse
+        .read()
+        .filter(|event| event.window == entity && event.button == MouseButton::Left)
+    {
+        if touched || !controls.fingers.is_empty() {
+            continue;
+        }
+        play.gamepad = false;
+        if let Some(cursor) = window.cursor_position() {
+            play.pointer = Some(cursor);
+            if event.state == ButtonState::Pressed {
+                controls.mouse = Some(Drag::new(cursor, hud::hit(&areas, cursor, scale).0));
+            } else if let Some(gesture) = controls.mouse.take() {
+                release(
+                    gesture, cursor, &mut play, &mut game, &mut view, camera, pose, &areas, scale,
+                    now,
+                );
+            }
+        } else {
+            controls.mouse = None;
+        }
+    }
+    if let (Some(gesture), Some(cursor)) = (&mut controls.mouse, window.cursor_position()) {
+        drag(
+            gesture, cursor, &mut play, &game, &mut view, camera, pose, size.y,
+        );
+    }
+    for scroll in wheel.read().filter(|scroll| scroll.window == entity) {
+        if play.panel == Panel::Closed {
+            view.zoom(
+                scroll.y
+                    * match scroll.unit {
+                        MouseScrollUnit::Line => 0.105,
+                        MouseScrollUnit::Pixel => 0.002,
+                    },
+            );
+        }
+    }
+    let keyboard_axis =
+        |positive, negative| i32::from(keys.pressed(positive)) - i32::from(keys.pressed(negative));
+    if play.panel == Panel::Closed {
+        view.pan(
+            keyboard_axis(KeyCode::KeyD, KeyCode::KeyA) as f32 * dt * 12.,
+            keyboard_axis(KeyCode::KeyW, KeyCode::KeyS) as f32 * dt * 12.,
+        );
+    }
+    for (key, tool) in [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+    ]
+    .into_iter()
+    .zip(Tool::ALL)
+    {
+        if keys.just_pressed(key) && play.panel == Panel::Closed {
+            play.tool(tool);
+        }
+    }
+    for (key, action) in [
+        (KeyCode::KeyE, UiAction::Confirm),
+        (KeyCode::KeyR, UiAction::Rotate),
+        (KeyCode::KeyG, UiAction::Guide),
+        (KeyCode::Escape, UiAction::Cancel),
+        (KeyCode::Tab, UiAction::Panel(Panel::Journey)),
+        (KeyCode::KeyP, UiAction::Panel(Panel::Progress)),
+        (KeyCode::KeyQ, UiAction::Panel(Panel::Quests)),
+    ] {
+        if keys.just_pressed(key) {
+            play.activate(action, &mut game, &mut view, now);
+        }
+    }
+
+    let pad = read_pad(&gamepads);
+    let pressed = if controls.resume_pad {
+        0
+    } else {
+        pad.buttons & !controls.pad_buttons
+    };
+    controls.resume_pad = false;
+    controls.pad_buttons = pad.buttons;
+    if !pad.connected {
+        play.gamepad = false;
+    }
+    if !pad.connected || touched || !controls.fingers.is_empty() {
+        return;
+    }
+    let left = deadzone(pad.left);
+    let right = deadzone(pad.right);
+    if pressed != 0 || left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13 {
+        if !play.gamepad {
+            play.pointer = camera
+                .world_to_viewport(pose, play.aim.world())
+                .ok()
+                .or(Some(size * 0.5));
+            play.gamepad = true;
+        }
+    }
+    if !play.gamepad {
+        return;
+    }
+    if play.panel == Panel::Closed {
+        view.pan(right.x * dt * 16., right.y * dt * 16.);
+        if pad.zoom.abs() > 0.13 {
+            view.zoom(pad.zoom * dt * 1.20);
+        }
+    }
+    let mut cursor = play.pointer.unwrap_or(size * 0.5);
+    let horizontal = i32::from(pressed & RIGHT != 0) - i32::from(pressed & LEFT != 0);
+    let vertical = i32::from(pressed & DOWN != 0) - i32::from(pressed & UP != 0);
+    if play.panel == Panel::Closed {
+        if horizontal != 0 {
+            let i = (play.tool as i32 + horizontal).rem_euclid(Tool::ALL.len() as i32);
+            play.tool(Tool::ALL[i as usize]);
+        }
+        if vertical != 0 {
+            play.option =
+                (play.option as i32 + vertical).rem_euclid(play.tool.choices() as i32) as usize;
+        }
+    } else if horizontal != 0 || vertical != 0 {
+        let mut buttons: Vec<_> = areas
+            .iter()
+            .filter_map(|(button, node, pose, visible)| {
+                (button.is_some() && visible.get() && !node.is_empty())
+                    .then_some((node.stack_index(), pose.translation().truncate() / scale))
+            })
+            .collect();
+        buttons.sort_by_key(|(order, _)| *order);
+        if !buttons.is_empty() {
+            let current = buttons
+                .iter()
+                .position(|(_, position)| position.distance(cursor) < 8.);
+            let direction = horizontal + vertical;
+            let next = current.map_or(0, |index| {
+                (index as i32 + direction.signum()).rem_euclid(buttons.len() as i32) as usize
+            });
+            cursor = buttons[next].1;
+        }
+    }
+    cursor = (cursor + Vec2::new(left.x, -left.y) * size.y * 0.83 * dt).clamp(Vec2::ZERO, size);
+    play.pointer = Some(cursor);
+    let (over_ui, hit) = hud::hit(&areas, cursor, scale);
+    if play.panel == Panel::Closed
+        && !over_ui
+        && (left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13)
+    {
+        select(&mut play, &game, camera, pose, cursor);
+    }
+    if pressed & SOUTH != 0 {
+        play.activate(hit.unwrap_or(UiAction::Confirm), &mut game, &mut view, now);
+    }
+    for (bit, action) in [
+        (EAST, UiAction::Cancel),
+        (MENU, UiAction::Panel(Panel::Journey)),
+        (ROTATE, UiAction::Rotate),
+        (GUIDE, UiAction::Guide),
+        (PROGRESS, UiAction::Panel(Panel::Progress)),
+    ] {
+        if pressed & bit != 0 {
+            play.activate(action, &mut game, &mut view, now);
+        }
+    }
+}

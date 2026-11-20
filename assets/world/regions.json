@@ -1,0 +1,74 @@
+[
+  {
+    "name": "Weidental", "kind": "Valley",
+    "subtitle": "Das erste Gebet",
+    "lore": "Die Weiden am Bach hängen tief. Das Dorf bittet um Regen, während der Weiler am anderen Ufer den morschen Übergang bewacht.",
+    "rival": "Weiler am Mühlbach", "crossing": "Holzbrücke",
+    "request": "Die ersten Körbe für den Weiler",
+    "gift": ["Food", 7], "rebuild": [7, 4, 0], "renown": 18, "faith": 13,
+    "start": [17, 18], "depot": [15, 19], "frontier": [18, 14],
+    "rival_shrine": [17, 6], "cross_x": 16, "river": 10, "water_width": 3,
+    "initial": [12, 6, 4], "guards": [[16, 9], [18, 9], [20, 8]],
+    "sources": [
+      {"tile":[12,18],"material":"Wood","stock":46}, {"tile":[22,17],"material":"Wood","stock":52},
+      {"tile":[19,21],"material":"Stone","stock":42}, {"tile":[13,22],"material":"Stone","stock":40},
+      {"tile":[22,20],"material":"Food","stock":28}, {"tile":[11,20],"material":"Food","stock":27},
+      {"tile":[11,15],"material":"Wood","stock":48}, {"tile":[23,15],"material":"Stone","stock":36},
+      {"tile":[14,7],"material":"Wood","stock":64}, {"tile":[22,6],"material":"Stone","stock":66}
+    ]
+  },
+  {
+    "name": "Kiefernbucht", "kind": "Fjord",
+    "subtitle": "Vorräte vor dem Frost",
+    "lore": "Dunkle Kiefern säumen den Fjord. Die Leute am alten Anleger teilen ihr Feuer erst, wenn der Vorrat für die kalten Nächte reicht.",
+    "rival": "Anleger vom Frostkamm", "crossing": "Fjordanleger",
+    "request": "Brennholz für den Frost",
+    "gift": ["Wood", 16], "rebuild": [8, 6, 0], "renown": 22, "faith": 15,
+    "start": [12, 19], "depot": [10, 19], "frontier": [13, 15],
+    "rival_shrine": [13, 7], "cross_x": 12, "river": 10, "water_width": 4,
+    "initial": [12, 8, 5], "guards": [[12, 9], [14, 9], [16, 9]],
+    "sources": [
+      {"tile":[7,18],"material":"Wood","stock":44}, {"tile":[17,18],"material":"Wood","stock":58},
+      {"tile":[16,21],"material":"Stone","stock":52}, {"tile":[8,22],"material":"Stone","stock":59},
+      {"tile":[13,23],"material":"Food","stock":24}, {"tile":[18,22],"material":"Food","stock":26},
+      {"tile":[8,15],"material":"Wood","stock":64}, {"tile":[17,15],"material":"Stone","stock":51},
+      {"tile":[8,7],"material":"Wood","stock":64}, {"tile":[16,6],"material":"Stone","stock":66}
+    ]
+  },
+  {
+    "name": "Reisterrassen", "kind": "Terraces",
+    "subtitle": "Wasser für beide Ufer",
+    "lore": "Oben am Wehr läuft das Wasser zuerst in die eigenen Terrassen. Ein gemeinsamer Kanal könnte die Felder an beiden Ufern retten.",
+    "rival": "Hof am oberen Wehr", "crossing": "Wehrsteg",
+    "request": "Stein für die gemeinsame Rinne",
+    "gift": ["Stone", 13], "rebuild": [6, 9, 0], "renown": 22, "faith": 17,
+    "start": [21, 18], "depot": [20, 20], "frontier": [23, 14],
+    "rival_shrine": [22, 6], "cross_x": 21, "river": 10, "water_width": 3,
+    "initial": [14, 5, 5], "guards": [[21, 9], [23, 9], [25, 8], [19, 8]],
+    "sources": [
+      {"tile":[16,18],"material":"Wood","stock":48}, {"tile":[25,17],"material":"Wood","stock":52},
+      {"tile":[19,23],"material":"Stone","stock":54}, {"tile":[26,20],"material":"Stone","stock":46},
+      {"tile":[23,22],"material":"Food","stock":39}, {"tile":[17,21],"material":"Food","stock":33},
+      {"tile":[17,15],"material":"Wood","stock":44}, {"tile":[27,16],"material":"Stone","stock":41},
+      {"tile":[18,7],"material":"Wood","stock":55}, {"tile":[24,6],"material":"Stone","stock":66}
+    ]
+  },
+  {
+    "name": "Papyrusufer", "kind": "Lake",
+    "subtitle": "Die Spur des Wassers",
+    "lore": "In der Trockenzeit rückt der See vom Schilf ab. Das Dorf am anderen Ufer hütet seine Vorräte. Eine gemeinsame Reserve schafft Vertrauen.",
+    "rival": "Dorf der Schirmbäume", "crossing": "Schilfsteg",
+    "request": "Nahrungsreserve für die Trockenzeit",
+    "gift": ["Food", 15], "rebuild": [11, 6, 0], "renown": 24, "faith": 18,
+    "start": [16, 19], "depot": [14, 20], "frontier": [17, 15],
+    "rival_shrine": [16, 7], "cross_x": 15, "river": 11, "water_width": 3,
+    "initial": [14, 7, 5], "guards": [[15, 10], [17, 10], [19, 9], [13, 9]],
+    "sources": [
+      {"tile":[10,19],"material":"Wood","stock":45}, {"tile":[21,18],"material":"Wood","stock":55},
+      {"tile":[12,23],"material":"Stone","stock":54}, {"tile":[20,22],"material":"Stone","stock":46},
+      {"tile":[18,23],"material":"Food","stock":42}, {"tile":[10,21],"material":"Food","stock":29},
+      {"tile":[11,16],"material":"Wood","stock":50}, {"tile":[22,16],"material":"Stone","stock":44},
+      {"tile":[12,8],"material":"Wood","stock":60}, {"tile":[19,7],"material":"Stone","stock":62}
+    ]
+  }
+]

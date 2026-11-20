@@ -1,0 +1,7 @@
+<resources>
+    <style name="Hippogrove" parent="android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">#9DA65C</item>
+        <item name="android:colorAccent">#F5D288</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

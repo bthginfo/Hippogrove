@@ -11,6 +11,13 @@
 
 Grundlage sind die Abschnitte zu Interaktion, Einfluss, Kreatur, Stadtbau, Migration und Wundern in den Originalhandbüchern. [Black & White, deutsches Handbuch](https://www.mogelpower.de/manuals/Black_and_White_Handbuch.pdf) · [Black & White 2, englisches Handbuch](https://www.mogelpower.de/manuals/Black%26White_2_Handbuch_Englisch.pdf)
 
+## Weitere Spielreferenzen
+
+- Godus zeigt, wie direkt ein Finger mit einer 3D-Landschaft interagieren kann. Die Wolkenpfote sitzt im Raum und zeigt ihr Ziel auf dem Boden, während du um sie herum schwenkst und zoomst. [Godus von 22cans](https://apps.apple.com/us/app/godus/id815181808)
+- In The Universim arbeiten Bewohner selbständig und reagieren auf ihre Bedürfnisse. In Hippogrove laufen Gläubige ihre Sammelaufträge eigenständig ab, und laufende Versorgung wirkt sich auf die Stadt aus. [The Universim von Crytivo](https://store.steampowered.com/app/352720/The_Universim/)
+- From Dust verbindet Wasser, Wege und die Sicherheit eines Dorfes. Hippogrove macht Regen über das Feldwachstum und reparierte Übergänge über neue Fußwege spielbar. [From Dust von Ubisoft](https://www.ubisoft.com/en-gb/games/from-dust)
+- ISLANDERS regt dazu an, Platzierung und Fortschritt direkt am Bauplatz lesbar zu machen. Die Bauvorschau zeigt den belegten Raum und die Schaltfläche erklärt ungültige Ziele. [ISLANDERS von GrizzlyGames](https://store.steampowered.com/app/1046030/ISLANDERS/)
+
 ## Die Rolle als Nilpferdgott
 
 Das letzte Gebet eines kleinen Flussdorfs weckt einen jungen Nilpferdgott. Anfangs zeigt er sich als kleine Wolke mit einer Nilpferdpfote. Mit ihr hebt er Holz auf, platziert neue Gebäude und wirkt Wunder. Auf der Erde begleitet ihn ein rundes, auf zwei Beinen laufendes Nilpferd, das lernt, welche Arbeit seiner Siedlung hilft. In den folgenden Kapiteln führen alte Schreine zu weiteren Gemeinden, deren Flüsse und Vorräte von rivalisierenden Mächten beansprucht werden.
@@ -59,6 +66,8 @@ Gott und Kreatur nehmen ihre Freischaltungen ins nächste Kapitel mit. Der Ausba
 
 Die Regionen sind fiktiv. Der Name, das sichtbare Wahrzeichen, die Bauformen, die Bitte und die Rohstoffverteilung ändern sich mit dem Kapitel. Der erste Durchgang beginnt im Weidental. Erfolgreich abgeschlossene Kapitel und ihre Siedlungen bleiben auf der Karte anwählbar.
 
+[Weidental](docs/weidental-referenz.png) · [Kiefernbucht](docs/kiefernbucht-referenz.png) · [Reisterrassen](docs/reisterrassen-referenz.png) · [Papyrusufer](docs/papyrusufer-referenz.png)
+
 ## Steuerung auf Handy und Tablet
 
 | Handlung | Touch | Controller |
@@ -82,6 +91,13 @@ Der Bodenring zeigt den tatsächlichen Trefferpunkt. Die Wolke sitzt versetzt, d
 3. Touch, Maus und Controller verwenden den gleichen Auswahlpunkt und die gleichen Aktionen. Antippen wählt, Bestätigen führt aus. Ziehen über freien Boden schwenkt die Kamera. Im Bau- oder Wundermodus verschiebt Ziehen das Ziel. Zweifinger-Zoom bricht die Geste ab, die bei einem einzelnen Finger zur Auswahl führen würde. Controller-Sticks und Menütasten steuern auch Fortschritts- und Kapitelansicht.
 4. Der Spielstand hält Siedlungen, drei Fortschritte, Questphase, offene Transporte und das in der Pfote gehaltene Bündel fest. Stabile Kennungen in den Leveldaten verbinden die gespeicherten Zustände mit Rohstoffquellen und Gebäuden. Fortsetzen stellt die laufende Karte wieder her.
 5. Der erste Stand verwendet wie Waldwinkel Bevy 0.16.1. Android lädt die Rust-Bibliothek über eine NativeActivity. Apple nutzt einen Landschafts-Build mit Game Controller. Die beiden mobilen Eingabeadapter liefern die Werte in dieselbe Eingabeschicht, die auf Desktop mit Bevy-Gamepads arbeitet. Die Paketierung bleibt lokal nachvollziehbar.
+
+### Über Find Skills geprüfte Arbeitsweisen
+
+- **Bevy ECS** empfiehlt den Abgleich mit der gepinnten Engine-Version und eine klare Systemreihenfolge. Hippogrove lässt die Spiellogik mit festem Zeitschritt laufen und leitet Modelle und Oberfläche aus dem Spielzustand ab. [bevy-ecs](https://skills.sh/gamedev-skills/awesome-gamedev-agent-skills/bevy-ecs)
+- **Bevy Quest, Character Movement und Ability System** liefern Muster für einmalige Belohnungen, getrennte Bewegungsabsichten und die Prüfung von Wunderkosten vor der Ausführung. Hippogrove nutzt diese Muster mit den APIs von Bevy 0.16.1. [Quest-System](https://skills.sh/thedivergentai/game-design-agentic-skills/bevy-quest-system) · [Bewegung](https://skills.sh/thedivergentai/game-design-agentic-skills/bevy-character-movement) · [Fähigkeiten](https://skills.sh/thedivergentai/game-design-agentic-skills/bevy-ability-system)
+- **Blender Modeling, Animation und Export** geben Orientierung für sich überlappende Modellteile, Gelenkpunkte und den GLB-Export. Das Nilpferd hat eine Blender-Quelldatei und bewegliche Arme und Beine in Bevy. Bei der Laufprüfung zählen Blickrichtung, Bodenkontakt und die Lage des Bündels. [Modeling](https://skills.sh/roble3/cc-blender-skill/blender-modeling) · [Animation](https://skills.sh/roble3/cc-blender-skill/blender-animation) · [Export](https://skills.sh/roble3/cc-blender-skill/blender-export) · [Motion State Inspection](https://skills.sh/affaan-m/ecc/blender-motion-state-inspection)
+- **Blender Weather FX** empfiehlt sichtbare Wetterebenen und eine Prüfung im Zielformat. Die Kiefernbucht zeigt Schneeflächen und fallende Flocken. Regen zeichnet Tropfen und verändert Licht und Wachstum im Spiel. [Weather FX](https://skills.sh/el4cteo/blender-skills/blender-weather-fx)
 
 ## Reihenfolge der Umsetzung
 

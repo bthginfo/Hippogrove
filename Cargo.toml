@@ -1,0 +1,32 @@
+[package]
+name = "hippogrove"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[features]
+default = ["desktop-gamepad"]
+desktop-gamepad = ["bevy/bevy_gilrs"]
+
+[dependencies]
+bevy = { version = "=0.16.1", default-features = false, features = [
+    "std", "async_executor", "multi_threaded", "bevy_log",
+    "android-native-activity", "bevy_asset", "bevy_color", "bevy_render",
+    "bevy_core_pipeline", "bevy_gltf", "bevy_pbr", "bevy_scene", "bevy_sprite", "bevy_text",
+    "bevy_ui", "bevy_window", "bevy_winit", "default_font", "png", "x11",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.dev]
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 2
+strip = "debuginfo"

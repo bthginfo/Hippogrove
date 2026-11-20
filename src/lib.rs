@@ -1,0 +1,150 @@
+mod art;
+mod controls;
+mod game;
+mod hud;
+mod play;
+mod region;
+mod save;
+mod view;
+
+use bevy::{
+    asset::{AssetMetaCheck, io::embedded::EmbeddedAssetRegistry},
+    prelude::*,
+    render::view::screenshot::{Screenshot, save_to_disk},
+    window::PresentMode,
+};
+
+use crate::{
+    game::Game,
+    play::{CameraRig, Panel, Play, Target},
+    region::Region,
+    save::SaveFile,
+};
+
+#[bevy_main]
+pub fn main() {
+    #[cfg(target_os = "ios")]
+    {
+        if let Some(bundle) = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(ToOwned::to_owned))
+        {
+            let _ = std::env::set_current_dir(bundle);
+        }
+        controls::setup_native();
+    }
+    let file = SaveFile::for_device();
+    let regions = Region::campaign();
+    let saved = file.load();
+    if saved
+        .as_ref()
+        .is_none_or(|campaign| !campaign.valid(&regions))
+    {
+        file.preserve_unreadable();
+    }
+    let game = Game::new(regions, saved);
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(AssetPlugin {
+                meta_check: AssetMetaCheck::Never,
+                ..default()
+            })
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Hippogrove".into(),
+                    resolution: (1360_f32, 765_f32).into(),
+                    present_mode: PresentMode::AutoVsync,
+                    ..default()
+                }),
+                ..default()
+            }),
+    )
+    .insert_resource(ClearColor(art::rgb(0xc9d1a7)))
+    .insert_resource(Time::<Fixed>::from_hz(24.))
+    .insert_resource(Play::new(&game))
+    .insert_resource(CameraRig::new(&game))
+    .insert_resource(game)
+    .insert_resource(file)
+    .init_resource::<controls::Controls>()
+    .init_resource::<hud::Hud>()
+    .init_resource::<Target>()
+    .init_resource::<view::Board>()
+    .add_systems(Startup, (view::setup, hud::setup))
+    .add_systems(FixedUpdate, simulate)
+    .add_systems(
+        Update,
+        (
+            controls::collect,
+            view::move_camera,
+            refresh_target,
+            view::sync_board,
+            (
+                view::props,
+                view::animate,
+                view::aim,
+                view::weather,
+                view::magic,
+            ),
+            hud::layout,
+            hud::update,
+            save::checkpoint,
+            screenshot,
+        )
+            .chain(),
+    );
+    embed_assets(&app);
+    app.run();
+}
+
+fn embed_assets(app: &App) {
+    use std::path::Path;
+
+    let assets = app.world().resource::<EmbeddedAssetRegistry>();
+    let files: [(&str, &[u8]); 4] = [
+        (
+            "fonts/DMSans-Bold.ttf",
+            include_bytes!("../assets/fonts/DMSans-Bold.ttf"),
+        ),
+        (
+            "fonts/DMSans-Medium.ttf",
+            include_bytes!("../assets/fonts/DMSans-Medium.ttf"),
+        ),
+        (
+            "fonts/DMSerifText-Regular.ttf",
+            include_bytes!("../assets/fonts/DMSerifText-Regular.ttf"),
+        ),
+        (
+            "models/hippo.glb",
+            include_bytes!("../assets/models/hippo.glb"),
+        ),
+    ];
+    for (name, data) in files {
+        assets.insert_asset(Path::new("assets").join(name), Path::new(name), data);
+    }
+}
+
+fn simulate(time: Res<Time<Fixed>>, play: Res<Play>, mut game: ResMut<Game>) {
+    if !play.paused && play.panel == Panel::Closed {
+        game.step(time.delta_secs());
+    }
+}
+
+fn refresh_target(game: Res<Game>, play: Res<Play>, mut target: ResMut<Target>) {
+    target.refresh(&play, &game);
+}
+
+fn screenshot(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>) {
+    if keys.just_pressed(KeyCode::F12) {
+        if let Err(error) = std::fs::create_dir_all("build") {
+            warn!("Screenshot-Ordner: {error}");
+            return;
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis());
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(format!("build/hippogrove-{stamp}.png")));
+    }
+}

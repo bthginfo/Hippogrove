@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="game.hippogrove" android:versionCode="1" android:versionName="0.1.0">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+    <uses-feature android:name="android.hardware.vulkan.version"
+        android:version="0x00400000" android:required="true" />
+    <application android:label="Hippogrove" android:icon="@drawable/hippogrove"
+        android:theme="@style/Hippogrove" android:appCategory="game"
+        android:allowBackup="false" android:extractNativeLibs="true">
+        <activity android:name=".GameActivity" android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|density|uiMode|smallestScreenSize"
+            android:screenOrientation="sensorLandscape">
+            <meta-data android:name="android.app.lib_name" android:value="hippogrove" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
