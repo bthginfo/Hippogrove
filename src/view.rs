@@ -2,7 +2,7 @@ use bevy::{
     core_pipeline::{fxaa::Fxaa, tonemapping::Tonemapping},
     pbr::DistanceFog,
     prelude::*,
-    render::camera::ScalingMode,
+    render::{MainWorld, camera::ScalingMode, render_resource::PipelineCache},
 };
 
 use crate::{
@@ -29,6 +29,24 @@ pub struct Board {
     buildings: usize,
     walkers: usize,
     seen_magic: u64,
+    started: f32,
+    ready_frames: u8,
+}
+
+impl Board {
+    const READY_FRAMES: u8 = 4;
+
+    pub fn loading(&self, game: &Game) -> bool {
+        self.active != Some((game.mode, game.campaign.active))
+            || self.ready_frames < Self::READY_FRAMES
+    }
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct RenderReadiness(bool);
+
+pub(crate) fn report_render_readiness(mut world: ResMut<MainWorld>, cache: Res<PipelineCache>) {
+    world.resource_mut::<RenderReadiness>().0 = cache.waiting_pipelines().next().is_none();
 }
 
 #[derive(Component)]
@@ -144,10 +162,11 @@ pub fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     assets: Res<AssetServer>,
     view: Res<CameraRig>,
 ) {
-    let art = Art::load(&mut meshes, &mut materials, &assets);
+    let art = Art::load(&mut meshes, &mut materials, &mut images, &assets);
     commands.spawn((
         Name::new("Spielkamera"),
         WorldCamera,
@@ -178,12 +197,13 @@ pub fn setup(
                 (0.40, 0.18, 0.02, 0.59),
                 (0.10, 0.09, 0.20, 0.65),
             ] {
-                mound(
+                part(
                     parent,
-                    &art,
+                    &art.cloud_puff,
                     &art.white,
                     Vec3::new(x, y, z),
                     Vec3::new(s, s * 0.81, s * 0.87),
+                    Quat::IDENTITY,
                 );
             }
             let paw = parent
@@ -196,16 +216,24 @@ pub fn setup(
                 ))
                 .id();
             parent.commands().entity(paw).with_children(|digits| {
-                mound(
+                part(
                     digits,
-                    &art,
+                    &art.cloud_puff,
                     &art.purple,
                     Vec3::new(0.08, -0.18, 0.15),
                     Vec3::new(0.55, 0.47, 0.24),
+                    Quat::IDENTITY,
                 );
                 for x in [-0.12, 0.04, 0.2] {
                     let rest = Vec3::new(x, -0.38, 0.20);
-                    let digit = mound(digits, &art, &art.boot, rest, Vec3::new(0.16, 0.27, 0.19));
+                    let digit = part(
+                        digits,
+                        &art.cloud_puff,
+                        &art.boot,
+                        rest,
+                        Vec3::new(0.16, 0.27, 0.19),
+                        Quat::IDENTITY,
+                    );
                     digits.commands().entity(digit).insert(PawDigit(rest));
                 }
             });
@@ -583,6 +611,7 @@ pub fn sync_board(
     mut meshes: ResMut<Assets<Mesh>>,
     art: Res<Art>,
     game: Res<Game>,
+    time: Res<Time<Real>>,
     mut board: ResMut<Board>,
     scenery: Query<(Entity, &art::LandscapeProp)>,
     mut forests: Query<(&art::ForestPatch, &mut Mesh3d)>,
@@ -779,6 +808,7 @@ pub fn sync_board(
         *board = Board {
             active: Some(current),
             root: Some(root),
+            started: time.elapsed_secs(),
             ..default()
         };
     }
@@ -959,6 +989,32 @@ pub fn sync_board(
         });
     }
     board.walkers = city.walkers.len();
+}
+
+pub(crate) fn ready_to_show(
+    art: Res<Art>,
+    game: Res<Game>,
+    assets: Res<AssetServer>,
+    renderer: Res<RenderReadiness>,
+    time: Res<Time<Real>>,
+    mut board: ResMut<Board>,
+    mut camera: ResMut<CameraRig>,
+) {
+    if !board.loading(&game) {
+        return;
+    }
+    camera.cover = 1.;
+    if renderer.0 && art.village_loaded(game.region().kind, &assets) {
+        board.ready_frames += 1;
+    } else if time.elapsed_secs() - board.started >= 20. {
+        warn!(
+            "Die Darstellung von {} ist nur teilweise bereit.",
+            game.region().name
+        );
+        board.ready_frames = Board::READY_FRAMES;
+    } else {
+        board.ready_frames = 0;
+    }
 }
 
 pub fn props(

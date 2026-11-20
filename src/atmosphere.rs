@@ -57,17 +57,17 @@ struct Sky {
 impl Sky {
     fn target(biome: Biome, weather: Weather, clock: f32) -> Self {
         let (sun, fill, horizon, lux, yaw, tilt) = match biome {
-            Biome::Valley => (0xffe1b4, 0xe3efe5, 0xb7c9ab, 3100., -1.10, -0.88),
-            Biome::Fjord => (0xffe8c6, 0xc2dcf0, 0x99b3c5, 2850., -0.85, -0.65),
-            Biome::Terraces => (0xffe1af, 0xd1e6cd, 0xadc5b4, 3050., -0.67, -0.96),
-            Biome::Lake => (0xffdfac, 0xe2e9d5, 0xdac7a4, 3440., -0.75, -1.06),
-            Biome::Aegean => (0xffe3b4, 0xc9e7ff, 0x84b8d2, 3520., -1.20, -0.77),
+            Biome::Valley => (0xffe1b4, 0xd8ebe2, 0xb7c9ab, 3410., 0.40, -0.79),
+            Biome::Fjord => (0xffe8c6, 0xc2dcf0, 0x99b3c5, 3080., 0.29, -0.63),
+            Biome::Terraces => (0xffe5bd, 0xd1e6d6, 0xadc5b4, 3310., 0.80, -0.88),
+            Biome::Lake => (0xffdcb1, 0xe6e4cd, 0xdac7a4, 3690., 0.72, -0.87),
+            Biome::Aegean => (0xffe6c3, 0xc9e4f2, 0x88c1dc, 3910., 0.56, -0.82),
         };
         let mut sky = Self {
             sun: rgb(sun),
             lux,
             fill: rgb(fill),
-            fill_amount: 670.,
+            fill_amount: 780.,
             horizon: rgb(horizon),
             haze: 0.31,
             yaw,

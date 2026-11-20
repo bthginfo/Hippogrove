@@ -11,10 +11,9 @@ pub(super) fn tree(geo: &mut Geometry, at: Vec3, scale: f32, biome: Biome, seed:
     } else {
         0x8e694b
     });
-    let trunk = |geo: &mut Geometry| tier(geo, at, scale, [0., 1.38, 0.15, 0.084], turn, bark);
-    trunk(geo);
     match biome {
         Biome::Valley | Biome::Fjord if biome == Biome::Fjord || seed % 5 < 4 => {
+            tier(geo, at, scale, [0., 1.38, 0.15, 0.084], turn, bark);
             let shade = if biome == Biome::Fjord {
                 0x536e62
             } else {
@@ -26,7 +25,7 @@ pub(super) fn tree(geo: &mut Geometry, at: Vec3, scale: f32, biome: Biome, seed:
                 0x95a858
             };
             for (index, (rise, width, height)) in
-                [(0.79, 0.68, 1.04), (1.34, 0.57, 0.99), (1.90, 0.44, 1.08)]
+                [(0.69, 0.79, 1.13), (1.30, 0.62, 1.08), (1.92, 0.48, 1.22)]
                     .into_iter()
                     .enumerate()
             {
@@ -59,35 +58,88 @@ pub(super) fn tree(geo: &mut Geometry, at: Vec3, scale: f32, biome: Biome, seed:
         }
         Biome::Aegean if seed % 5 == 0 => {
             let green = rgb(0x41694e).mix(&rgb(0x72935e), grain * 0.74);
-            tier(geo, at, scale, [0.34, 1.27, 0.24, 0.38], turn, green);
-            tier(geo, at, scale, [1.27, 3.15, 0.38, 0.019], turn, green);
+            tier(geo, at, scale, [0., 0.89, 0.13, 0.07], turn, bark);
+            tier(geo, at, scale, [0.27, 1.05, 0.23, 0.34], turn, green);
+            tier(geo, at, scale, [1.05, 2.04, 0.34, 0.25], turn, green);
+            tier(geo, at, scale, [2.04, 3.19, 0.25, 0.018], turn, green);
         }
+        Biome::Terraces if seed % 7 > 2 => bamboo(geo, at, scale, turn),
         _ => {
-            let (shade, light, spread) = match biome {
-                Biome::Aegean => (0x577847, 0xa3ae60, 0.85),
-                Biome::Lake => (0x5a8148, 0xa4a65d, 1.03),
-                Biome::Terraces if seed % 6 < 2 => (0xad4937, 0xd97941, 0.74),
-                Biome::Terraces => (0x507650, 0x8fa45b, 0.75),
-                _ => (0x618c47, 0xafb85c, 0.76),
+            let (shade, light, spread, crown_height) = match biome {
+                Biome::Aegean => (0x547650, 0xc0c688, 0.88, 0.53),
+                Biome::Lake => (0x5d7946, 0xc0bb67, 1.16, 0.35),
+                Biome::Terraces if seed % 6 < 2 => (0x99483c, 0xda8c56, 0.91, 0.55),
+                Biome::Terraces => (0x45754f, 0x91b27b, 0.85, 0.58),
+                _ => (0x527b43, 0xb2be68, 0.88, 0.68),
             };
+            let to_world = |point| at + Quat::from_rotation_y(turn) * point * scale;
+            let fork = to_world(Vec3::new(-0.12, 0.82, 0.04));
+            bough(geo, at, fork, 0.21 * scale, 0.12 * scale, bark);
             for (index, (x, y, z, width)) in [
-                (0., 1.48, 0., 0.78),
-                (-0.43, 1.27, 0.12, 0.67),
-                (0.46, 1.34, -0.14, 0.64),
+                (-0.56, 1.43, 0.17, 0.67),
+                (0.13, 1.68, -0.20, 0.78),
+                (0.61, 1.56, 0.18, 0.66),
             ]
             .into_iter()
             .enumerate()
             {
-                let offset = Quat::from_rotation_y(turn) * Vec3::new(x, y, z) * scale;
-                let color = rgb(shade).mix(&rgb(light), 0.22 + grain * 0.40 + index as f32 * 0.13);
+                let crown = to_world(Vec3::new(x * spread, y + grain * 0.20, z));
+                bough(geo, fork, crown, 0.117 * scale, 0.043 * scale, bark);
+                let color = rgb(shade).mix(&rgb(light), 0.14 + grain * 0.35 + index as f32 * 0.17);
                 stone(
                     geo,
-                    at + offset,
-                    Vec3::new(width * spread, 0.59, width * spread) * scale,
+                    crown,
+                    Vec3::new(width * spread, crown_height, width * spread) * scale,
                     color,
                     seed + index as u32,
                 );
             }
+        }
+    }
+}
+
+fn bough(geo: &mut Geometry, root: Vec3, tip: Vec3, base: f32, end: f32, bark: Color) {
+    let axis = (tip - root).normalize();
+    let tangent = axis.cross(Vec3::Z).normalize();
+    let across = axis.cross(tangent);
+    let edge = |index: u8| {
+        let angle = f32::from(index) * std::f32::consts::TAU / 5.;
+        tangent * angle.cos() + across * angle.sin()
+    };
+    for face in 0..5 {
+        let a = edge(face);
+        let b = edge(face + 1);
+        let shade = bark.mix(&rgb(0x4d433a), f32::from(face % 3) * 0.15);
+        geo.quad(
+            root + base * a,
+            root + base * b,
+            tip + end * b,
+            tip + end * a,
+            shade,
+        );
+    }
+}
+
+fn bamboo(geo: &mut Geometry, at: Vec3, scale: f32, turn: f32) {
+    let rotation = Quat::from_rotation_y(turn);
+    let world = |local| at + rotation * local * scale;
+    for (index, (x, z, height)) in [(-0.19, 0.12, 2.40), (0.11, -0.17, 2.70), (0.28, 0.19, 2.13)]
+        .into_iter()
+        .enumerate()
+    {
+        let root = world(Vec3::new(x, 0., z));
+        let tip = world(Vec3::new(x * 1.92, height, z * 1.25));
+        bough(geo, root, tip, 0.067 * scale, 0.026 * scale, rgb(0x9b9e59));
+        for row in 0..3 {
+            let start = root.lerp(tip, 0.51 + row as f32 * 0.19);
+            let reach = if (index + row) % 2 == 0 { 1. } else { -1. };
+            let far = start + rotation * Vec3::new(reach * 0.57, 0.12, 0.31) * scale;
+            let middle = start.lerp(far, 0.43) + Vec3::Y * 0.125 * scale;
+            let base = start.lerp(far, 0.38) - Vec3::Y * 0.064 * scale;
+            geo.tri(start, middle, far, rgb(0x819b57));
+            geo.tri(start, far, middle, rgb(0x819b57));
+            geo.tri(start, far, base, rgb(0x486c44));
+            geo.tri(start, base, far, rgb(0x486c44));
         }
     }
 }
@@ -161,8 +213,13 @@ pub(super) fn deposit(biome: Biome, material: Material, grown: bool) -> Mesh {
     let mut geo = Geometry::default();
     match material {
         Material::Wood if grown => {
-            tree(&mut geo, Vec3::ZERO, 1.12, biome, 27);
-            tree(&mut geo, Vec3::new(-0.48, 0., 0.40), 0.42, biome, 68);
+            let [main, sapling] = if biome == Biome::Aegean {
+                [25, 65]
+            } else {
+                [27, 68]
+            };
+            tree(&mut geo, Vec3::ZERO, 1.12, biome, main);
+            tree(&mut geo, Vec3::new(-0.48, 0., 0.40), 0.42, biome, sapling);
         }
         Material::Wood => {
             tier(

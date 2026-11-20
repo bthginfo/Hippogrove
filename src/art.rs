@@ -1,4 +1,12 @@
-use bevy::{asset::RenderAssetUsages, prelude::*, render::mesh::PrimitiveTopology};
+use bevy::{
+    asset::RenderAssetUsages,
+    image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
+    prelude::*,
+    render::{
+        mesh::PrimitiveTopology,
+        render_resource::{Extent3d, TextureDimension, TextureFormat},
+    },
+};
 
 use crate::{
     civic::Civic,
@@ -44,10 +52,10 @@ pub struct Art {
     pub lump: Handle<Mesh>,
     pub cylinder: Handle<Mesh>,
     cone: Handle<Mesh>,
+    pub cloud_puff: Handle<Mesh>,
     pub roof: Handle<Mesh>,
     pub curved_roof: Handle<Mesh>,
     pub masonry: Handle<Mesh>,
-    blossoms: Handle<Mesh>,
     pub ring: Handle<Mesh>,
     pub plan_corners: Handle<Mesh>,
     pub plan_cross: Handle<Mesh>,
@@ -82,9 +90,12 @@ pub struct Art {
     pub safe_zone: Handle<StandardMaterial>,
     pub shadow: Handle<StandardMaterial>,
     pub ground: Handle<StandardMaterial>,
+    terrain_surface: Handle<StandardMaterial>,
     water: Handle<StandardMaterial>,
     foam: Handle<StandardMaterial>,
     pub waldwinkel: WoodlandKit,
+    villages: [VillageArt; 5],
+    plots: [Handle<Mesh>; 5],
     pub hippo_model: Handle<Scene>,
     pub deposits: [[Handle<Mesh>; 6]; 5],
 }
@@ -93,6 +104,7 @@ impl Art {
     pub fn load(
         meshes: &mut Assets<Mesh>,
         mats: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
         assets: &AssetServer,
     ) -> Self {
         Self {
@@ -100,10 +112,10 @@ impl Art {
             lump: meshes.add(Sphere::new(0.5).mesh().ico(1).unwrap()),
             cylinder: meshes.add(Cylinder::new(0.5, 1.).mesh().resolution(9)),
             cone: meshes.add(Cone::new(0.5, 1.).mesh().resolution(8)),
+            cloud_puff: meshes.add(Sphere::new(0.5).mesh().ico(2).unwrap()),
             roof: meshes.add(roof_mesh(false)),
             curved_roof: meshes.add(roof_mesh(true)),
             masonry: meshes.add(masonry_mesh()),
-            blossoms: meshes.add(blossom_mesh()),
             ring: meshes.add(ring_mesh()),
             plan_corners: meshes.add(plan_corners()),
             plan_cross: meshes.add(plan_cross()),
@@ -152,9 +164,14 @@ impl Art {
                 perceptual_roughness: 0.96,
                 ..default()
             }),
+            terrain_surface: mats.add(StandardMaterial {
+                base_color_texture: Some(images.add(terrain_detail())),
+                perceptual_roughness: 0.97,
+                ..default()
+            }),
             water: mats.add(StandardMaterial {
-                perceptual_roughness: 0.51,
-                reflectance: 0.24,
+                perceptual_roughness: 0.44,
+                reflectance: 0.29,
                 ..default()
             }),
             foam: mats.add(StandardMaterial {
@@ -164,6 +181,18 @@ impl Art {
                 ..default()
             }),
             waldwinkel: WoodlandKit::load(assets),
+            villages: ["valley", "fjord", "terraces", "lake", "aegean"].map(|biome| {
+                let scene = |index| {
+                    assets.load(format!(
+                        "embedded://models/villages/{biome}.glb#Scene{index}"
+                    ))
+                };
+                VillageArt {
+                    house: scene(0),
+                    store: scene(1),
+                }
+            }),
+            plots: Biome::ALL.map(|biome| meshes.add(plot_mesh(biome))),
             hippo_model: assets.load("embedded://models/hippo.glb#Scene0"),
             deposits: [
                 Biome::Valley,
@@ -184,6 +213,80 @@ impl Art {
             }),
         }
     }
+
+    pub fn village_loaded(&self, biome: Biome, assets: &AssetServer) -> bool {
+        let village = &self.villages[biome as usize];
+        [&self.hippo_model, &village.house, &village.store]
+            .into_iter()
+            .all(|scene| assets.is_loaded_with_dependencies(scene.id()))
+    }
+}
+
+struct VillageArt {
+    house: Handle<Scene>,
+    store: Handle<Scene>,
+}
+
+fn terrain_detail() -> Image {
+    const SIDE: usize = 64;
+    let noise = |x: usize, z: usize, cells: i16| {
+        let at = Vec2::new(x as f32, z as f32) * (f32::from(cells) / SIDE as f32);
+        let tile = at.floor();
+        let [x, z] = [tile.x as i16, tile.y as i16];
+        let pigment = |u: i16, v: i16| {
+            (hash(u.rem_euclid(cells), v.rem_euclid(cells), 391) & 255) as f32 / 255.
+        };
+        let blend = at - tile;
+        let u = terrain::smooth(blend.x);
+        let v = terrain::smooth(blend.y);
+        pigment(x, z)
+            .lerp(pigment(x + 1, z), u)
+            .lerp(pigment(x, z + 1).lerp(pigment(x + 1, z + 1), u), v)
+    };
+    let mut level = (0..SIDE * SIDE)
+        .map(|index| {
+            let (x, z) = (index % SIDE, index / SIDE);
+            (216. + 25. * noise(x, z, 5) + 14. * noise(x, z, 19)) as u8
+        })
+        .collect::<Vec<_>>();
+    let mut image_bytes = Vec::new();
+    let mut width = SIDE;
+    loop {
+        image_bytes.extend(level.iter().flat_map(|&gray| [gray, gray, gray, 255]));
+        if width == 1 {
+            break;
+        }
+        let next_width = width / 2;
+        level = (0..next_width * next_width)
+            .map(|index| {
+                let first = 2 * (index % next_width + index / next_width * width);
+                let sum = u16::from(level[first])
+                    + u16::from(level[first + 1])
+                    + u16::from(level[first + width])
+                    + u16::from(level[first + width + 1]);
+                (sum / 4) as u8
+            })
+            .collect();
+        width = next_width;
+    }
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width: SIDE as u32,
+            height: SIDE as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.mip_level_count = SIDE.ilog2() + 1;
+    image.data = Some(image_bytes);
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::linear()
+    });
+    image
 }
 
 pub struct WoodlandKit {
@@ -193,8 +296,6 @@ pub struct WoodlandKit {
     reed: Handle<Scene>,
     shell: Handle<Scene>,
     pub crop: Handle<Scene>,
-    lamp: Handle<Scene>,
-    fern: Handle<Scene>,
     harbor_lantern: Handle<Scene>,
     watch_fern: Handle<Scene>,
 }
@@ -209,8 +310,6 @@ impl WoodlandKit {
             reed: scene("find_marsh_herb"),
             shell: scene("find_shell"),
             crop: scene("crop_strawberry"),
-            lamp: scene("furniture_copper_lamp"),
-            fern: scene("furniture_fern"),
             harbor_lantern: scene("furniture_harbor_lantern"),
             watch_fern: scene("watch_fern"),
         }
@@ -363,6 +462,16 @@ impl Geometry {
         mesh.asset_usage = RenderAssetUsages::RENDER_WORLD;
         mesh
     }
+
+    fn terrain_mesh(self) -> Mesh {
+        let uv = self
+            .positions
+            .iter()
+            .map(|p| [p[0] * 0.37, p[2] * 0.37])
+            .collect::<Vec<_>>();
+        self.render_mesh()
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
+    }
 }
 
 fn roof_mesh(curved: bool) -> Mesh {
@@ -493,42 +602,6 @@ fn masonry_mesh() -> Mesh {
     geometry.mesh()
 }
 
-fn blossom_mesh() -> Mesh {
-    let mut vines = Geometry::default();
-    for i in 0..19 {
-        let key = hash(i, 4, 677);
-        let t = f32::from(i) / 19.;
-        let anchor = Vec3::new(
-            (t * 7.7).sin() * 0.24 + (key % 17) as f32 * 0.014,
-            t * 1.1,
-            0.,
-        );
-        let leaf = rgb([0x597648, 0x758f52, 0x9ca757][(key % 3) as usize]);
-        let bloom = rgb([0xd85183, 0xef8b9b, 0xbd4b76, 0xf3b4a1][((key >> 5) % 4) as usize]);
-        for reach in [-1., 1.] {
-            let tip = anchor + Vec3::new(reach * (0.105 + t * 0.043), 0.088, 0.045);
-            let up = anchor + Vec3::new(0., 0.10, 0.042);
-            vines.tri(anchor - Vec3::Y * 0.059, tip, up, leaf);
-            vines.tri(up, tip, anchor - Vec3::Y * 0.059, leaf);
-            if i % 3 != 0 {
-                vines.tri(
-                    tip,
-                    tip + Vec3::new(0.075, 0.014, 0.022),
-                    tip + Vec3::new(0.023, 0.085, 0.027),
-                    bloom,
-                );
-                vines.tri(
-                    tip,
-                    tip + Vec3::new(0.023, 0.085, 0.027),
-                    tip + Vec3::new(-0.057, 0.038, 0.024),
-                    bloom,
-                );
-            }
-        }
-    }
-    vines.mesh()
-}
-
 pub fn stonework(parent: &mut ChildSpawnerCommands, art: &Art, at: Vec3, size: Vec3) {
     for side in 0..4 {
         let angle = side as f32 * std::f32::consts::FRAC_PI_2;
@@ -542,6 +615,50 @@ pub fn stonework(parent: &mut ChildSpawnerCommands, art: &Art, at: Vec3, size: V
             Quat::from_rotation_y(angle),
         );
     }
+}
+
+fn plot_mesh(biome: Biome) -> Mesh {
+    let soil = rgb(match biome {
+        Biome::Valley => 0xa87952,
+        Biome::Fjord => 0x846950,
+        Biome::Terraces => 0x94674c,
+        Biome::Lake => 0xb98152,
+        Biome::Aegean => 0xaa7650,
+    });
+    let mut ground = Geometry::default();
+    ground.flat_box(Vec3::Y * 0.139, 1.47, 1.34, soil.mix(&rgb(0x614b38), 0.24));
+    let profile = [
+        (-0.22, 0.144),
+        (-0.14, 0.183),
+        (0.039, 0.219),
+        (0.20, 0.144),
+    ];
+    for (row, x) in [-0.96, -0.32, 0.32, 0.96].into_iter().enumerate() {
+        let point = |edge: usize, segment: usize| {
+            let (across, height) = profile[edge];
+            let variation = (hash(row as i16, segment as i16, 241) % 13) as f32 / 12.;
+            let z = -1.18 + segment as f32 * 0.393;
+            Vec3::new(
+                x + across + variation * 0.075,
+                height + variation * 0.009,
+                z,
+            )
+        };
+        for segment in 0..6 {
+            for edge in 0..profile.len() - 1 {
+                let grain = (hash(row as i16, (segment * 4 + edge) as i16, 253) % 7) as f32 / 6.;
+                let shade = soil.mix(&rgb(0x5f492f), (2 - edge) as f32 * 0.11 + grain * 0.15);
+                ground.quad(
+                    point(edge, segment),
+                    point(edge, segment + 1),
+                    point(edge + 1, segment + 1),
+                    point(edge + 1, segment),
+                    shade,
+                );
+            }
+        }
+    }
+    ground.terrain_mesh()
 }
 
 fn ring_mesh() -> Mesh {
@@ -876,6 +993,16 @@ pub fn shrine(parent: &mut ChildSpawnerCommands, art: &Art, frontier: bool) {
 }
 
 pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind: Building) {
+    let village = &art.villages[biome as usize];
+    let model = match kind {
+        Building::House => Some(&village.house),
+        Building::Store => Some(&village.store),
+        _ => None,
+    };
+    if let Some(model) = model {
+        place_scene(parent, model, Vec3::ZERO, 1., 0.);
+        return;
+    }
     if let Building::Civic(kind) = kind {
         settlement_models::draw(parent, art, biome, kind);
         return;
@@ -921,15 +1048,14 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
             Vec3::Y * 0.05,
             Vec3::new(2.95, 0.17, 2.72),
         );
-        for x in [-0.96, -0.32, 0.32, 0.96] {
-            block(
-                parent,
-                art,
-                &art.dark_wood,
-                Vec3::new(x, 0.15, 0.),
-                Vec3::new(0.39, 0.13, 2.43),
-            );
-        }
+        part(
+            parent,
+            &art.plots[biome as usize],
+            &art.terrain_surface,
+            Vec3::ZERO,
+            Vec3::ONE,
+            Quat::IDENTITY,
+        );
         for x in [-1.47, 1.47] {
             block(
                 parent,
@@ -946,7 +1072,7 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
         return;
     }
     let roof_color = &art.roof_color[biome as usize];
-    let h = if kind == Building::Store { 1.27 } else { 1.59 };
+    let h = 1.59;
     let width = if biome == Biome::Fjord { 2.55 } else { 2.36 };
     let length = if kind == Building::Workshop {
         2.66
@@ -960,43 +1086,9 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
         Vec3::Y * 0.15,
         Vec3::new(width + 0.17, 0.3, length + 0.24),
     );
-    if biome == Biome::Lake && kind == Building::House {
-        part(
-            parent,
-            &art.cylinder,
-            &art.plaster,
-            Vec3::Y * 0.91,
-            Vec3::new(2.35, 1.47, 2.35),
-            Quat::IDENTITY,
-        );
-        part(
-            parent,
-            &art.cone,
-            roof_color,
-            Vec3::Y * 2.12,
-            Vec3::new(2.89, 1.21, 2.89),
-            Quat::IDENTITY,
-        );
-        block(
-            parent,
-            art,
-            &art.door,
-            Vec3::new(0., 0.77, 1.14),
-            Vec3::new(0.57, 0.95, 0.13),
-        );
-        block(
-            parent,
-            art,
-            &art.amber,
-            Vec3::new(0.61, 1.17, 0.98),
-            Vec3::new(0.27, 0.32, 0.07),
-        );
-        return;
-    }
-
     let wall = if biome == Biome::Aegean {
         &art.limestone
-    } else if kind == Building::Store || biome == Biome::Fjord {
+    } else if biome == Biome::Fjord {
         &art.timber
     } else {
         &art.plaster
@@ -1077,30 +1169,7 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
         Vec3::new(0., 0.45, face + 0.22),
         Vec3::new(0.93, 0.19, 0.51),
     );
-    if kind == Building::House {
-        block(
-            parent,
-            art,
-            &art.warm_stone,
-            Vec3::new(0., 0.14, face + 0.32),
-            Vec3::new(1.20, 0.26, 0.65),
-        );
-        place_scene(
-            parent,
-            &art.waldwinkel.lamp,
-            Vec3::new(-0.91, 0.30, face + 0.21),
-            0.44,
-            0.3,
-        );
-        place_scene(
-            parent,
-            &art.waldwinkel.fern,
-            Vec3::new(0.91, 0.20, face + 0.28),
-            0.48,
-            2.5,
-        );
-    }
-    if kind == Building::Store || kind == Building::Granary {
+    if kind == Building::Granary {
         block(
             parent,
             art,
@@ -1176,35 +1245,28 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
             );
         }
     }
-    if biome == Biome::Aegean {
-        if matches!(kind, Building::House | Building::Workshop) {
-            shutter(
-                parent,
-                art,
-                Vec3::new(width * 0.5 + 0.043, 1.22, -0.49),
-                std::f32::consts::FRAC_PI_2,
-            );
-        }
-        if kind == Building::House {
-            aegean_entry(parent, art, face);
-        }
-    }
-    if kind != Building::Store {
-        block(
+    if biome == Biome::Aegean && kind == Building::Workshop {
+        shutter(
             parent,
             art,
-            &art.stone,
-            Vec3::new(width * 0.26, h + roof_height * 0.50, -0.34),
-            Vec3::new(0.29, 0.85, 0.39),
-        );
-        block(
-            parent,
-            art,
-            &art.warm_stone,
-            Vec3::new(width * 0.26, h + roof_height * 0.50 + 0.45, -0.34),
-            Vec3::new(0.37, 0.13, 0.46),
+            Vec3::new(width * 0.5 + 0.043, 1.22, -0.49),
+            std::f32::consts::FRAC_PI_2,
         );
     }
+    block(
+        parent,
+        art,
+        &art.stone,
+        Vec3::new(width * 0.26, h + roof_height * 0.50, -0.34),
+        Vec3::new(0.29, 0.85, 0.39),
+    );
+    block(
+        parent,
+        art,
+        &art.warm_stone,
+        Vec3::new(width * 0.26, h + roof_height * 0.50 + 0.45, -0.34),
+        Vec3::new(0.37, 0.13, 0.46),
+    );
 }
 
 fn shutter(parent: &mut ChildSpawnerCommands, art: &Art, position: Vec3, turn: f32) {
@@ -1235,44 +1297,6 @@ fn shutter(parent: &mut ChildSpawnerCommands, art: &Art, position: Vec3, turn: f
             [0.16, 0.044, 0.025],
         );
     }
-}
-
-fn aegean_entry(parent: &mut ChildSpawnerCommands, art: &Art, face: f32) {
-    for i in 0..5 {
-        let angle = std::f32::consts::PI * i as f32 / 4.;
-        part(
-            parent,
-            &art.cube,
-            &art.limestone,
-            Vec3::new(angle.cos() * 0.38, 1.38 + angle.sin() * 0.16, face + 0.06),
-            Vec3::new(0.15, 0.16, 0.11),
-            Quat::from_rotation_z(angle - 1.57),
-        );
-    }
-    part(
-        parent,
-        &art.cylinder,
-        &art.roof_color[Biome::Aegean as usize],
-        Vec3::new(0.67, 0.26, face + 0.30),
-        Vec3::new(0.37, 0.30, 0.36),
-        Quat::IDENTITY,
-    );
-    part(
-        parent,
-        &art.blossoms,
-        &art.ground,
-        Vec3::new(0.66, 0.39, face + 0.32),
-        Vec3::new(0.71, 1.07, 1.),
-        Quat::from_rotation_y(0.29),
-    );
-    part(
-        parent,
-        &art.blossoms,
-        &art.ground,
-        Vec3::new(-1.02, 0.41, face + 0.11),
-        Vec3::new(0.51, 0.83, 1.),
-        Quat::from_rotation_y(-0.32),
-    );
 }
 
 fn civic_building(parent: &mut ChildSpawnerCommands, art: &Art, kind_biome: Biome, kind: Building) {

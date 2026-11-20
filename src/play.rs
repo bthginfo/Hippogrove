@@ -4,6 +4,7 @@ use crate::{
     civic::{Branch, Civic, Goods, Tech},
     game::{Action, Building, Crop, Game, Miracle, Quest, stock_text},
     modes::Mode,
+    quests::Goal,
     region::{Biome, Material, Tile},
     sound::{Bus, Cue, Mix},
     story::{Sequence, Story},
@@ -350,6 +351,167 @@ impl Play {
         }
     }
 
+    fn guide_building(&mut self, game: &Game, kind: Building, roadside: bool) -> Tile {
+        let region = game.region();
+        let city = game.city();
+        self.tool(Tool::Build);
+        self.choose(kind.index());
+        region
+            .bounds
+            .tiles()
+            .filter(|tile| tile.within(region.start, 8))
+            .filter(|&tile| game.building_plan(kind, tile).is_ok())
+            .min_by_key(|&tile| {
+                let connected = kind
+                    .tiles(tile)
+                    .flat_map(Tile::neighbors)
+                    .any(|cell| city.road_at(region, cell) && city.walkable(region, cell));
+                (roadside && !connected, tile.distance(region.start))
+            })
+            .unwrap_or(region.start)
+    }
+
+    fn guide_quest(&mut self, game: &Game) -> Option<Tile> {
+        let city = game.city();
+        let region = game.region();
+        let step = match self.panel {
+            Panel::Quests => city.quest_step(region),
+            Panel::SideQuest => region.quests.map(|quests| &quests.side),
+            _ => None,
+        }?;
+        let goal = step.pending(city, region)?;
+        let supply = |material| {
+            region
+                .sources
+                .iter()
+                .zip(&city.nodes)
+                .filter(|(source, stock)| {
+                    **stock > 0
+                        && source.material == material
+                        && city.influence(region, source.tile)
+                })
+                .min_by_key(|(source, _)| self.aim.distance(source.tile))
+                .map_or(region.start, |(source, _)| source.tile)
+        };
+        let tile = match goal {
+            Goal::Harvests { .. } => {
+                let field = city
+                    .buildings
+                    .iter()
+                    .filter(|site| site.kind == Building::Field)
+                    .min_by_key(|site| {
+                        (
+                            !matches!(site.crop, Crop::Ripe),
+                            self.aim.distance(site.tile),
+                        )
+                    });
+                if let Some(field) = field {
+                    if matches!(field.crop, Crop::Dry) {
+                        self.tool(Tool::Miracles);
+                        self.choose(Miracle::Rain as usize);
+                    } else {
+                        self.tool(Tool::Hand);
+                    }
+                    field.tile
+                } else {
+                    self.guide_building(game, Building::Field, false)
+                }
+            }
+            Goal::HippoDeliveries { .. } => {
+                let tile = supply(Material::Wood);
+                self.tool(Tool::Hippo);
+                self.choose(0);
+                tile
+            }
+            Goal::Reserve { material, .. } => {
+                let tile = if city.held.is_some() {
+                    city.nearest_store(region, self.aim)
+                } else {
+                    supply(material)
+                };
+                self.tool(Tool::Hand);
+                tile
+            }
+            Goal::Roads { .. } => {
+                self.tool(Tool::Plan);
+                self.choose(0);
+                Tile(region.cross_x, region.start.1 + 4)
+            }
+            Goal::Camps { .. } => {
+                self.tool(Tool::Hand);
+                region
+                    .areas
+                    .iter()
+                    .zip(city.camps)
+                    .find(|(_, open)| !open)
+                    .map_or(region.start, |(area, _)| area.center)
+            }
+            Goal::OlivePressings { .. } => {
+                let press = Building::Civic(Civic::OlivePress);
+                if let Some(site) = city
+                    .buildings
+                    .iter()
+                    .find(|site| site.kind == press && city.connected(region, site))
+                {
+                    let tile = if city.stock[Material::Food.index()] < 10 {
+                        if city.held.is_some() {
+                            city.nearest_store(region, self.aim)
+                        } else {
+                            supply(Material::Food)
+                        }
+                    } else {
+                        site.tile
+                    };
+                    self.tool(Tool::Hand);
+                    tile
+                } else {
+                    self.guide_building(game, press, true)
+                }
+            }
+            Goal::Building {
+                kind,
+                roadside,
+                upgraded,
+                ..
+            } => {
+                let workshop_needed = upgraded
+                    || matches!(kind, Building::Granary | Building::Market | Building::Tower);
+                if (workshop_needed || kind == Building::Well) && city.city_rank() < 2 {
+                    let missing = if city.count(Building::Store) == 0 {
+                        Building::Store
+                    } else {
+                        Building::Field
+                    };
+                    self.guide_building(game, missing, false)
+                } else if workshop_needed && city.city_rank() < 3 {
+                    self.guide_building(game, Building::Workshop, false)
+                } else if let Some(site) = city.buildings.iter().find(|site| {
+                    site.kind == kind
+                        && ((roadside && !city.connected(region, site))
+                            || (upgraded && !site.upgraded))
+                }) {
+                    self.tool(Tool::Plan);
+                    if city.connected(region, site) {
+                        self.choose(1);
+                        site.tile
+                    } else {
+                        self.choose(0);
+                        kind.tiles(site.tile)
+                            .flat_map(Tile::neighbors)
+                            .filter(|&cell| {
+                                city.walkable(region, cell) && !city.road_at(region, cell)
+                            })
+                            .min_by_key(|&cell| cell.distance(region.depot))
+                            .unwrap_or(site.tile)
+                    }
+                } else {
+                    self.guide_building(game, kind, roadside)
+                }
+            }
+        };
+        Some(tile)
+    }
+
     pub fn activate(
         &mut self,
         action: UiAction,
@@ -477,7 +639,9 @@ impl Play {
             }
             UiAction::Rotate => self.rotation = (self.rotation + 1) % 4,
             UiAction::Guide => {
-                self.aim = self.guide_tile(game);
+                self.aim = self
+                    .guide_quest(game)
+                    .unwrap_or_else(|| self.guide_tile(game));
                 self.close_panels();
                 view.focus(self.aim);
                 self.pointer = None;
@@ -1051,7 +1215,7 @@ impl Target {
                 self.detail = format!(
                     "{} {} · {}",
                     region.gift.1,
-                    region.gift.0.name(),
+                    region.kind.material(region.gift.0),
                     region.request
                 );
                 "Bitte erfüllen".into()

@@ -35,13 +35,15 @@ pub fn noise(at: Vec2, size: f32, salt: u32) -> f32 {
 }
 
 /// Signed horizontal distance to the nearest shoreline in gameplay-grid units.
-/// Each cell center keeps the same land and water classification as the campaign data.
+/// The rendered shore and the gameplay grid use the same water boundaries.
 pub fn shore(region: &Region, point: Vec2) -> f32 {
     let left = point.x.floor() as i16;
     let t = smooth(point.x - f32::from(left));
     let near = f32::from(region.river_at(left)).lerp(f32::from(region.river_at(left + 1)), t) - 0.5;
     let width = f32::from(region.river_span(left)).lerp(f32::from(region.river_span(left + 1)), t);
-    let channel = (near - point.y).max(point.y - near - width);
+    let channel = (near - point.y)
+        .max(point.y - near - width)
+        .min(region.basin_shore(point));
     if region.kind == Biome::Aegean {
         channel.min(region.island_shore(point))
     } else {

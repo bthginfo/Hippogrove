@@ -7,6 +7,7 @@ mod hud;
 mod life;
 mod modes;
 mod play;
+mod quests;
 mod region;
 mod save;
 mod sound;
@@ -17,7 +18,10 @@ mod view;
 use bevy::{
     asset::{AssetMetaCheck, io::embedded::EmbeddedAssetRegistry},
     prelude::*,
-    render::view::screenshot::{Screenshot, save_to_disk},
+    render::{
+        ExtractSchedule, RenderApp,
+        view::screenshot::{Screenshot, save_to_disk},
+    },
     window::PresentMode,
 };
 
@@ -95,6 +99,7 @@ pub fn main() {
         .init_resource::<hud::Hud>()
         .init_resource::<Target>()
         .init_resource::<view::Board>()
+        .init_resource::<view::RenderReadiness>()
         .init_resource::<view::HarvestEffects>()
         .add_event::<sound::Harvest>()
         .add_systems(Startup, (view::setup, hud::setup, sound::setup))
@@ -103,7 +108,7 @@ pub fn main() {
             Update,
             (
                 controls::collect,
-                story::update,
+                story::update.run_if(world_visible),
                 view::move_camera,
                 refresh_target,
                 view::sync_board,
@@ -119,6 +124,7 @@ pub fn main() {
                     atmosphere::update,
                     view::magic,
                 ),
+                view::ready_to_show,
                 hud::layout,
                 hud::update,
                 hud::camera_fade,
@@ -127,6 +133,8 @@ pub fn main() {
             )
                 .chain(),
         );
+    app.sub_app_mut(RenderApp)
+        .add_systems(ExtractSchedule, view::report_render_readiness);
     embed_assets(&app);
     app.run();
 }
@@ -185,6 +193,11 @@ fn embed_assets(app: &App) {
         embed!("fonts/DMSans-Medium.ttf"),
         embed!("fonts/DMSerifText-Regular.ttf"),
         embed!("models/hippo.glb"),
+        embed!("models/villages/valley.glb"),
+        embed!("models/villages/fjord.glb"),
+        embed!("models/villages/terraces.glb"),
+        embed!("models/villages/lake.glb"),
+        embed!("models/villages/aegean.glb"),
         embed!("ui/atlas.png"),
         embed!("ui/welten.png"),
         embed!("models/waldwinkel/wood_tree.glb"),
@@ -193,8 +206,6 @@ fn embed_assets(app: &App) {
         embed!("models/waldwinkel/find_marsh_herb.glb"),
         embed!("models/waldwinkel/find_shell.glb"),
         embed!("models/waldwinkel/crop_strawberry.glb"),
-        embed!("models/waldwinkel/furniture_copper_lamp.glb"),
-        embed!("models/waldwinkel/furniture_fern.glb"),
         embed!("models/waldwinkel/furniture_harbor_lantern.glb"),
         embed!("models/waldwinkel/watch_fern.glb"),
         embed!("audio/grove.ogg"),
@@ -212,8 +223,17 @@ fn embed_assets(app: &App) {
     }
 }
 
-fn simulate(time: Res<Time<Fixed>>, play: Res<Play>, mut game: ResMut<Game>) {
-    if !play.paused && play.panel == Panel::Closed {
+fn world_visible(board: Res<view::Board>, game: Res<Game>) -> bool {
+    !board.loading(&game)
+}
+
+fn simulate(
+    time: Res<Time<Fixed>>,
+    play: Res<Play>,
+    board: Res<view::Board>,
+    mut game: ResMut<Game>,
+) {
+    if !play.paused && play.panel == Panel::Closed && !board.loading(&game) {
         game.step(time.delta_secs());
     }
 }

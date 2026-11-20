@@ -15,6 +15,7 @@ use crate::{
     play::{CameraRig, Panel, Play, Target, Tool, UiAction},
     region::{Biome, Material, Region},
     sound::{Bus, Mix},
+    view::Board,
 };
 
 const PAPER: u32 = 0xf6eed7;
@@ -88,6 +89,9 @@ pub struct Toast;
 #[derive(Component)]
 pub struct CameraFade;
 
+#[derive(Component)]
+pub struct LoadingWorld;
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Layout {
     region: usize,
@@ -137,20 +141,36 @@ pub fn setup(
     assets: Res<AssetServer>,
     mut atlases: ResMut<Assets<TextureAtlasLayout>>,
 ) {
-    commands.spawn((
-        CameraFade,
-        Node {
-            position_type: PositionType::Absolute,
-            width: Val::Percent(100.),
-            height: Val::Percent(100.),
-            ..default()
-        },
-        GlobalZIndex(80),
-        BackgroundColor(Color::NONE),
-        Visibility::Hidden,
-    ));
     hud.regular = assets.load("embedded://fonts/DMSans-Medium.ttf");
     hud.bold = assets.load("embedded://fonts/DMSans-Bold.ttf");
+    commands
+        .spawn((
+            CameraFade,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.),
+                height: Val::Percent(100.),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            GlobalZIndex(80),
+            BackgroundColor(rgb(0x172821)),
+            Visibility::Visible,
+        ))
+        .with_children(|overlay| {
+            overlay.spawn((
+                LoadingWorld,
+                Text::new("Die Welt lädt …"),
+                TextFont {
+                    font: hud.bold.clone(),
+                    font_size: 24.,
+                    ..default()
+                },
+                TextColor(rgb(LIGHT)),
+                Visibility::Inherited,
+            ));
+        });
     hud.serif = assets.load("embedded://fonts/DMSerifText-Regular.ttf");
     hud.icons = assets.load("embedded://ui/atlas.png");
     hud.atlas = atlases.add(TextureAtlasLayout::from_grid(
@@ -172,11 +192,28 @@ pub fn setup(
 
 pub fn camera_fade(
     camera: Res<CameraRig>,
-    mut overlay: Single<(&mut BackgroundColor, &mut Visibility), With<CameraFade>>,
+    board: Res<Board>,
+    game: Res<Game>,
+    mut overlay: Single<
+        (&mut BackgroundColor, &mut Visibility),
+        (With<CameraFade>, Without<LoadingWorld>),
+    >,
+    mut message: Single<&mut Visibility, (With<LoadingWorld>, Without<CameraFade>)>,
 ) {
-    overlay.0.0 = rgb(0x172821).with_alpha(camera.cover * camera.cover * 0.94);
-    *overlay.1 = if camera.cover > 0.001 {
+    let loading = board.loading(&game);
+    let opacity = if loading {
+        1.
+    } else {
+        camera.cover * camera.cover
+    };
+    overlay.0.0 = rgb(0x172821).with_alpha(opacity);
+    *overlay.1 = if opacity > 0.001 {
         Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    **message = if loading {
+        Visibility::Inherited
     } else {
         Visibility::Hidden
     };
@@ -194,7 +231,9 @@ fn chart(region: &Region) -> Image {
         .bounds
         .tiles()
         .flat_map(|tile| {
-            let color = if region.water(tile) {
+            let color = if region.bridge_cell(tile) {
+                0xe0c69b
+            } else if region.water(tile) {
                 water
             } else if region.rocky(tile) {
                 if region.kind == Biome::Fjord {
@@ -1053,8 +1092,13 @@ fn side_quest_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, l
             MUTED,
         );
         button(parent, hud, name, UiAction::Do(action), false, true);
-    } else if game.city().next_raid().is_some() {
-        label(parent, hud, Label::Raid, 15., MUTED);
+    } else {
+        if game.region().quests.is_some() && layout.side_quest == SideQuest::Active {
+            button(parent, hud, "Zum Ziel", UiAction::Guide, false, true);
+        }
+        if game.city().next_raid().is_some() {
+            label(parent, hud, Label::Raid, 15., MUTED);
+        }
     }
 }
 
@@ -1964,7 +2008,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 }
                 Panel::Quests => {
                     box_node.spawn(row()).with_children(|active| {
-                        panel_heading(active,hud,city.quest.name(),layout.short);
+                        panel_heading(active,hud,city.quest_title(region),layout.short);
                         button(active,hud,"Zum Ziel",UiAction::Guide,false,true);
                     });
                     label(box_node,hud,Label::Objective,16.,INK);
@@ -2277,7 +2321,7 @@ pub fn update(
                 region.rival,
                 region.request,
                 region.gift.1,
-                region.gift.0.name(),
+                region.kind.material(region.gift.0),
                 city.renown(),
                 region.renown,
                 stock_text(region.rebuild)

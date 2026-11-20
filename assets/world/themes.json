@@ -1,42 +1,427 @@
 [
   {
-    "biome":"Valley",
-    "chapters":[
-      {"name":"Weidental","subtitle":"Ein Haus am Quellweg","lore":"Am Weidenfluss erinnert sich der Hain an die erste Wolkenpfote. Ein Dorf wartet auf sein erstes Dach."},
-      {"name":"Eichenpass","subtitle":"Das Zeichen der Mühlenhüter","lore":"Die Mühlen stehen still, seit zwei Täler um das Wasser ringen. Verbinde sie mit einem neuen Übergang.","rival":"Die Mühlenhüter"},
-      {"name":"Quellbogen","subtitle":"Das Bündnis der drei Quellen","lore":"Die Höfe am Quellbogen bitten um Speicher und Versorgung. Führe sie mit einer lebendigen Stadt zusammen.","rival":"Hüterin Alva"}
+    "biome": "Valley",
+    "chapters": [
+      {
+        "name": "Weidental",
+        "subtitle": "Ein Haus am Quellweg",
+        "lore": "Am Weidenfluss erinnert sich der Hain an die erste Wolkenpfote. Ein Dorf wartet auf sein erstes Dach.",
+        "quests": {
+          "request": "Die ersten Körbe",
+          "offering": ["Food",7],
+          "side": {
+            "title": "Der Weidengarten",
+            "hint": "Versorge die Felder mit einem Brunnen am Dorfweg und bring drei Ernten ein.",
+            "goals": [{"type": "building","kind": "Well","count": 1,"roadside": true},{"type": "harvests","count": 3}]
+          }
+        }
+      },
+      {
+        "name": "Eichenpass",
+        "subtitle": "Das Zeichen der Mühlenhüter",
+        "lore": "Die Mühlen stehen still, seit zwei Täler um das Wasser ringen. Verbinde sie mit einem neuen Übergang.",
+        "rival": "Die Mühlenhüter",
+        "quests": {
+          "request": "Holz für das Mühlrad",
+          "offering": ["Wood",13],
+          "preparation": {
+            "title": "Das Wasser der Mühle",
+            "hint": "Baue einen Brunnen am Dorfweg. Mit Regen kannst du das Feld schon vor der ersten Ernte wässern.",
+            "goals": [{"type": "building","kind": "Well","count": 1,"roadside": true},{"type": "harvests","count": 1}]
+          },
+          "finale": {
+            "title": "Ein Forst am Eichenpass",
+            "hint": "Öffne ein Sammellager und hilf beiden Nachbardörfern.",
+            "goals": [{"type": "camps","count": 1}]
+          },
+          "districts": [
+            ["Water","Der Mühlbach führt wenig Wasser. Ein Brunnen am örtlichen Weg versorgt den alten Mühlenhof."],
+            ["Shelter","Die Familien am Pass suchen eine ausgebaute Hütte an ihrem Dorfweg."]
+          ],
+          "side": {
+            "title": "Die Pfade der Förster",
+            "hint": "Ein Försterhof am Weg pflegt den Eichenwald. Schick das Nilpferd zum Sammeln.",
+            "goals": [{"type": "building","kind": {"Civic": "Forester"},"count": 1,"roadside": true},{"type": "hippoDeliveries","count": 3}]
+          }
+        }
+      },
+      {
+        "name": "Quellbogen",
+        "subtitle": "Das Bündnis der drei Quellen",
+        "lore": "Die Höfe am Quellbogen bitten um Speicher und Versorgung. Führe sie mit einer lebendigen Stadt zusammen.",
+        "rival": "Hüterin Alva",
+        "quests": {
+          "request": "Stein für die Quellkammer",
+          "offering": ["Stone",16],
+          "preparation": {
+            "title": "Vorräte für den Quellbogen",
+            "hint": "Baue eine Werkstatt. Errichte danach einen Speicher am Weg und sammle Nahrung.",
+            "goals": [{"type": "building","kind": "Granary","count": 1,"roadside": true},{"type": "reserve","material": "Food","count": 16}]
+          },
+          "finale": {
+            "title": "Ein Weg für die Fuhrwerke",
+            "hint": "Baue fünf neue Wegfelder und kümmere dich um beide Nachbardörfer.",
+            "goals": [{"type": "roads","count": 5}]
+          },
+          "districts": [
+            ["Trade","Am Quellbogen tauschen die Höfe Mehl gegen Baumaterial. Gib ihnen einen Markt am örtlichen Weg."],
+            ["Shelter","Die Kutscher suchen eine ausgebaute Hütte am Weg für die Übernachtung."]
+          ],
+          "side": {
+            "title": "Mehl für die Höfe",
+            "hint": "Schließe eine Backstube ans Wegenetz an und sorge für regelmäßige Ernten.",
+            "goals": [{"type": "building","kind": {"Civic": "Bakery"},"count": 1,"roadside": true},{"type": "harvests","count": 3}]
+          }
+        }
+      }
     ]
   },
   {
-    "biome":"Fjord",
-    "chapters":[
-      {"name":"Kiefernbucht","subtitle":"Das erste Feuer","lore":"An der Kiefernbucht wartet ein Holzhaus auf den Winter. Halte das Feuer am Schrein wach."},
-      {"name":"Runensund","subtitle":"Der Ruf der Runensteine","lore":"Ein neuer Fjord trennt zwei Hallen. Leuchtsignale führen Händler und Gläubige durch den Schnee.","rival":"Sigrun vom Runenufer"},
-      {"name":"Nordlichtpforte","subtitle":"Die letzte Thingnacht","lore":"Unter dem Nordlicht beraten die Siedlungen, wie sie den langen Winter teilen. Versorge beide Ufer und führe das Thing zusammen.","rival":"Die Thingwache"}
+    "biome": "Fjord",
+    "chapters": [
+      {
+        "name": "Kiefernbucht",
+        "subtitle": "Das erste Feuer",
+        "lore": "An der Kiefernbucht wartet ein Holzhaus auf den Winter. Halte das Feuer am Schrein wach.",
+        "quests": {
+          "request": "Brennholz für den Frost",
+          "offering": ["Wood",16],
+          "preparation": {
+            "title": "Das Feuer der Kiefernbucht",
+            "hint": "Lagere Brennholz ein und lass das Nilpferd mindestens ein Bündel abliefern.",
+            "goals": [{"type": "hippoDeliveries","count": 1},{"type": "reserve","material": "Wood","count": 20}]
+          },
+          "finale": {
+            "title": "Wintervorrat für die Bucht",
+            "hint": "Baue einen Speicher am Dorfweg. Hilf auch den beiden Nachbardörfern.",
+            "goals": [{"type": "building","kind": "Granary","count": 1,"roadside": true}]
+          },
+          "side": {
+            "title": "Ein Dach vor dem Frost",
+            "hint": "Baue nach der Werkstatt eine Hütte am Weg aus und fülle den Holzvorrat.",
+            "goals": [{"type": "building","kind": "House","count": 1,"roadside": true,"upgraded": true},{"type": "reserve","material": "Wood","count": 25}]
+          }
+        }
+      },
+      {
+        "name": "Runensund",
+        "subtitle": "Der Ruf der Runensteine",
+        "lore": "Ein neuer Fjord trennt zwei Hallen. Leuchtsignale führen Händler und Gläubige durch den Schnee.",
+        "rival": "Sigrun vom Runenufer",
+        "quests": {
+          "request": "Proviant für die Lotsen",
+          "offering": ["Food",15],
+          "preparation": {
+            "title": "Ein Winterquartier am Runensund",
+            "hint": "Baue eine Werkstatt und erweitere eine Hütte am Weg. Halte Brennholz bereit.",
+            "goals": [{"type": "building","kind": "House","count": 1,"roadside": true,"upgraded": true},{"type": "reserve","material": "Wood","count": 22}]
+          },
+          "finale": {
+            "title": "Wache am Runensund",
+            "hint": "Stelle einen Wachturm am Weg auf und gewinne die beiden Nachbardörfer.",
+            "goals": [{"type": "building","kind": "Tower","count": 1,"roadside": true}]
+          },
+          "districts": [
+            ["Shelter","Am Wachfeuer suchen die Lotsen eine ausgebaute Hütte am örtlichen Weg."],
+            ["Patrol","Am Nordlichtbogen brauchen die Schiffer einen Wachturm neben dem örtlichen Weg."]
+          ],
+          "side": {
+            "title": "Ein Feuer für die Halle",
+            "hint": "Eine Winterhalle am Dorfweg wärmt die Gläubigen im Schnee. Lagere Brennholz ein.",
+            "goals": [{"type": "building","kind": {"Civic": "WinterHall"},"count": 1,"roadside": true},{"type": "reserve","material": "Wood","count": 18}]
+          }
+        }
+      },
+      {
+        "name": "Nordlichtpforte",
+        "subtitle": "Die letzte Thingnacht",
+        "lore": "Unter dem Nordlicht beraten die Siedlungen, wie sie den langen Winter teilen. Versorge beide Ufer und führe das Thing zusammen.",
+        "rival": "Die Thingwache",
+        "quests": {
+          "request": "Schiefer für die Thingstätte",
+          "offering": ["Stone",20],
+          "preparation": {
+            "title": "Wacht am Nordlicht",
+            "hint": "Baue eine Werkstatt und danach einen Wachturm am Weg. Sammle Holz für den langen Winter.",
+            "goals": [{"type": "building","kind": "Tower","count": 1,"roadside": true},{"type": "reserve","material": "Wood","count": 24}]
+          },
+          "finale": {
+            "title": "Das Thing der beiden Ufer",
+            "hint": "Öffne zwei Sammellager, damit die Vorräte über den Winter reichen, und vereine die Nachbardörfer.",
+            "goals": [{"type": "camps","count": 2}]
+          },
+          "districts": [
+            ["Patrol","Die Wachen bitten um einen Turm am örtlichen Weg, damit die Thingstätte geschützt ist."],
+            ["Trade","Die Schiffer wollen ihre Wintervorräte auf einem Markt am örtlichen Weg tauschen."]
+          ],
+          "side": {
+            "title": "Die Lichter am Pass",
+            "hint": "Schließe ein Signalfeuer und eine Winterhalle ans Wegenetz an.",
+            "goals": [{"type": "building","kind": {"Civic": "Beacon"},"count": 1,"roadside": true},{"type": "building","kind": {"Civic": "WinterHall"},"count": 1,"roadside": true}]
+          }
+        }
+      }
     ]
   },
   {
-    "biome":"Terraces",
-    "chapters":[
-      {"name":"Reisterrassen","subtitle":"Das Wasser der oberen Felder","lore":"Unter Perlnebel führen Terrassen zum Fluss. Die Hüter der Schleusen warten auf ein Zeichen."},
-      {"name":"Kranichschlucht","subtitle":"Die Schleuse der Kraniche","lore":"Erlen und rote Ahornhaine säumen den neuen Kanal. Ein Saatpavillon kann die Felder wieder verbinden.","rival":"Die Kranichschiffer"},
-      {"name":"Jadekessel","subtitle":"Die Reisschalen der Dämmerung","lore":"Große Reisfelder liegen zwischen Felsstufen. Zwei Dörfer brauchen eine gemeinsame Straße und verlässliche Versorgung.","rival":"Meisterin Lin"}
+    "biome": "Terraces",
+    "chapters": [
+      {
+        "name": "Reisterrassen",
+        "subtitle": "Das Wasser der oberen Felder",
+        "lore": "Unter Perlnebel führen Terrassen zum Fluss. Die Hüter der Schleusen warten auf ein Zeichen.",
+        "quests": {
+          "request": "Stein für die gemeinsame Rinne",
+          "offering": ["Stone",13],
+          "preparation": {
+            "title": "Saat an den oberen Feldern",
+            "hint": "Bewässere die Saat mit Regenschauern. Ernte reife Felder mit der Pfote.",
+            "goals": [{"type": "harvests","count": 2}]
+          },
+          "finale": {
+            "title": "Wasser für beide Ufer",
+            "hint": "Schließe einen Brunnen ans Wegenetz an und löse die Bitten der Nachbarn.",
+            "goals": [{"type": "building","kind": "Well","count": 1,"roadside": true}]
+          },
+          "side": {
+            "title": "Saatgut aus den Terrassen",
+            "hint": "Baue zwei Felder am Weg aus und bring vier Ernten ein.",
+            "goals": [{"type": "building","kind": "Field","count": 2,"roadside": true,"upgraded": true},{"type": "harvests","count": 4}]
+          }
+        }
+      },
+      {
+        "name": "Kranichschlucht",
+        "subtitle": "Die Schleuse der Kraniche",
+        "lore": "Erlen und rote Ahornhaine säumen den neuen Kanal. Ein Saatpavillon kann die Felder wieder verbinden.",
+        "rival": "Die Kranichschiffer",
+        "quests": {
+          "request": "Reis für die Schleusenwacht",
+          "offering": ["Food",16],
+          "preparation": {
+            "title": "Die Saat der Kraniche",
+            "hint": "Baue mit einer Werkstatt ein Feld am Weg aus. Bewässere die Saat und ernte zweimal.",
+            "goals": [{"type": "building","kind": "Field","count": 1,"roadside": true,"upgraded": true},{"type": "harvests","count": 2}]
+          },
+          "finale": {
+            "title": "Die Wasserverteilung",
+            "hint": "Verbinde zwei Brunnen mit dem Wegenetz und hilf den beiden Nachbardörfern.",
+            "goals": [{"type": "building","kind": "Well","count": 2,"roadside": true}]
+          },
+          "districts": [
+            ["Water","Das obere Wehr braucht am Dorfweg einen Brunnen als gemeinsame Wasserstelle."],
+            ["Patrol","Am Lotussteg bitten die Schleusenwärter um einen Wachturm am örtlichen Weg."]
+          ],
+          "side": {
+            "title": "Der Pavillon am Kanal",
+            "hint": "Forsche nach Familienhöfen und baue einen Saatpavillon am Weg. Bring drei Ernten ein.",
+            "goals": [{"type": "building","kind": {"Civic": "SeedPavilion"},"count": 1,"roadside": true},{"type": "harvests","count": 3}]
+          }
+        }
+      },
+      {
+        "name": "Jadekessel",
+        "subtitle": "Die Reisschalen der Dämmerung",
+        "lore": "Große Reisfelder liegen zwischen Felsstufen. Zwei Dörfer brauchen eine gemeinsame Straße und verlässliche Versorgung.",
+        "rival": "Meisterin Lin",
+        "quests": {
+          "request": "Stein für die Stufenbecken",
+          "offering": ["Stone",20],
+          "preparation": {
+            "title": "Drei Ernten im Jadekessel",
+            "hint": "Versorge die Felder von zwei Brunnen am Dorfweg aus und bring drei Ernten ein.",
+            "goals": [{"type": "building","kind": "Well","count": 2,"roadside": true},{"type": "harvests","count": 3}]
+          },
+          "finale": {
+            "title": "Der gemeinsame Reisweg",
+            "hint": "Öffne ein Sammellager für die Reisbauern und gewinne die beiden Nachbardörfer.",
+            "goals": [{"type": "camps","count": 1}]
+          },
+          "districts": [
+            ["Trade","Am Kranichwehr soll ein Markt am örtlichen Weg Platz für Reishändler schaffen."],
+            ["Water","Das Dorf am Lotussteg will einen Brunnen am Weg, um die Becken regelmäßig zu füllen."]
+          ],
+          "side": {
+            "title": "Saatgut für den ganzen Kessel",
+            "hint": "Baue einen Saatpavillon und zwei ausgebaute Felder am Weg.",
+            "goals": [{"type": "building","kind": {"Civic": "SeedPavilion"},"count": 1,"roadside": true},{"type": "building","kind": "Field","count": 2,"roadside": true,"upgraded": true}]
+          }
+        }
+      }
     ]
   },
   {
-    "biome":"Lake",
-    "chapters":[
-      {"name":"Papyrusufer","subtitle":"Wasser für das Schilfdorf","lore":"Am warmen See teilen sich Akazien und Papyrus den Ufersaum. Durch Trockenzeit und Handel kann das junge Dorf wachsen."},
-      {"name":"Akazienbogen","subtitle":"Der Pfad zwischen den Brunnen","lore":"Über rötliche Terrassen führen Karawanenwege zum See. Brunnen und Wege halten die Siedlungen auch in der Trockenzeit zusammen.","rival":"Die Brunnenhüter"},
-      {"name":"Sonnenoase","subtitle":"Das Fest der Datteln","lore":"Die Höfe am langen Seeufer bringen ihre Ernten zur Oase. Eine Stadt aus Sandstein soll den letzten Handelspfad schützen.","rival":"Der Rat von Nuru"}
+    "biome": "Lake",
+    "chapters": [
+      {
+        "name": "Papyrusufer",
+        "subtitle": "Wasser für das Schilfdorf",
+        "lore": "Am warmen See teilen sich Akazien und Papyrus den Ufersaum. Durch Trockenzeit und Handel kann das junge Dorf wachsen.",
+        "quests": {
+          "request": "Nahrung für die Trockenzeit",
+          "offering": ["Food",15],
+          "preparation": {
+            "title": "Der erste Brunnen am See",
+            "hint": "Baue einen Brunnen am Dorfweg und verlängere das Wegenetz um drei Felder.",
+            "goals": [{"type": "building","kind": "Well","count": 1,"roadside": true},{"type": "roads","count": 3}]
+          },
+          "finale": {
+            "title": "Ein Tauschplatz im Schilf",
+            "hint": "Richte einen Markt am Weg ein und kümmere dich um die beiden Nachbardörfer.",
+            "goals": [{"type": "building","kind": "Market","count": 1,"roadside": true}]
+          },
+          "side": {
+            "title": "Vorrat für die Trockenzeit",
+            "hint": "Sichere Nahrung und verbinde zwei Brunnen mit dem Wegenetz.",
+            "goals": [{"type": "building","kind": "Well","count": 2,"roadside": true},{"type": "reserve","material": "Food","count": 23}]
+          }
+        }
+      },
+      {
+        "name": "Akazienbogen",
+        "subtitle": "Der Pfad zwischen den Brunnen",
+        "lore": "Über rötliche Terrassen führen Karawanenwege zum See. Brunnen und Wege halten die Siedlungen auch in der Trockenzeit zusammen.",
+        "rival": "Die Brunnenhüter",
+        "quests": {
+          "request": "Sandstein für die Zisternen",
+          "offering": ["Stone",17],
+          "preparation": {
+            "title": "Der Pfad zwischen den Brunnen",
+            "hint": "Verbinde zwei Brunnen mit dem Dorfweg und baue sechs neue Wegfelder.",
+            "goals": [{"type": "building","kind": "Well","count": 2,"roadside": true},{"type": "roads","count": 6}]
+          },
+          "finale": {
+            "title": "Eine Station für die Karawanen",
+            "hint": "Öffne ein Sammellager als Rastplatz und löse die Bitten der Nachbarn.",
+            "goals": [{"type": "camps","count": 1}]
+          },
+          "districts": [
+            ["Water","Die Reisenden an der Akazienrast brauchen einen Brunnen am örtlichen Weg."],
+            ["Water","Schilfkrone bittet um einen neuen Brunnen neben dem Dorfweg für die nächste Trockenzeit."]
+          ],
+          "side": {
+            "title": "Die Wasserterrasse am See",
+            "hint": "Erforsche Wasserkunst und baue eine Wasserterrasse am Ufer mit Weganschluss.",
+            "goals": [{"type": "building","kind": {"Civic": "WaterTerrace"},"count": 1,"roadside": true},{"type": "reserve","material": "Food","count": 18}]
+          }
+        }
+      },
+      {
+        "name": "Sonnenoase",
+        "subtitle": "Das Fest der Datteln",
+        "lore": "Die Höfe am langen Seeufer bringen ihre Ernten zur Oase. Eine Stadt aus Sandstein soll den letzten Handelspfad schützen.",
+        "rival": "Der Rat von Nuru",
+        "quests": {
+          "request": "Datteln für das Oasenfest",
+          "offering": ["Food",22],
+          "preparation": {
+            "title": "Der Markt der Sonnenoase",
+            "hint": "Errichte einen Markt am Dorfweg. Für die Handelszüge brauchen wir sieben neue Wegfelder.",
+            "goals": [{"type": "building","kind": "Market","count": 1,"roadside": true},{"type": "roads","count": 7}]
+          },
+          "finale": {
+            "title": "Der große Dattelspeicher",
+            "hint": "Baue einen Speicher am Dorfweg und bring beide Nachbardörfer zusammen.",
+            "goals": [{"type": "building","kind": "Granary","count": 1,"roadside": true}]
+          },
+          "districts": [
+            ["Trade","Die Karawane will an der Akazienrast einen Markt am örtlichen Weg."],
+            ["Shelter","Die Händler von Schilfkrone bitten um eine ausgebaute Hütte am Weg."]
+          ],
+          "side": {
+            "title": "Die reich beladene Karawane",
+            "hint": "Baue den Markt am Weg aus und halte einen Vorrat von 26 Datteln.",
+            "goals": [{"type": "building","kind": "Market","count": 1,"roadside": true,"upgraded": true},{"type": "reserve","material": "Food","count": 26}]
+          }
+        }
+      }
     ]
   },
   {
-    "biome":"Aegean",
-    "chapters":[
-      {"name":"Ägäisbogen","subtitle":"Die Stimme der Oliveninseln","lore":"Aiolos wartet auf das Fest der Winde. Am Ägäisbogen wachsen Oliven zwischen Kalkstein und dem Meer."},
-      {"name":"Korallenpass","subtitle":"Die Händler an der Doppelmole","lore":"Die Inseln tauschen Amphoren und Zypressenholz. Verbinde die Ufer und gewinne den alten Olivenhafen.","rival":"Die Händler von Nerea"},
-      {"name":"Sternenhafen","subtitle":"Das letzte Fest der Winde","lore":"Die Siedlungen bauen Bühnen und warten auf das Orakel. Im Sternenhafen entscheidet sich, wer die Küste zusammenführt.","rival":"Der Rat der Aioliden"}
+    "biome": "Aegean",
+    "chapters": [
+      {
+        "name": "Ägäisbogen",
+        "subtitle": "Die Stimme der Oliveninseln",
+        "lore": "Aiolos wartet auf das Fest der Winde. Am Ägäisbogen wachsen Oliven zwischen Kalkstein und dem Meer.",
+        "quests": {
+          "request": "Oliven und Brot für Aiolos",
+          "offering": ["Food",18],
+          "preparation": {
+            "title": "Handel am Ägäisbogen",
+            "hint": "Richte nach der Werkstatt einen Markt am Dorfweg ein und sammle Oliven.",
+            "goals": [{"type": "building","kind": "Market","count": 1,"roadside": true},{"type": "reserve","material": "Food","count": 14}]
+          },
+          "finale": {
+            "title": "Das erste Öl für Aiolos",
+            "hint": "Forsche nach Werkbänken. Eine Steinmetzerei liefert Quader für die Olivenpresse am Weg.",
+            "goals": [{"type": "building","kind": {"Civic": "OlivePress"},"count": 1,"roadside": true},{"type": "olivePressings","count": 1}]
+          },
+          "side": {
+            "title": "Das Lied des Orakels",
+            "hint": "Schließe ein Theater und ein Orakel ans Wegenetz an.",
+            "goals": [{"type": "building","kind": {"Civic": "Theater"},"count": 1,"roadside": true},{"type": "building","kind": {"Civic": "Oracle"},"count": 1,"roadside": true}]
+          }
+        }
+      },
+      {
+        "name": "Korallenpass",
+        "subtitle": "Die Händler an der Doppelmole",
+        "lore": "Die Inseln tauschen Amphoren und Zypressenholz. Verbinde die Ufer und gewinne den alten Olivenhafen.",
+        "rival": "Die Händler von Nerea",
+        "quests": {
+          "request": "Kalkstein für die Doppelmole",
+          "offering": ["Stone",20],
+          "preparation": {
+            "title": "Die Pressen am Korallenpass",
+            "hint": "Schließe eine Olivenpresse ans Wegenetz an. Mit genug Oliven presst sie selbstständig Öl.",
+            "goals": [{"type": "building","kind": {"Civic": "OlivePress"},"count": 1,"roadside": true},{"type": "olivePressings","count": 2}]
+          },
+          "finale": {
+            "title": "Das Lager an der Doppelmole",
+            "hint": "Öffne ein Sammellager und kümmere dich um die beiden Nachbardörfer.",
+            "goals": [{"type": "camps","count": 1}]
+          },
+          "districts": [
+            ["Trade","Die Händler von Olivenhafen wollen einen Markt am örtlichen Weg für ihre Amphoren."],
+            ["Patrol","Die Fischer an den Sternenstufen bitten um einen Wachturm am Uferweg."]
+          ],
+          "side": {
+            "title": "Handel über das Meer",
+            "hint": "Erforsche Handelsrouten und baue einen Hafenplatz am Wasser mit Weganschluss.",
+            "goals": [{"type": "building","kind": {"Civic": "Port"},"count": 1,"roadside": true},{"type": "reserve","material": "Stone","count": 18}]
+          }
+        }
+      },
+      {
+        "name": "Sternenhafen",
+        "subtitle": "Das letzte Fest der Winde",
+        "lore": "Die Siedlungen bauen Bühnen und warten auf das Orakel. Im Sternenhafen entscheidet sich, wer die Küste zusammenführt.",
+        "rival": "Der Rat der Aioliden",
+        "quests": {
+          "request": "Zypressenholz für die Bühne",
+          "offering": ["Wood",23],
+          "preparation": {
+            "title": "Eine Bühne für den Sternenhafen",
+            "hint": "Erforsche Feste und Spiele. Baue ein Theater am Dorfweg und sammle Oliven für die Gäste.",
+            "goals": [{"type": "building","kind": {"Civic": "Theater"},"count": 1,"roadside": true},{"type": "reserve","material": "Food","count": 15}]
+          },
+          "finale": {
+            "title": "Das letzte Fest der Winde",
+            "hint": "Lass die angeschlossene Olivenpresse dreimal Öl pressen und vereine die Nachbardörfer.",
+            "goals": [{"type": "olivePressings","count": 3}]
+          },
+          "districts": [
+            ["Shelter","Die Sänger von Olivenhafen suchen eine ausgebaute Hütte am örtlichen Weg."],
+            ["Trade","Zum Fest wollen die Höfe an den Sternenstufen einen Markt neben ihrem Dorfweg."]
+          ],
+          "side": {
+            "title": "Die Weissagung am Hafen",
+            "hint": "Erforsche Lieder und Weissagung. Ein Orakel am Dorfweg hält das Fest in Erinnerung.",
+            "goals": [{"type": "building","kind": {"Civic": "Oracle"},"count": 1,"roadside": true}]
+          }
+        }
+      }
     ]
   }
 ]

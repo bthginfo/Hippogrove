@@ -23,7 +23,7 @@ use crate::{
     play::{CameraRig, Panel, Play, Tool, UiAction},
     region::{CELL, Material, Tile},
     terrain,
-    view::WorldCamera,
+    view::{Board, WorldCamera},
 };
 
 const SOUTH: u32 = 1;
@@ -439,6 +439,7 @@ pub fn collect(
     mut play: ResMut<Play>,
     mut game: ResMut<Game>,
     mut view: ResMut<CameraRig>,
+    board: Res<Board>,
 ) {
     let (entity, window) = *window;
     let (camera, pose) = *camera;
@@ -456,7 +457,7 @@ pub fn collect(
     for event in focus.read().filter(|event| event.window == entity) {
         play.paused = !event.focused;
     }
-    if play.paused {
+    if play.paused || board.loading(&game) {
         controls.fingers.clear();
         controls.touch = None;
         controls.mouse = None;

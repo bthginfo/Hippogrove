@@ -3,7 +3,11 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{modes::Layout, terrain};
+use crate::{modes::Layout, quests::CampaignQuests, terrain};
+
+mod geography;
+use geography::Geography;
+pub use geography::WorldLayout;
 
 const ORIGIN: Vec2 = Vec2::new(17., 13.);
 pub const CELL: f32 = 1.65;
@@ -283,7 +287,11 @@ pub struct Region {
     #[serde(skip)]
     pub sandbox: bool,
     #[serde(skip)]
+    pub quests: Option<&'static CampaignQuests>,
+    #[serde(skip)]
     layout: Layout,
+    #[serde(skip)]
+    geography: Option<Geography>,
     #[serde(skip)]
     cells: Vec<u8>,
     #[serde(skip)]
@@ -304,12 +312,12 @@ impl Region {
         let (mut regions, frontiers) = Self::authored();
         assert_eq!(regions.len(), frontiers.len());
         for (region, frontier) in regions.iter_mut().zip(frontiers) {
-            region.extend(frontier);
+            region.extend(frontier, WorldLayout::Classic);
         }
         regions
     }
 
-    pub fn themed(biome: Biome, stage: usize) -> Self {
+    pub fn themed(biome: Biome, stage: usize, world_layout: WorldLayout) -> Self {
         let (mut regions, mut frontiers) = Self::authored();
         let mut region = regions.remove(biome as usize);
         let mut frontier = frontiers.remove(biome as usize);
@@ -347,7 +355,7 @@ impl Region {
                 region.starter_plots = vec![Tile(19, 18), Tile(12, 17), Tile(20, 21)];
             }
             for tile in &mut region.starter_plots {
-                *tile = transform(*tile).offset(if layout.mirror { -1 } else { 0 }, 0);
+                *tile = layout.plot(*tile);
             }
             frontier.bounds = bounds(frontier.bounds);
             for (i, ridge) in frontier.ridges.iter_mut().enumerate() {
@@ -361,8 +369,8 @@ impl Region {
                 area.center = transform(area.center);
             }
         }
-        region.extend(frontier);
-        if stage > 0 {
+        region.extend(frontier, world_layout);
+        if stage > 0 || world_layout == WorldLayout::Regional {
             region.keep_starter_plots_clear();
         }
         region
@@ -370,6 +378,7 @@ impl Region {
 
     fn keep_starter_plots_clear(&mut self) {
         let wants = std::mem::take(&mut self.starter_plots);
+        let reserved_shrine = self.geography.is_some().then_some(self.frontier);
         let residents = [
             self.depot.offset(0, 1),
             self.start.offset(-1, 0),
@@ -395,6 +404,7 @@ impl Region {
                             && !self.rocky(cell)
                             && !self.road(cell)
                             && !self.fixed_structure(cell)
+                            && Some(cell) != reserved_shrine
                             && !residents.contains(&cell)
                             && self.source_at(cell).is_none()
                             && self
@@ -417,12 +427,23 @@ impl Region {
         self.layout.stage
     }
 
-    fn extend(&mut self, frontier: Frontier) {
+    pub fn world_layout(&self) -> WorldLayout {
+        if self.geography.is_some() {
+            WorldLayout::Regional
+        } else {
+            WorldLayout::Classic
+        }
+    }
+
+    fn extend(&mut self, frontier: Frontier, world_layout: WorldLayout) {
         self.original_bounds = Some(self.bounds);
         self.original_sources = self.sources.len();
         self.bounds = frontier.bounds;
         self.ridges = frontier.ridges;
         self.areas = frontier.areas.into();
+        if world_layout == WorldLayout::Regional {
+            self.geography = Some(Geography::apply_to(self));
+        }
         self.cells = self
             .bounds
             .tiles()
@@ -589,6 +610,13 @@ impl Region {
     }
 
     pub fn river_at(&self, column: i16) -> i16 {
+        self.geography.as_ref().map_or_else(
+            || self.classic_river_at(column),
+            |shape| shape.channel(column).0,
+        )
+    }
+
+    fn classic_river_at(&self, column: i16) -> i16 {
         let column = self.layout.original_x(column);
         let delta = column - self.layout.original_x(self.cross_x);
         let outer = f32::from((column - 33).max(0) - (-column).max(0));
@@ -620,6 +648,9 @@ impl Region {
     }
 
     fn sample_water(&self, tile: Tile) -> bool {
+        if self.geography.is_some() {
+            return terrain::shore(self, tile.local()) < 0.;
+        }
         self.in_channel(tile)
             || (self.kind == Biome::Aegean && self.island_shore(tile.local()) <= 0.)
     }
@@ -630,6 +661,10 @@ impl Region {
     }
 
     pub fn island_shore(&self, place: Vec2) -> f32 {
+        let islets = self
+            .geography
+            .as_ref()
+            .map_or(f32::NEG_INFINITY, |shape| shape.islet_shore(place));
         let place = self.layout.original_point(place);
         let coast = (place.x * 0.31 + place.y * 0.45).sin() * 0.075;
         [
@@ -648,7 +683,13 @@ impl Region {
         .map(|(center, radius)| {
             (1. + coast - ((place - center) / radius).length_squared()) * radius.min_element() * 0.5
         })
-        .fold(f32::NEG_INFINITY, f32::max)
+        .fold(islets, f32::max)
+    }
+
+    pub fn basin_shore(&self, point: Vec2) -> f32 {
+        self.geography
+            .as_ref()
+            .map_or(f32::INFINITY, |shape| shape.basin_shore(self.kind, point))
     }
 
     pub fn rocky(&self, tile: Tile) -> bool {
@@ -670,6 +711,13 @@ impl Region {
     }
 
     pub fn river_span(&self, column: i16) -> i16 {
+        self.geography.as_ref().map_or_else(
+            || self.classic_river_span(column),
+            |shape| shape.channel(column).1,
+        )
+    }
+
+    fn classic_river_span(&self, column: i16) -> i16 {
         let column = self.layout.original_x(column);
         let outer = (column - 33).max(-column).max(0);
         self.water_width

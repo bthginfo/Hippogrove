@@ -118,16 +118,20 @@ pub fn landscape(
         for x in (left..right).step_by(CHUNK as usize) {
             let end = Tile((x + CHUNK).min(right), (z + CHUNK).min(south));
             let (ground, water, foam) = chunk(region, &palette, Tile(x, z), end);
-            for (geometry, material) in [
-                (ground, &art.ground),
-                (water, &art.water),
-                (foam, &art.foam),
+            for (geometry, material, build_mesh) in [
+                (
+                    ground,
+                    &art.terrain_surface,
+                    Geometry::terrain_mesh as fn(Geometry) -> Mesh,
+                ),
+                (water, &art.water, Geometry::render_mesh),
+                (foam, &art.foam, Geometry::render_mesh),
             ] {
                 if geometry.positions.is_empty() {
                     continue;
                 }
                 parent.spawn((
-                    Mesh3d(meshes.add(geometry.render_mesh())),
+                    Mesh3d(meshes.add(build_mesh(geometry))),
                     MeshMaterial3d(material.clone()),
                     Transform::default(),
                     NotShadowCaster,
@@ -162,7 +166,8 @@ pub fn forest_mesh(region: &Region, patch: ForestPatch, city: &Settlement) -> Me
 
 fn forest_geometry(region: &Region, patch: ForestPatch, occupied: &BTreeSet<Tile>) -> Geometry {
     let mut mesh = Geometry::default();
-    let cliff = rgb(Palette::for_biome(region.kind).cliff);
+    let palette = Palette::for_biome(region.kind);
+    let cliff = rgb(palette.cliff);
     for tile in patch.0.tiles() {
         let Tile(x, z) = tile;
         if region.water(tile)
@@ -224,9 +229,43 @@ fn forest_geometry(region: &Region, patch: ForestPatch, occupied: &BTreeSet<Tile
                     key >> 10,
                 );
             }
+        } else if (clearing || coast < 1.6) && !region.rocky(tile) && key % 100 < 21 {
+            wildflowers(&mut mesh, region, &palette, p, key);
         }
     }
     mesh
+}
+
+fn wildflowers(ground: &mut Geometry, region: &Region, palette: &Palette, center: Vec3, key: u32) {
+    let leaves = rgb(palette.grass[0]).mix(&rgb(0x4a693b), 0.46);
+    let petal = rgb(palette.flower);
+    let turn = Quat::from_rotation_y((key & 31) as f32 * 0.203);
+    for (index, position) in [(-0.23, 0.10), (0.11, -0.18), (0.22, 0.16)]
+        .into_iter()
+        .enumerate()
+    {
+        let base = terrain::on_ground(
+            region,
+            center + turn * Vec3::new(position.0, 0., position.1),
+        );
+        let stem = base + Vec3::Y * (0.20 + index as f32 * 0.07);
+        for side in [-1., 1.] {
+            let tip = base + turn * Vec3::new(side * 0.18, 0.13, -0.011);
+            let bend = base + turn * Vec3::new(side * 0.065, 0.098, 0.055);
+            ground.tri(base, bend, tip, leaves);
+            ground.tri(tip, bend, base, leaves);
+        }
+        ground.tri(base + Vec3::X * 0.018, stem, base - Vec3::X * 0.018, leaves);
+        ground.tri(base - Vec3::X * 0.018, stem, base + Vec3::X * 0.018, leaves);
+        for ring in 0..5 {
+            let angle = ring as f32 * std::f32::consts::TAU / 5.;
+            let reach = Vec3::new(angle.cos(), 0.34, angle.sin());
+            let across = Vec3::Y.cross(reach) * 0.034;
+            let tip = stem + reach * 0.095;
+            ground.quad(stem, tip - across, tip + reach * 0.025, tip + across, petal);
+        }
+        ground.flat_box(stem + Vec3::Y * 0.014, 0.022, 0.022, rgb(0xe9b666));
+    }
 }
 
 fn chunk(

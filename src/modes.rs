@@ -1,6 +1,11 @@
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
-use crate::region::{Biome, DistrictNeed, Region, Tile};
+use crate::{
+    quests::CampaignQuests,
+    region::{Biome, DistrictNeed, Region, Tile, WorldLayout},
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Mode {
@@ -27,38 +32,67 @@ impl Mode {
         matches!(self, Self::Sandbox(_))
     }
 
-    pub fn regions(self) -> Vec<Region> {
+    pub fn regions(self, world_layout: impl Fn(usize) -> WorldLayout) -> Vec<Region> {
         let biome = match self {
             Self::Chronicle => return Region::campaign(),
             Self::Campaign(biome) | Self::Sandbox(biome) => biome,
         };
-        let themes: Vec<Theme> = serde_json::from_str(include_str!("../assets/world/themes.json"))
-            .expect("The embedded campaign descriptions must be valid");
+        static THEMES: OnceLock<[Theme; 5]> = OnceLock::new();
+        let themes = THEMES.get_or_init(|| {
+            serde_json::from_str(include_str!("../assets/world/themes.json"))
+                .expect("The embedded campaign descriptions must be valid")
+        });
         let theme = themes
-            .into_iter()
+            .iter()
             .find(|theme| theme.biome == biome)
-            .unwrap();
-        theme.chapters.into_iter().enumerate().take(if self.sandbox() { 1 } else { 3 })
+            .expect("Each biome has a campaign");
+        theme
+            .chapters
+            .iter()
+            .enumerate()
+            .take(if self.sandbox() { 1 } else { 3 })
             .map(|(index, chapter)| {
-                let mut region = Region::themed(biome, index);
-                region.name = chapter.name;
-                region.subtitle = chapter.subtitle;
-                region.lore = chapter.lore;
-                if let Some(rival) = chapter.rival {
-                    region.rival = rival;
+                let layout = world_layout(index);
+                let mut region = Region::themed(biome, index, layout);
+                region.name.clone_from(&chapter.name);
+                region.subtitle.clone_from(&chapter.subtitle);
+                region.lore.clone_from(&chapter.lore);
+                if let Some(rival) = &chapter.rival {
+                    region.rival.clone_from(rival);
                 }
-                if index > 0 {
-                    region.gift.1 = region.gift.1.saturating_add(index as u16 + 2);
-                    region.renown += 3 * index as u16;
-                    let needs = [DistrictNeed::Water, DistrictNeed::Trade, DistrictNeed::Patrol, DistrictNeed::Shelter];
-                    for (i, district) in region.districts.iter_mut().enumerate() {
-                        district.need = needs[(biome as usize + index + i) % needs.len()];
-                    }
-                } else if self.sandbox() {
+                region.renown += 3 * index as u16;
+                if self.sandbox() {
                     region.guards.clear();
                     region.sandbox = true;
                     region.rival = "Ufergärten".into();
-                    region.lore = "Baue im ganzen Gebiet. Die Brücken sind offen, die Siedlungen sind friedlich und die Baupläne liegen bereit.".into();
+                    region.lore = concat!(
+                        "Baue im ganzen Gebiet. Die Brücken sind offen, ",
+                        "die Siedlungen sind friedlich und die Baupläne liegen bereit."
+                    )
+                    .into();
+                } else if layout == WorldLayout::Regional {
+                    let quests = &chapter.quests;
+                    region.request.clone_from(&quests.request);
+                    region.gift = quests.offering;
+                    if let Some(districts) = &quests.districts {
+                        for (district, (need, story)) in region.districts.iter_mut().zip(districts)
+                        {
+                            district.need = *need;
+                            district.story.clone_from(story);
+                        }
+                    }
+                    region.quests = Some(quests);
+                } else if index > 0 {
+                    region.gift.1 = region.gift.1.saturating_add(index as u16 + 2);
+                    let needs = [
+                        DistrictNeed::Water,
+                        DistrictNeed::Trade,
+                        DistrictNeed::Patrol,
+                        DistrictNeed::Shelter,
+                    ];
+                    for (i, district) in region.districts.iter_mut().enumerate() {
+                        district.need = needs[(biome as usize + index + i) % needs.len()];
+                    }
                 }
                 region
             })
@@ -78,6 +112,7 @@ struct Chapter {
     subtitle: String,
     lore: String,
     rival: Option<String>,
+    quests: CampaignQuests,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -107,6 +142,10 @@ impl Layout {
 
     pub fn tile(self, tile: Tile) -> Tile {
         Tile(if self.mirror { -tile.0 } else { tile.0 }, tile.1).offset(self.shift.0, self.shift.1)
+    }
+
+    pub fn plot(self, tile: Tile) -> Tile {
+        self.tile(tile).offset(-i16::from(self.mirror), 0)
     }
 
     pub fn original_x(self, x: i16) -> i16 {

@@ -62,11 +62,15 @@ impl Story {
                         }
                     },
                     "Da bist du. Die Gläubigen sehen deine Wolkenpfote und das kleine Nilpferd.",
-                    if region.kind == Biome::Valley {
-                        "Bring Holz zum Sammelplatz. Danach bauen wir das erste Zuhause."
-                    } else {
-                        "Die Felder brauchen Regen. Wirke dein erstes Wunder und bring die Ernte heim."
-                    },
+                    region
+                        .quests
+                        .and_then(|quests| quests.preparation.as_ref())
+                        .map(|step| step.hint.as_str())
+                        .unwrap_or(if region.kind == Biome::Valley {
+                            "Bring Holz zum Sammelplatz. Danach bauen wir das erste Zuhause."
+                        } else {
+                            "Die Felder brauchen Regen. Wirke dein erstes Wunder und bring die Ernte heim."
+                        }),
                 ],
                 [2.65, 3.0, 3.15],
             ),
@@ -90,7 +94,13 @@ impl Story {
                     (region.rival_shrine.offset(0, 1), 24.),
                 ],
                 [
-                    "Die letzten Bretter sitzen. Der Übergang hält.",
+                    match region.kind {
+                        Biome::Valley => "Die letzten Bretter sitzen. Die Holzbrücke hält.",
+                        Biome::Fjord => "Die Fischer haben den Fjordanleger festgebunden.",
+                        Biome::Terraces => "Der neue Wehrsteg verbindet die Saat der beiden Ufer.",
+                        Biome::Lake => "Der Schilfsteg trägt wieder Körbe und Wasserkrüge.",
+                        Biome::Aegean => "Über die Doppelmole kommen die Oliven aus beiden Dörfern.",
+                    },
                     "Hinter dem Fluss warten Menschen auf deine Antwort.",
                     "Bring ihnen die erbetene Gabe oder gewinne das Land mit deinen Wundern.",
                 ],

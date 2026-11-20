@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::civic::{Civic, Goods, Research, Tech, goods_text};
 use crate::modes::Mode;
+use crate::quests::QuestStep;
 use crate::region::{
     AREA_COUNT, AREA_RADIUS, Biome, CELL, DistrictNeed, Material, Region, Tile, Weather,
+    WorldLayout,
 };
 
 pub const SAVE_VERSION: u32 = 4;
@@ -589,6 +591,8 @@ impl Default for Society {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settlement {
+    #[serde(default)]
+    world_layout: WorldLayout,
     pub stock: Stock,
     pub faith: u16,
     pub mana: f32,
@@ -616,6 +620,8 @@ pub struct Settlement {
     pub helper_deliveries: u16,
     pub hippo_deliveries: u16,
     pub harvests: u16,
+    #[serde(default)]
+    pub olive_pressings: u16,
     pub lesson: Option<Lesson>,
     #[serde(default = "full_energy")]
     pub energy: f32,
@@ -642,6 +648,7 @@ fn full_energy() -> f32 {
 impl Settlement {
     pub fn new(region: &Region) -> Self {
         let mut city = Self {
+            world_layout: region.world_layout(),
             stock: region.initial,
             faith: 2,
             mana: 20.,
@@ -668,6 +675,7 @@ impl Settlement {
             helper_deliveries: 0,
             hippo_deliveries: 0,
             harvests: 0,
+            olive_pressings: 0,
             lesson: None,
             energy: full_energy(),
             recovering: false,
@@ -2028,6 +2036,7 @@ impl Settlement {
                 Civic::WinterHall if weather == Weather::Snow => morale += 11,
                 Civic::OlivePress if supplies => {
                     self.stock[2] -= 1;
+                    self.olive_pressings = self.olive_pressings.saturating_add(1);
                     self.faith =
                         self.faith
                             .saturating_add(if weather == Weather::Breeze { 5 } else { 3 });
@@ -2755,7 +2764,10 @@ impl Settlement {
         let mut price = [0; 3];
         price[material.index()] = amount;
         if !self.affordable(price) {
-            return Err(format!("Das Dorf bittet um {amount} {}.", material.name()));
+            return Err(format!(
+                "Das Dorf bittet um {amount} {}.",
+                region.kind.material(material)
+            ));
         }
         self.pay(price);
         self.gift_given = true;
@@ -2790,7 +2802,12 @@ impl Settlement {
                 self.faith = self.faith.saturating_add(4);
                 true
             }
-            Quest::Fields if self.harvests > 0 && self.count(Building::Field) > 0 => {
+            Quest::Fields
+                if self.quest_step(region).map_or_else(
+                    || self.harvests > 0 && self.count(Building::Field) > 0,
+                    |step| step.pending(self, region).is_none(),
+                ) =>
+            {
                 self.quest = Quest::Bridge;
                 self.faith = self.faith.max(region.faith);
                 true
@@ -2814,7 +2831,12 @@ impl Settlement {
                     false
                 }
             }
-            Quest::Districts if self.districts.iter().all(|state| state.outcome.is_some()) => {
+            Quest::Districts
+                if self.districts.iter().all(|state| state.outcome.is_some())
+                    && self
+                        .quest_step(region)
+                        .is_none_or(|step| step.pending(self, region).is_none()) =>
+            {
                 self.quest = Quest::Complete;
                 self.faith = self.faith.saturating_add(12);
                 true
@@ -2823,7 +2845,43 @@ impl Settlement {
         }
     }
 
+    pub fn quest_step(&self, region: &Region) -> Option<&'static QuestStep> {
+        let quests = region.quests?;
+        match self.quest {
+            Quest::Fields => quests.preparation.as_ref(),
+            Quest::Districts => quests.finale.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn quest_title(&self, region: &Region) -> &'static str {
+        if let Some(step) = self.quest_step(region) {
+            &step.title
+        } else if let (Quest::Bridge, Some(quests)) = (self.quest, region.quests) {
+            &quests.request
+        } else {
+            self.quest.name()
+        }
+    }
+
     pub fn objective(&self, region: &Region) -> (&'static str, String) {
+        if let Some(step) = self.quest_step(region) {
+            let action = step
+                .pending(self, region)
+                .map_or("Siedlungen vereinen", |goal| goal.prompt());
+            let progress = step.progress(self, region);
+            let progress = if self.quest == Quest::Districts {
+                let ready = self
+                    .districts
+                    .iter()
+                    .filter(|state| state.outcome.is_some())
+                    .count();
+                format!("{progress} · Nachbardörfer {ready}/2")
+            } else {
+                progress
+            };
+            return (action, format!("{}\n{progress}", step.hint));
+        }
         match self.quest {
             Quest::Shelter if self.hand_deliveries == 0 && self.held.is_some() => (
                 "Ladung ablegen",
@@ -2883,7 +2941,9 @@ impl Settlement {
             Quest::Bridge => (
                 "Übergang sichern",
                 format!(
-                    "Baue Ansehen ({}/{}) auf und erfülle die Bitte. Oder vertreibe die Wachen mit Windstößen.",
+                    "Repariere den Übergang und bring {} {} bei Ansehen {}/{}. Windstöße vertreiben die Wachen.",
+                    region.gift.1,
+                    region.kind.material(region.gift.0),
                     self.renown(),
                     region.renown
                 ),
@@ -2922,6 +2982,14 @@ impl Settlement {
     }
 
     pub fn local_quest(&self, region: &Region) -> (&'static str, String, bool) {
+        if let Some(quests) = region.quests {
+            let step = &quests.side;
+            return (
+                &step.title,
+                format!("{}\n{}", step.hint, step.progress(self, region)),
+                step.pending(self, region).is_none(),
+            );
+        }
         if region.chapter() > 0 {
             let hall = Civic::regional(region.kind);
             let crafted = self.service(region, hall);
@@ -3046,6 +3114,13 @@ impl Campaign {
             campaign.research = Research::all_plans();
         }
         campaign
+    }
+
+    fn world_layout(&self, chapter: usize) -> WorldLayout {
+        self.settlements
+            .get(chapter)
+            .and_then(Option::as_ref)
+            .map_or(WorldLayout::Regional, |city| city.world_layout)
     }
 
     pub fn restore(mut self, regions: &[Region]) -> Option<Self> {
@@ -3202,7 +3277,7 @@ impl Game {
     }
 
     pub fn start(mode: Mode) -> Self {
-        let mut game = Self::new(mode.regions(), None);
+        let mut game = Self::new(mode.regions(|_| WorldLayout::Regional), None);
         game.mode = mode;
         game
     }
@@ -3222,7 +3297,9 @@ impl Game {
             .iter()
             .position(|profile| profile.mode == saves.current)?;
         let profile = saves.profiles.swap_remove(selected);
-        let regions = profile.mode.regions();
+        let regions = profile
+            .mode
+            .regions(|chapter| profile.campaign.world_layout(chapter));
         let campaign = profile.campaign.restore(&regions)?;
         Some(Self {
             mode: profile.mode,
@@ -3253,14 +3330,16 @@ impl Game {
         if self.mode == mode {
             return Ok(mode.name().into());
         }
-        let regions = mode.regions();
         let entry = self
             .archives
             .iter()
             .position(|profile| profile.mode == mode);
-        let campaign = if let Some(index) = entry {
-            self.archives[index]
-                .campaign
+        let archived = entry.map(|index| &self.archives[index].campaign);
+        let regions = mode.regions(|chapter| {
+            archived.map_or(WorldLayout::Regional, |save| save.world_layout(chapter))
+        });
+        let campaign = if let Some(saved) = archived {
+            saved
                 .clone()
                 .restore(&regions)
                 .ok_or("Der Spielstand dieses Spielmodus konnte nicht gelesen werden.")?
@@ -3465,6 +3544,76 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_chapter_keeps_its_map_and_an_unvisited_chapter_gets_the_regional_layout() {
+        let mode = Mode::Campaign(Biome::Lake);
+        let mut previous = Game::new(mode.regions(|_| WorldLayout::Classic), None);
+        previous.mode = mode;
+        previous.campaign.unlocked = 1;
+        let pickup = previous.region().sources[0].tile;
+        previous.act(Action::Hand(pickup)).unwrap();
+        let mut data = serde_json::to_value(previous.saved_games()).unwrap();
+        data["profiles"][0]["campaign"]["settlements"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("world_layout");
+        let mut resumed = Game::resume(serde_json::from_value(data).unwrap()).unwrap();
+
+        assert_eq!(resumed.region().world_layout(), WorldLayout::Classic);
+        assert!(resumed.region().quests.is_none());
+        assert_eq!(resumed.city().held.unwrap().source, 0);
+        assert_eq!(resumed.region().sources[0].tile, pickup);
+        for tile in previous.region().bounds.tiles() {
+            assert_eq!(previous.region().water(tile), resumed.region().water(tile));
+        }
+
+        resumed.act(Action::Travel(1)).unwrap();
+        assert_eq!(resumed.region().world_layout(), WorldLayout::Regional);
+        assert_eq!(
+            resumed.city().quest_title(resumed.region()),
+            "Der Pfad zwischen den Brunnen"
+        );
+        let second = resumed.region().clone();
+        let data = serde_json::to_vec(&resumed.saved_games()).unwrap();
+        let resumed = Game::resume(serde_json::from_slice(&data).unwrap()).unwrap();
+        assert_eq!(resumed.region().world_layout(), WorldLayout::Regional);
+        for tile in second.bounds.tiles() {
+            assert_eq!(second.water(tile), resumed.region().water(tile));
+        }
+    }
+
+    #[test]
+    fn the_fjord_guide_assigns_the_hippo_and_both_winter_goals_survive_a_reload() {
+        let mut game = Game::start(Mode::Campaign(Biome::Fjord));
+        game.campaign.intro_seen = true;
+        let mut play = Play::new(&game);
+        let mut view = CameraRig::new(&game);
+        play.activate(UiAction::Panel(Panel::Quests), &mut game, &mut view, 0.);
+        play.activate(UiAction::Guide, &mut game, &mut view, 0.);
+        assert!(matches!(play.target(&game), Action::Assign(_, true)));
+        assert!(play.activate(UiAction::Confirm, &mut game, &mut view, 0.));
+
+        stock_up(&mut game, Material::Wood, 20);
+        assert_eq!(game.city().quest, Quest::Fields);
+        assert!(
+            game.city()
+                .objective(game.region())
+                .1
+                .contains("Kiefernholz 20/20")
+        );
+        let data = serde_json::to_vec(&game.saved_games()).unwrap();
+        let mut resumed = Game::resume(serde_json::from_slice(&data).unwrap()).unwrap();
+        fulfill_goal(
+            &mut resumed,
+            crate::quests::Goal::HippoDeliveries { count: 1 },
+        );
+        assert_eq!(resumed.city().quest, Quest::Bridge);
+        assert_eq!(
+            resumed.city().quest_title(resumed.region()),
+            "Brennholz für den Frost"
+        );
+    }
+
+    #[test]
     fn tutorial_advances_after_grabbing_and_delivering_wood() {
         let mut game = Game::start(Mode::Campaign(Biome::Valley));
         let wood = game.region().sources[0].tile;
@@ -3611,6 +3760,231 @@ mod tests {
         tile
     }
 
+    fn learn_quest_plan(game: &mut Game, tech: Tech) {
+        if !game.campaign.research.knows(tech) {
+            for &parent in tech.parents() {
+                learn_quest_plan(game, parent);
+            }
+            game.act(Action::Research(tech)).unwrap_or_else(|error| {
+                panic!("{} · {}: {error}", game.region().name, tech.name())
+            });
+        }
+    }
+
+    fn place_quest_building(game: &mut Game, kind: Building, roadside: bool) -> Tile {
+        let needs_workshop = matches!(kind, Building::Granary | Building::Market | Building::Tower);
+        if (needs_workshop || matches!(kind, Building::Well | Building::Workshop))
+            && game.city().city_rank() < 2
+        {
+            for building in [Building::Store, Building::Field] {
+                if game.city().count(building) == 0 {
+                    build(game, building);
+                }
+            }
+        }
+        if needs_workshop && game.city().city_rank() < 3 {
+            build(game, Building::Workshop);
+        }
+        if let Some(civic) = kind.civic() {
+            learn_quest_plan(game, civic.spec().unlock);
+        }
+        for (index, producer) in [Civic::Sawmill, Civic::Masonry].into_iter().enumerate() {
+            let required = kind.goods_price()[index];
+            if game.city().society.goods[index] < required {
+                let producer = Building::Civic(producer);
+                if !game
+                    .city()
+                    .buildings
+                    .iter()
+                    .any(|site| site.kind == producer && game.city().connected(game.region(), site))
+                {
+                    place_quest_building(game, producer, true);
+                }
+                for _ in 0..required {
+                    stock_up(game, Material::ALL[index], 8);
+                    game.step(25.);
+                    if game.city().society.goods[index] >= required {
+                        break;
+                    }
+                }
+                assert!(game.city().society.goods[index] >= required);
+            }
+        }
+        stock_for(game, kind.price());
+        let region = game.region();
+        let city = game.city();
+        let tile = region
+            .bounds
+            .tiles()
+            .filter(|tile| tile.within(region.start, 9))
+            .filter(|&tile| game.building_plan(kind, tile).is_ok())
+            .min_by_key(|&tile| {
+                let near = kind
+                    .tiles(tile)
+                    .flat_map(Tile::neighbors)
+                    .any(|cell| city.road_at(region, cell) && city.walkable(region, cell));
+                (roadside && !near, tile.distance(region.start))
+            })
+            .unwrap_or_else(|| panic!("{} has no site for {}", region.name, kind.name()));
+        game.act(Action::Build(kind, tile, 0)).unwrap();
+        if roadside {
+            connect_quest_site(game, tile);
+        }
+        tile
+    }
+
+    fn connect_quest_site(game: &mut Game, tile: Tile) {
+        let site = game.city().building_at(tile).unwrap().clone();
+        if game.city().connected(game.region(), &site) {
+            return;
+        }
+        stock_up(game, Material::Stone, 5);
+        let region = game.region();
+        let city = game.city();
+        let route = site
+            .kind
+            .tiles(tile)
+            .flat_map(Tile::neighbors)
+            .filter_map(|end| {
+                region
+                    .bounds
+                    .tiles()
+                    .filter(|&from| from.distance(end) <= 12 && city.road_at(region, from))
+                    .filter(|&from| city.road_plan(region, from, end).is_ok())
+                    .min_by_key(|&from| from.distance(end))
+                    .map(|from| (from, end))
+            })
+            .min_by_key(|&(from, end)| from.distance(end));
+        let (from, end) = route.unwrap_or_else(|| {
+            panic!(
+                "{} has no road to {} at {tile:?}",
+                region.name,
+                site.kind.name()
+            )
+        });
+        game.act(Action::Road(from, end)).unwrap();
+    }
+
+    fn fulfill_goal(game: &mut Game, goal: crate::quests::Goal) {
+        use crate::quests::Goal;
+
+        let met = |game: &Game| goal.met(game.city(), game.region());
+        if met(game) {
+            return;
+        }
+        match goal {
+            Goal::Building {
+                kind,
+                roadside,
+                upgraded,
+                ..
+            } => {
+                for _ in 0..3 {
+                    if upgraded && game.city().city_rank() < 3 {
+                        if game.city().count(Building::Field) == 0 {
+                            build(game, Building::Field);
+                        }
+                        build(game, Building::Workshop);
+                    }
+                    let site = if upgraded {
+                        game.city()
+                            .buildings
+                            .iter()
+                            .find(|site| site.kind == kind && !site.upgraded)
+                            .map(|site| site.tile)
+                    } else {
+                        None
+                    };
+                    let tile = site.unwrap_or_else(|| place_quest_building(game, kind, roadside));
+                    if upgraded {
+                        connect_quest_site(game, tile);
+                        stock_for(game, kind.upgrade_price().unwrap());
+                        game.act(Action::Upgrade(tile)).unwrap();
+                    }
+                    if met(game) {
+                        break;
+                    }
+                }
+            }
+            Goal::Harvests { count } => {
+                let field = game
+                    .city()
+                    .buildings
+                    .iter()
+                    .find(|site| site.kind == Building::Field)
+                    .map(|site| site.tile)
+                    .unwrap_or_else(|| build(game, Building::Field));
+                for _ in game.city().harvests..count {
+                    for _ in 0..45 {
+                        match game.city().building_at(field).unwrap().crop {
+                            Crop::Ripe => break,
+                            Crop::Dry
+                                if game
+                                    .city()
+                                    .ritual_error(
+                                        game.region(),
+                                        Miracle::Rain,
+                                        field,
+                                        game.campaign.gifts,
+                                    )
+                                    .is_none() =>
+                            {
+                                game.act(Action::Cast(Miracle::Rain, field)).unwrap();
+                            }
+                            _ => {}
+                        }
+                        game.step(1.);
+                    }
+                    game.act(Action::Hand(field)).unwrap();
+                }
+            }
+            Goal::Reserve { material, count } => stock_up(game, material, count),
+            Goal::HippoDeliveries { .. } => {
+                let tile = game.region().sources[0].tile;
+                game.act(Action::Assign(tile, true)).unwrap();
+                for _ in 0..3_600 {
+                    game.step(1. / 24.);
+                    if met(game) {
+                        break;
+                    }
+                }
+            }
+            Goal::Roads { count } => {
+                for _ in game.city().roads.len()..usize::from(count) {
+                    stock_up(game, Material::Stone, 1);
+                    let region = game.region();
+                    let tile = region
+                        .bounds
+                        .tiles()
+                        .filter(|cell| cell.within(region.start, 7))
+                        .filter(|&cell| game.city().road_plan(region, cell, cell).is_ok())
+                        .min_by_key(|&cell| cell.distance(region.start))
+                        .unwrap();
+                    game.act(Action::Road(tile, tile)).unwrap();
+                }
+            }
+            Goal::Camps { count } => {
+                for _ in game.city().camps.iter().filter(|&&open| open).count()..usize::from(count)
+                {
+                    let index = game.city().camps.iter().position(|&open| !open).unwrap();
+                    stock_up(game, Material::Wood, CAMP_WOOD);
+                    game.act(Action::Camp(index)).unwrap();
+                }
+            }
+            Goal::OlivePressings { count } => {
+                let kind = Building::Civic(Civic::OlivePress);
+                if !game.city().buildings.iter().any(|site| site.kind == kind) {
+                    place_quest_building(game, kind, true);
+                }
+                for _ in game.city().olive_pressings..count {
+                    stock_up(game, Material::Food, 16);
+                    game.step(25.);
+                }
+            }
+        }
+        assert!(met(game), "{} · {goal:?}", game.region().name);
+    }
+
     fn prepare_bridge(game: &mut Game) {
         if game.city().quest == Quest::Shelter {
             let first = game.region().sources[0].tile;
@@ -3630,20 +4004,26 @@ mod tests {
             build(game, Building::Store);
         }
         assert_eq!(game.city().quest, Quest::Fields);
-        let starter_field = game
-            .city()
-            .buildings
-            .iter()
-            .find(|site| site.kind == Building::Field)
-            .map(|site| site.tile);
-        let field = starter_field.unwrap_or_else(|| build(game, Building::Field));
-        game.act(Action::Cast(Miracle::Rain, field)).unwrap();
-        assert!(game.act(Action::Hand(field)).is_err());
-        for _ in 0..480 {
-            game.step(1. / 24.);
+        if let Some(step) = game.city().quest_step(game.region()) {
+            for &goal in &step.goals {
+                fulfill_goal(game, goal);
+            }
+        } else {
+            let starter_field = game
+                .city()
+                .buildings
+                .iter()
+                .find(|site| site.kind == Building::Field)
+                .map(|site| site.tile);
+            let field = starter_field.unwrap_or_else(|| build(game, Building::Field));
+            game.act(Action::Cast(Miracle::Rain, field)).unwrap();
+            assert!(game.act(Action::Hand(field)).is_err());
+            for _ in 0..480 {
+                game.step(1. / 24.);
+            }
+            game.act(Action::Hand(field)).unwrap();
         }
-        game.act(Action::Hand(field)).unwrap();
-        assert_eq!(game.city().quest, Quest::Bridge);
+        assert_eq!(game.city().quest, Quest::Bridge, "{}", game.region().name);
         let guard = game.region().guards[0];
         assert!(game.act(Action::Cast(Miracle::Wind, guard)).is_err());
         build(game, Building::Shrine);
@@ -3775,7 +4155,9 @@ mod tests {
                     region.name
                 );
                 prepare_bridge(&mut game);
-                build(&mut game, Building::Workshop);
+                if game.city().count(Building::Workshop) == 0 {
+                    place_quest_building(&mut game, Building::Workshop, false);
+                }
                 stock_for(&mut game, region.rebuild);
                 game.act(Action::Repair)
                     .unwrap_or_else(|reason| panic!("{}: {reason}", region.name));
@@ -3796,6 +4178,12 @@ mod tests {
                 );
                 for i in 0..region.districts.len() {
                     serve_district(&mut game, i);
+                }
+                if let Some(step) = game.city().quest_step(game.region()) {
+                    assert!(game.act(Action::Travel(chapter + 1)).is_err());
+                    for &goal in &step.goals {
+                        fulfill_goal(&mut game, goal);
+                    }
                 }
                 assert_eq!(game.city().quest, Quest::Complete, "{}", region.name);
             }
@@ -3845,7 +4233,11 @@ mod tests {
     #[test]
     fn expanded_areas_have_routes_and_a_camp_accepts_new_materials() {
         let mut game = fresh();
-        for region in &game.regions {
+        let themed = Biome::ALL
+            .into_iter()
+            .flat_map(|biome| Mode::Campaign(biome).regions(|_| WorldLayout::Regional));
+        for region in game.regions.iter().cloned().chain(themed) {
+            let region = &region;
             let mut city = Settlement::new(region);
             city.bridge_fixed = true;
             let walk = city.walk_grid(region);
@@ -3860,8 +4252,10 @@ mod tests {
                         .neighbors()
                         .into_iter()
                         .any(|tile| { region.bounds.index(tile).is_some_and(|i| reachable[i]) }),
-                    "{} · {}",
+                    "{} · {:?} · {} · {}",
                     region.name,
+                    region.world_layout(),
+                    region.chapter(),
                     area.name
                 );
                 for material in Material::ALL {

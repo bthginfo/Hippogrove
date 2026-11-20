@@ -8,21 +8,22 @@ ROOT = Path(__file__).resolve().parents[1]
 bpy.ops.wm.read_factory_settings(use_empty=True)
 
 
-def material(name, color):
+def material(name, color, roughness=0.82, metallic=0.0):
     result = bpy.data.materials.new(name)
     result.diffuse_color = (*color, 1)
     result.use_nodes = True
     principled = result.node_tree.nodes.get("Principled BSDF")
     principled.inputs["Base Color"].default_value = result.diffuse_color
-    principled.inputs["Roughness"].default_value = 0.82
+    principled.inputs["Roughness"].default_value = roughness
+    principled.inputs["Metallic"].default_value = metallic
     return result
 
 
-hide = material("Lavendel", (0.41, 0.33, 0.52))
-cheek = material("Rosa Schnauze", (0.70, 0.44, 0.51))
+hide = material("Lavendel", (0.45, 0.35, 0.57), roughness=0.72)
+cheek = material("Rosa Schnauze", (0.75, 0.46, 0.52), roughness=0.67)
 belly = material("Bauch", (0.51, 0.43, 0.58))
 ear = material("Ohr innen", (0.66, 0.38, 0.46))
-eye = material("Auge", (0.031, 0.021, 0.037))
+eye = material("Auge", (0.031, 0.021, 0.037), roughness=0.31)
 shine = material("Lichtreflex", (0.89, 0.88, 0.74))
 snoot = material("Nüstern", (0.32, 0.17, 0.24))
 scarf = material("Honigfarbenes Halstuch", (0.84, 0.44, 0.095))
@@ -30,7 +31,7 @@ crease = material("Halstuchfalte", (0.64, 0.29, 0.052))
 linen = material("Ungebleichtes Leinen", (0.78, 0.67, 0.48))
 fold = material("Leinen im Schatten", (0.65, 0.51, 0.33))
 hem = material("Gewebte Borte", (0.37, 0.26, 0.13))
-bronze = material("Bronzene Spange", (0.78, 0.50, 0.16))
+bronze = material("Bronzene Spange", (0.78, 0.50, 0.16), roughness=0.49, metallic=0.42)
 
 
 def rounded(name, position, scale, surface, segments=16, rings=10):
@@ -39,6 +40,8 @@ def rounded(name, position, scale, surface, segments=16, rings=10):
     obj.name = name
     obj.scale = scale
     obj.data.materials.append(surface)
+    for face in obj.data.polygons:
+        face.use_smooth = True
     return obj
 
 
