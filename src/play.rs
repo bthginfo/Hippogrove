@@ -5,7 +5,9 @@ use crate::{
     game::{Action, Building, Crop, Game, Miracle, Quest, stock_text},
     modes::Mode,
     region::{Biome, Material, Tile},
+    sound::{Bus, Cue, Mix},
     story::{Sequence, Story},
+    terrain,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -36,12 +38,8 @@ impl Tool {
             Self::Helpers => "Gläubige",
             Self::Hippo => "Nilpferd",
             Self::Miracles => "Wunder",
-            Self::Plan => "Planen",
+            Self::Plan => "Wege",
         }
-    }
-
-    pub fn aims_with_drag(self) -> bool {
-        matches!(self, Self::Build | Self::Miracles | Self::Plan)
     }
 
     pub fn choices(self) -> usize {
@@ -49,7 +47,7 @@ impl Tool {
             Self::Build => Building::CATALOG_SIZE,
             Self::Helpers => 3,
             Self::Miracles => Miracle::ALL.len(),
-            Self::Hippo => 6,
+            Self::Hippo => 7,
             Self::Plan => 2,
             _ => 1,
         }
@@ -60,7 +58,15 @@ impl Tool {
             Self::Build => Building::from_index(index).name(),
             Self::Helpers => ["Sammeln", "Ausbilden", "Patrouille"][index],
             Self::Miracles => Miracle::ALL[index].name(),
-            Self::Hippo => ["Sammeln", "Wache", "Feldpflege", "Loben", "Snack", "Pause"][index],
+            Self::Hippo => [
+                "Sammeln",
+                "Wache",
+                "Feldpflege",
+                "Loben",
+                "Snack",
+                "Pause",
+                "Hierher",
+            ][index],
             Self::Plan => ["Wege", "Ausbau"][index],
             _ => self.name(),
         }
@@ -71,11 +77,16 @@ impl Tool {
 pub enum Panel {
     #[default]
     Closed,
+    Menu,
+    Orders(Tool),
+    Spells,
     Journey,
     Map,
     Area(usize),
     Progress,
     Quests,
+    SideQuest,
+    Sound,
     Catalog,
     Research,
     Inspection,
@@ -87,7 +98,7 @@ pub enum Panel {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiAction {
     Tool(Tool),
-    Choice(usize),
+    Order(Tool, usize),
     Confirm,
     Cancel,
     Rotate,
@@ -108,6 +119,15 @@ pub enum UiAction {
     ReplayArrival,
     ModeTab(bool),
     SelectMode(Mode),
+    Sound(Bus),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum PawGesture {
+    Grab,
+    Release,
+    Cast,
+    Point,
 }
 
 #[derive(Resource)]
@@ -115,6 +135,7 @@ pub struct Play {
     pub aim: Tile,
     pub tool: Tool,
     pub panel: Panel,
+    panel_history: Vec<(Panel, Option<UiAction>)>,
     pub story: Option<Story>,
     previous_quest: Quest,
     pub free_build_tab: bool,
@@ -122,7 +143,6 @@ pub struct Play {
     pub option: usize,
     pub rotation: u8,
     pub road_anchor: Option<Tile>,
-    pub objective_expanded: bool,
     pub catalog_branch: Option<Branch>,
     pub catalog_page: usize,
     pub tech: Tech,
@@ -131,6 +151,9 @@ pub struct Play {
     pub notice_until: f32,
     pub notice_ok: bool,
     pub last_magic: Option<(Miracle, Tile, u64)>,
+    pub last_sound: Option<(Cue, u64)>,
+    pub mix: Mix,
+    pub paw_gesture: Option<(PawGesture, f32)>,
     pub gamepad: bool,
     pub pointer: Option<Vec2>,
     pub paused: bool,
@@ -154,6 +177,7 @@ impl Play {
             } else {
                 Panel::Closed
             },
+            panel_history: Vec::new(),
             story,
             previous_quest: game.city().quest,
             free_build_tab: game.mode.sandbox(),
@@ -161,7 +185,6 @@ impl Play {
             option: 0,
             rotation: 0,
             road_anchor: None,
-            objective_expanded: true,
             catalog_branch: None,
             catalog_page: 0,
             tech: Tech::Foundations,
@@ -170,6 +193,9 @@ impl Play {
             notice_until: 0.,
             notice_ok: true,
             last_magic: None,
+            last_sound: None,
+            mix: Mix::default(),
+            paw_gesture: None,
             gamepad: false,
             pointer: None,
             paused: false,
@@ -235,6 +261,7 @@ impl Play {
             Tool::Hippo if self.option == 3 => Action::Praise,
             Tool::Hippo if self.option == 4 => Action::Feed,
             Tool::Hippo if self.option == 5 => Action::Rest,
+            Tool::Hippo if self.option == 6 => Action::MoveHippo(self.aim),
             Tool::Hippo => Action::Assign(self.aim, true),
             Tool::Miracles => Action::Cast(self.miracle(), self.aim),
             Tool::Plan if self.option == 1 => Action::Upgrade(self.aim),
@@ -253,13 +280,14 @@ impl Play {
                 .find(|site| site.kind == Building::Civic(Civic::Barracks))
                 .map_or(region.start, |site| site.tile),
             Tool::Hand if city.held.is_some() => city.nearest_store(region, self.aim),
+            Tool::Hippo if self.option == 6 => region.start,
             Tool::Miracles if self.miracle() == Miracle::Mend => city.walkers[0].tile(),
-            Tool::Miracles if self.miracle().offensive() && city.quest == Quest::Bridge => region
+            Tool::Miracles if self.miracle() == Miracle::Ward => region.start,
+            Tool::Miracles if self.miracle().offensive() && city.quest == Quest::Bridge => city
                 .guards
                 .iter()
-                .zip(&city.guards)
-                .find(|(_, remaining)| **remaining > 0)
-                .map(|(&tile, _)| tile)
+                .position(|&remaining| remaining > 0)
+                .map(|index| Tile::from_world(city.guard_world(region, index)))
                 .unwrap_or(region.bridge()),
             Tool::Hand | Tool::Miracles if city.quest == Quest::Districts => region
                 .districts
@@ -303,10 +331,31 @@ impl Play {
             return false;
         }
         match action {
-            UiAction::Tool(tool) => self.tool(tool),
-            UiAction::Choice(i) => self.choose(i),
+            UiAction::Tool(Tool::Hand) => {
+                self.tool(Tool::Hand);
+                self.close_panels();
+            }
+            UiAction::Tool(tool) => self.open_tool(tool),
+            UiAction::Order(tool, index) => {
+                let minimum = match (tool, index) {
+                    (Tool::Hippo, 1) => 2,
+                    (Tool::Hippo, 2) => 3,
+                    _ => 0,
+                };
+                if game.campaign.gifts.training < minimum {
+                    self.notice = format!("Dieser Auftrag wird auf Rang {minimum} verfügbar.");
+                    self.notice_ok = false;
+                    self.notice_until = now + 4.;
+                    return false;
+                }
+                self.tool(tool);
+                self.choose(index);
+                self.close_panels();
+            }
             UiAction::Catalog(branch) => {
-                self.panel = Panel::Catalog;
+                if self.panel != Panel::Catalog {
+                    self.open_panel(Panel::Catalog);
+                }
                 self.catalog_branch = branch;
                 self.catalog_page = 0;
                 self.focus = None;
@@ -317,15 +366,13 @@ impl Play {
                     let tech = civic.spec().unlock;
                     if !game.campaign.research.knows(tech) {
                         self.tech = tech;
-                        self.panel = Panel::Research;
-                        self.focus = None;
+                        self.open_panel(Panel::Research);
                         return false;
                     }
                 }
                 self.tool(Tool::Build);
                 self.choose(kind.index());
-                self.panel = Panel::Closed;
-                self.focus = None;
+                self.close_panels();
             }
             UiAction::SelectTech(tech) => {
                 self.tech = tech;
@@ -359,8 +406,7 @@ impl Play {
                         .building_at(self.aim)
                         .is_some_and(|site| site.kind != Building::Field)
                 {
-                    self.panel = Panel::Inspection;
-                    self.focus = None;
+                    self.open_panel(Panel::Inspection);
                     return false;
                 }
                 return self.execute(self.target(game), game, view, now);
@@ -370,11 +416,13 @@ impl Play {
                 if self.panel == Panel::Modes && !game.campaign.intro_seen {
                     self.choose_mode(game.mode, game, view, now);
                 } else if let Panel::Area(index) = self.panel {
-                    self.panel = Panel::Map;
+                    self.back_panel();
+                    if self.panel != Panel::Map {
+                        self.open_panel(Panel::Map);
+                    }
                     self.focus = Some(UiAction::Panel(Panel::Area(index)));
                 } else if self.panel != Panel::Closed {
-                    self.panel = Panel::Closed;
-                    self.focus = None;
+                    self.back_panel();
                 } else if self.road_anchor.is_some() {
                     self.road_anchor = None;
                 } else {
@@ -384,6 +432,7 @@ impl Play {
             UiAction::Rotate => self.rotation = (self.rotation + 1) % 4,
             UiAction::Guide => {
                 self.aim = self.guide_tile(game);
+                self.close_panels();
                 view.focus(self.aim);
                 self.pointer = None;
             }
@@ -406,27 +455,19 @@ impl Play {
                 }
             }
             UiAction::Landscape => {
-                self.panel = Panel::Closed;
-                self.focus = None;
+                self.close_panels();
                 view.landscape();
                 self.pointer = None;
             }
             UiAction::Panel(Panel::Area(index)) => {
                 if let Some(area) = game.region().areas.get(index) {
-                    self.panel = Panel::Area(index);
+                    self.open_panel(Panel::Area(index));
                     self.area_material = area.material;
                     self.focus = Some(UiAction::AreaMaterial(area.material));
                 }
             }
-            UiAction::Panel(panel) => {
-                self.panel = if self.panel == panel {
-                    Panel::Closed
-                } else {
-                    panel
-                };
-                self.focus = (self.panel == Panel::Map).then_some(UiAction::Panel(Panel::Map));
-            }
-            UiAction::ToggleObjective => self.objective_expanded = !self.objective_expanded,
+            UiAction::Panel(panel) => self.open_panel(panel),
+            UiAction::ToggleObjective => self.open_panel(Panel::Quests),
             UiAction::ReplayArrival if game.campaign.active == 0 => {
                 self.start_story(Sequence::Arrival, game, view);
             }
@@ -435,16 +476,62 @@ impl Play {
             UiAction::SelectMode(mode) => {
                 self.choose_mode(mode, game, view, now);
             }
+            UiAction::Sound(bus) => self.mix.toggle(bus),
             UiAction::Do(action) => return self.execute(action, game, view, now),
         }
         false
     }
 
+    fn open_tool(&mut self, tool: Tool) {
+        self.open_panel(match tool {
+            Tool::Build => Panel::Catalog,
+            Tool::Miracles => Panel::Spells,
+            _ => Panel::Orders(tool),
+        });
+    }
+
+    fn open_panel(&mut self, panel: Panel) {
+        if panel == self.panel {
+            self.back_panel();
+            return;
+        }
+        if let Some(index) = self
+            .panel_history
+            .iter()
+            .rposition(|(previous, _)| *previous == panel)
+        {
+            self.panel_history.truncate(index + 1);
+            self.back_panel();
+            return;
+        }
+        if self.panel != Panel::Closed {
+            self.panel_history.push((self.panel, self.focus));
+        }
+        self.panel = panel;
+        self.focus = match panel {
+            Panel::Menu => Some(UiAction::Panel(Panel::Map)),
+            Panel::Map => Some(UiAction::Landscape),
+            Panel::Orders(Tool::Hippo) => Some(UiAction::Order(Tool::Hippo, 6)),
+            Panel::Orders(tool) => Some(UiAction::Order(tool, 0)),
+            Panel::Spells => Some(UiAction::Order(Tool::Miracles, 0)),
+            _ => None,
+        };
+    }
+
+    fn back_panel(&mut self) {
+        (self.panel, self.focus) = self.panel_history.pop().unwrap_or((Panel::Closed, None));
+    }
+
+    fn close_panels(&mut self) {
+        self.panel_history.clear();
+        self.panel = Panel::Closed;
+        self.focus = None;
+    }
+
     fn focus_tile(&mut self, tile: Tile, view: &mut CameraRig) {
         self.aim = tile;
         self.tool(Tool::Hand);
-        self.panel = Panel::Closed;
-        self.focus = None;
+        self.close_panels();
         self.pointer = None;
         view.focus(tile);
     }
@@ -454,10 +541,13 @@ impl Play {
             Ok(name) => {
                 let revision = self.revision.wrapping_add(1);
                 let gamepad = self.gamepad;
+                let mix = self.mix;
                 *self = Self::new(game);
                 self.revision = revision;
                 self.gamepad = gamepad;
+                self.mix = mix;
                 *view = CameraRig::new(game);
+                view.jump = true;
                 if let Some(story) = self.story {
                     story.frame(game.region(), view);
                     self.focus = Some(UiAction::FinishStory);
@@ -477,6 +567,7 @@ impl Play {
 
     fn execute(&mut self, action: Action, game: &mut Game, view: &mut CameraRig, now: f32) -> bool {
         let previous = game.campaign.active;
+        let carried = game.city().held.is_some();
         let first_island_landing = matches!(action, Action::Travel(4))
             && game.mode == Mode::Chronicle
             && game
@@ -491,6 +582,35 @@ impl Play {
         self.notice_ok = success;
         if success {
             self.revision = self.revision.wrapping_add(1);
+            let cue = match action {
+                Action::Hand(_) if carried => Some(Cue::Drop),
+                Action::Hand(tile) if game.region().source_at(tile).is_none() => Some(Cue::Gather),
+                Action::Cast(spell, _) => Some(Cue::Cast(spell)),
+                Action::Build(..) | Action::Upgrade(_) | Action::Road(..) | Action::Repair => {
+                    Some(Cue::Build)
+                }
+                Action::MoveHippo(_)
+                | Action::Assign(..)
+                | Action::AssignArea(..)
+                | Action::RecallHelpers => Some(Cue::Order),
+                Action::FinishLocal | Action::Research(_) | Action::Learn(_) => Some(Cue::Reward),
+                _ => None,
+            };
+            if let Some(cue) = cue {
+                self.last_sound = Some((cue, self.revision));
+            }
+            let gesture = match action {
+                Action::Hand(_) if carried => Some(PawGesture::Release),
+                Action::Hand(_) if game.city().held.is_some() => Some(PawGesture::Grab),
+                Action::Cast(..) => Some(PawGesture::Cast),
+                Action::Build(..) | Action::MoveHippo(_) | Action::Assign(..) => {
+                    Some(PawGesture::Point)
+                }
+                _ => None,
+            };
+            if let Some(gesture) = gesture {
+                self.paw_gesture = Some((gesture, now));
+            }
             if matches!(action, Action::Road(..)) {
                 self.road_anchor = None;
             }
@@ -499,8 +619,7 @@ impl Play {
             }
             if previous != game.campaign.active {
                 self.tool = Tool::Hand;
-                self.panel = Panel::Closed;
-                self.focus = None;
+                self.close_panels();
                 self.option = 0;
                 self.road_anchor = None;
                 self.last_magic = None;
@@ -508,10 +627,10 @@ impl Play {
                 self.notice = game.region().subtitle.clone();
                 self.notice_until = now + 8.;
                 *view = CameraRig::new(game);
+                view.jump = true;
                 self.previous_quest = game.city().quest;
             } else if matches!(action, Action::Travel(_)) {
-                self.panel = Panel::Closed;
-                self.focus = None;
+                self.close_panels();
             }
             let scene = match action {
                 Action::Travel(4) if first_island_landing => Some(Sequence::Islands),
@@ -541,6 +660,7 @@ impl Play {
         let story = Story::new(sequence);
         story.frame(game.region(), view);
         self.story = Some(story);
+        self.panel_history.clear();
         self.panel = Panel::Story;
         self.focus = Some(UiAction::FinishStory);
         self.pointer = None;
@@ -550,8 +670,7 @@ impl Play {
         let Some(story) = self.story.take() else {
             return;
         };
-        self.panel = Panel::Closed;
-        self.focus = None;
+        self.close_panels();
         self.pointer = None;
         if !game.campaign.intro_seen {
             game.campaign.intro_seen = true;
@@ -579,17 +698,28 @@ impl Play {
 pub struct CameraRig {
     pub target: Vec3,
     pub height: f32,
+    pub rendered_height: f32,
+    pub jump: bool,
+    pub cover: f32,
     min: Vec3,
     max: Vec3,
     max_height: f32,
 }
 
 impl CameraRig {
+    pub fn arm(height: f32) -> Vec3 {
+        let near = terrain::smooth((27. - height) / 16.);
+        Vec3::new(13., 23., 26.).lerp(Vec3::new(13.8, 14.7, 27.6), near) * (height / 22.).max(1.)
+    }
+
     pub fn new(game: &Game) -> Self {
         let region = game.region();
         Self {
             target: region.start.world() + Vec3::new(-0.95, 0., -4.55),
             height: 22.,
+            rendered_height: 22.,
+            jump: false,
+            cover: 0.,
             min: region.bounds.0.world(),
             max: region.bounds.1.world(),
             max_height: ((region.bounds.1.world() - region.bounds.0.world())
@@ -603,12 +733,24 @@ impl CameraRig {
         self.height = (self.height * (-change).exp()).clamp(11., self.max_height);
     }
 
+    pub fn zoom_toward(&mut self, change: f32, ground: Option<Vec3>) {
+        let previous = self.height;
+        self.zoom(change);
+        if let Some(point) = ground.map(|point| point.with_y(0.)) {
+            self.target = (point + (self.target - point) * (self.height / previous))
+                .clamp(self.min, self.max);
+        }
+    }
+
     pub fn focus(&mut self, tile: Tile) {
-        self.target = (tile.world() - Vec3::Z).clamp(self.min, self.max);
+        let target = (tile.world() - Vec3::Z).clamp(self.min, self.max);
+        self.jump = self.target.distance(target) > 28. || self.rendered_height > 52.;
+        self.target = target;
         self.height = self.height.clamp(22., 29.);
     }
 
     pub fn landscape(&mut self) {
+        self.jump = true;
         self.target = (self.min + self.max) * 0.5;
         self.height = self.max_height;
     }
@@ -761,18 +903,31 @@ impl Target {
                 "Sammellager bauen".into()
             }
             Action::Assign(_, hippo) => {
-                self.legal = region.source_at(tile).is_some();
-                if let Some(index) = region.source_at(tile) {
+                if !hippo && !city.idle_helper() {
+                    self.legal = false;
+                    self.detail = "Alle Gläubigen haben Aufträge.".into();
+                } else if let Some(index) = region.source_at(tile) {
                     let name = region.kind.material(region.sources[index].material);
                     self.detail = format!("{name} · {} verfügbar", city.nodes[index]);
                 } else {
-                    self.detail = "Wähle einen Holzstoß, Felsen oder Beerenstrauch.".into();
+                    self.legal = false;
+                    self.detail = "Tippe auf eine Rohstoffquelle.".into();
                 }
                 if hippo {
                     "Nilpferd losschicken".into()
                 } else {
                     "Helfer losschicken".into()
                 }
+            }
+            Action::MoveHippo(tile) => {
+                self.legal = city.walkable(region, tile);
+                self.detail = if self.legal {
+                    "Das Nilpferd läuft zum markierten Platz."
+                } else {
+                    "Wähle freien Boden für das Nilpferd."
+                }
+                .into();
+                "Hierher".into()
             }
             Action::Watch(_) => {
                 self.legal = game.campaign.gifts.training >= 2

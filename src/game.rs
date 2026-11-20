@@ -24,6 +24,34 @@ pub const MAX_ROAD_RUN: u16 = 12;
 pub const MAX_WALKERS: usize = 32;
 pub const CAMP_FAITH: u16 = 6;
 pub const CAMP_WOOD: u16 = 5;
+pub const DAY_LENGTH: f32 = 192.;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DayPhase {
+    Morning,
+    Work,
+    Evening,
+    Night,
+}
+
+impl DayPhase {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Morning => "Morgen",
+            Self::Work => "Tag",
+            Self::Evening => "Abend",
+            Self::Night => "Nacht",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SideQuest {
+    Available,
+    Active,
+    Ready,
+    Complete,
+}
 
 pub type Stock = [u16; 3];
 pub type GameResult = Result<String, String>;
@@ -343,6 +371,17 @@ impl Miracle {
         }
     }
 
+    pub fn effect(self) -> &'static str {
+        match self {
+            Self::Rain => "Bewässert trockene Felder",
+            Self::Wind => "Schwächt Wachen und Widerstand",
+            Self::Ward => "Schützt das Dorf vor Überfällen",
+            Self::Bloom => "Lässt Felder reifen und Pflanzen nachwachsen",
+            Self::Mend => "Gibt dem Nilpferd Kraft zurück",
+            Self::Thunder => "Vertreibt Wachen und bricht Widerstand",
+        }
+    }
+
     pub fn radius(self, gifts: Gifts) -> i16 {
         match self {
             Self::Rain => 2 + i16::from(gifts.rain),
@@ -436,6 +475,10 @@ pub enum Action {
     Assign(Tile, bool),
     AssignArea(usize, Material, bool),
     CancelArea(usize, Material),
+    AcceptLocal,
+    FinishLocal,
+    RecallHelpers,
+    MoveHippo(Tile),
     Watch(Tile),
     Tend(Tile),
     Feed,
@@ -458,6 +501,7 @@ pub struct Bundle {
 pub enum Job {
     Gather(usize),
     GatherArea(usize, Material),
+    Move(Tile),
     Watch(Tile),
     Tend(Tile),
 }
@@ -488,6 +532,8 @@ pub struct Walker {
     pub bundle: Option<Bundle>,
     pub route: VecDeque<Tile>,
     pub pause: f32,
+    #[serde(skip)]
+    stride: f32,
 }
 
 impl Walker {
@@ -501,6 +547,7 @@ impl Walker {
             bundle: None,
             route: VecDeque::new(),
             pause: 0.,
+            stride: 0.,
         }
     }
 
@@ -578,6 +625,8 @@ pub struct Settlement {
     cooldowns: [f32; Miracle::ALL.len()],
     #[serde(default)]
     pub local_finished: bool,
+    #[serde(default)]
+    pub local_accepted: bool,
     pub shield: f32,
     pub rainfall: f32,
     pub weather_time: f32,
@@ -624,6 +673,7 @@ impl Settlement {
             recovering: false,
             cooldowns: [0.; Miracle::ALL.len()],
             local_finished: false,
+            local_accepted: false,
             shield: 0.,
             rainfall: 0.,
             weather_time: 0.,
@@ -1423,7 +1473,113 @@ impl Settlement {
         })
     }
 
-    fn advance_walker(&mut self, walker: &mut Walker, region: &Region, gifts: Gifts, dt: f32) {
+    pub fn day_phase(&self) -> DayPhase {
+        let phase = self.weather_time.rem_euclid(DAY_LENGTH);
+        if phase < 34. {
+            DayPhase::Morning
+        } else if phase < 111. {
+            DayPhase::Work
+        } else if phase < 150. {
+            DayPhase::Evening
+        } else {
+            DayPhase::Night
+        }
+    }
+
+    pub fn guard_world(&self, region: &Region, index: usize) -> Vec3 {
+        let origin = region.guards[index];
+        if self.outcome.is_some() || self.quest.index() < Quest::Bridge.index() {
+            return origin.world();
+        }
+        let post = |index: usize| match index % 4 {
+            1 => origin.offset(-1, 0),
+            3 => origin.offset(1, 0),
+            _ => origin,
+        };
+        let time = (self.weather_time * 0.24 + index as f32 * 0.9).rem_euclid(4.);
+        let leg = time as usize;
+        let safe = |position: Tile| {
+            if self.walkable(region, position) {
+                position
+            } else {
+                origin
+            }
+        };
+        safe(post(leg))
+            .world()
+            .lerp(safe(post(leg + 1)).world(), time.fract())
+    }
+
+    fn raids_active(&self) -> bool {
+        self.quest == Quest::Bridge
+            && self.count(Building::Shrine) > 0
+            && self.guards.iter().any(|&spirit| spirit > 0)
+    }
+
+    pub fn next_raid(&self) -> Option<f32> {
+        (self.raids_active() && self.raid_clock > 0.).then_some(self.raid_clock)
+    }
+
+    fn daily_route(&self, walker: &mut Walker, region: &Region, index: usize) {
+        if walker.hippo || walker.guard {
+            return;
+        }
+        let phase = self.day_phase();
+        let sites = self.buildings.iter().filter(|site| match phase {
+            DayPhase::Morning => false,
+            DayPhase::Work => matches!(site.kind, Building::Workshop | Building::Field),
+            DayPhase::Evening => {
+                matches!(site.kind, Building::Well | Building::Civic(Civic::Tavern))
+            }
+            DayPhase::Night => site.kind == Building::House,
+        });
+        let fallback = if phase == DayPhase::Night {
+            region.start
+        } else {
+            region.depot
+        };
+        let destination = sites
+            .clone()
+            .nth(index % sites.clone().count().max(1))
+            .and_then(|site| {
+                site.kind
+                    .tiles(site.tile)
+                    .flat_map(Tile::neighbors)
+                    .find(|&tile| self.road_at(region, tile) && self.walkable(region, tile))
+            });
+        let target = destination.unwrap_or(fallback.offset(
+            if phase == DayPhase::Night {
+                0
+            } else {
+                (index % 3) as i16 - 1
+            },
+            if phase == DayPhase::Night {
+                (index % 3) as i16
+            } else {
+                0
+            },
+        ));
+        let target = if self.road_at(region, target) && self.walkable(region, target) {
+            target
+        } else {
+            region.depot
+        };
+        if let Some(route) = self.route_to(region, walker.tile(), target, false) {
+            walker.route = route;
+        }
+        if walker.route.is_empty() {
+            walker.pause = 6. + (index % 4) as f32 * 2.;
+        }
+    }
+
+    fn advance_walker(
+        &mut self,
+        walker: &mut Walker,
+        region: &Region,
+        gifts: Gifts,
+        dt: f32,
+        index: usize,
+    ) {
         if walker.childhood > 0. {
             walker.childhood = (walker.childhood - dt).max(0.);
             return;
@@ -1446,14 +1602,17 @@ impl Settlement {
             };
             if self.recovering {
                 self.recovering = self.energy < 38.;
+                walker.stride = 0.;
                 return;
             }
         }
         walker.pause = (walker.pause - dt).max(0.);
         if walker.pause > 0. {
+            walker.stride = 0.;
             return;
         }
         if !walker.route.is_empty() {
+            walker.stride += (1. - walker.stride) * (1. - (-9. * dt).exp());
             let mut remaining = dt;
             while let Some(step) = walker.route.front().copied() {
                 if remaining <= 0. {
@@ -1478,7 +1637,13 @@ impl Settlement {
                 } else {
                     2.25
                 };
-                let speed = speed * if self.road_at(region, step) { 1.5 } else { 1. };
+                let remaining_step = if walker.route.len() == 1 {
+                    0.71 + 0.29 * (delta.length() / 0.7).clamp(0., 1.)
+                } else {
+                    1.
+                };
+                let pace = (0.68 + 0.32 * walker.stride) * remaining_step;
+                let speed = speed * pace * if self.road_at(region, step) { 1.5 } else { 1. };
                 let travel = delta.length() / speed;
                 if travel > remaining {
                     walker.position = (point + delta * (remaining / travel)).to_array();
@@ -1490,6 +1655,7 @@ impl Settlement {
             }
             return;
         }
+        walker.stride = 0.;
 
         if let Some(bundle) = walker.bundle {
             if let Some(route) = self.route_to_store(region, walker.tile()) {
@@ -1527,6 +1693,13 @@ impl Settlement {
         }
 
         match walker.job {
+            Some(Job::Move(target)) => {
+                let route = self.route_to(region, walker.tile(), target, false);
+                walker.route = route.unwrap_or_default();
+                if walker.route.is_empty() {
+                    walker.job = None;
+                }
+            }
             Some(job @ (Job::Gather(_) | Job::GatherArea(..))) => {
                 let next = match job {
                     Job::Gather(source) if self.nodes[source] > 0 => self
@@ -1607,7 +1780,7 @@ impl Settlement {
                 }
                 walker.pause = 2.5;
             }
-            _ => {}
+            None => self.daily_route(walker, region, index),
         }
     }
 
@@ -1699,8 +1872,8 @@ impl Settlement {
         }
 
         let mut walkers = std::mem::take(&mut self.walkers);
-        for walker in &mut walkers {
-            self.advance_walker(walker, region, gifts, dt);
+        for (index, walker) in walkers.iter_mut().enumerate() {
+            self.advance_walker(walker, region, gifts, dt, index);
         }
         self.walkers = walkers;
 
@@ -1730,10 +1903,13 @@ impl Settlement {
             insight = self.civic_life(region, weather);
         }
 
-        if self.raid_clock > 0. && self.outcome.is_none() {
+        if self.raids_active() {
+            if self.raid_clock <= 0. {
+                self.raid_clock = 34.;
+            }
             self.raid_clock -= dt;
             if self.raid_clock <= 0. {
-                self.raid_clock = 21.;
+                self.raid_clock = 29.;
                 let protected = self.shield > 0.
                     || self.tower_protects(region, region.bridge())
                     || self.walkers.iter().any(|walker| {
@@ -1742,8 +1918,8 @@ impl Settlement {
                             && walker.tile().within(region.bridge(), 4)
                     });
                 if !protected {
-                    self.stock[Material::Food.index()] =
-                        self.stock[Material::Food.index()].saturating_sub(2);
+                    let food = &mut self.stock[Material::Food.index()];
+                    *food -= food.saturating_sub(4).min(2);
                 }
             }
         }
@@ -2068,27 +2244,72 @@ impl Settlement {
             .min_by_key(|&tile| !self.road_at(region, tile))
     }
 
-    fn gathering_helper(&self, replace_busy: bool) -> Result<usize, &'static str> {
-        let mut eligible = self
+    fn gathering_helper(&self) -> Result<usize, &'static str> {
+        let eligible: Vec<_> = self
             .walkers
             .iter()
             .enumerate()
-            .filter(|(_, walker)| !walker.hippo && !walker.guard && walker.childhood <= 0.);
-        if let Some((index, _)) = eligible.clone().find(|(_, walker)| walker.job.is_none()) {
-            return Ok(index);
-        }
-        let count = eligible.clone().count();
-        if count == 0 {
+            .filter(|(_, walker)| !walker.hippo && !walker.guard && walker.childhood <= 0.)
+            .collect();
+        if eligible.is_empty() {
             return Err("Es gibt gerade keine erwachsenen Gläubigen für diesen Auftrag.");
         }
-        if !replace_busy {
-            return Err("Alle Gläubigen haben Aufträge. Beende einen Auftrag oder baue Wohnraum.");
-        }
-        Ok(eligible.nth(self.next_worker % count).unwrap().0)
+        eligible
+            .iter()
+            .cycle()
+            .skip(self.next_worker % eligible.len())
+            .take(eligible.len())
+            .find_map(|(index, walker)| walker.job.is_none().then_some(*index))
+            .ok_or("Alle Gläubigen sind beschäftigt. Unter Gläubige kannst du sie zurückrufen.")
     }
 
     pub fn idle_helper(&self) -> bool {
-        self.gathering_helper(false).is_ok()
+        self.walkers.iter().any(|walker| {
+            !walker.hippo && !walker.guard && walker.childhood <= 0. && walker.job.is_none()
+        })
+    }
+
+    pub fn gathering_helpers(&self) -> usize {
+        self.walkers
+            .iter()
+            .filter(|walker| {
+                !walker.hippo && matches!(walker.job, Some(Job::Gather(_) | Job::GatherArea(..)))
+            })
+            .count()
+    }
+
+    fn recall_helpers(&mut self) -> GameResult {
+        if self.gathering_helpers() == 0 {
+            return Err("Gerade sammeln keine Gläubigen.".into());
+        }
+        for walker in &mut self.walkers {
+            if !walker.hippo && matches!(walker.job, Some(Job::Gather(_) | Job::GatherArea(..))) {
+                walker.job = None;
+                if walker.bundle.is_none() {
+                    walker.route.clear();
+                    walker.pause = 0.;
+                }
+            }
+        }
+        Ok("Gläubige freigegeben. Getragene Ladungen kommen noch an.".into())
+    }
+
+    fn move_hippo(&mut self, region: &Region, target: Tile) -> GameResult {
+        if !self.walkable(region, target) {
+            return Err("Wähle freien, begehbaren Boden.".into());
+        }
+        let route = self
+            .route_to(region, self.walkers[0].tile(), target, false)
+            .ok_or("Dorthin führt noch kein Weg.")?;
+        let hippo = &mut self.walkers[0];
+        hippo.pause = 0.;
+        hippo.job = Some(Job::Move(target));
+        hippo.route = if hippo.bundle.is_some() {
+            VecDeque::new()
+        } else {
+            route
+        };
+        Ok("Das Nilpferd kommt.".into())
     }
 
     fn dispatch_gatherer(&mut self, worker: usize, job: Job) {
@@ -2105,11 +2326,7 @@ impl Settlement {
         let index = region
             .source_at(tile)
             .ok_or("Wähle Holz, Stein oder Nahrung für den Auftrag.")?;
-        let worker = if hippo {
-            0
-        } else {
-            self.gathering_helper(true)?
-        };
+        let worker = if hippo { 0 } else { self.gathering_helper()? };
         if self
             .route_to(region, self.walkers[worker].tile(), tile, true)
             .is_none()
@@ -2139,11 +2356,7 @@ impl Settlement {
         if !self.camps[area] {
             return Err("Baue im Gebiet ein Sammellager für dauerhafte Aufträge.".into());
         }
-        let worker = if hippo {
-            0
-        } else {
-            self.gathering_helper(false)?
-        };
+        let worker = if hippo { 0 } else { self.gathering_helper()? };
         let job = Job::GatherArea(area, material);
         if self.walkers[worker].job == Some(job) {
             return Err("Das Nilpferd sammelt diesen Rohstoff bereits.".into());
@@ -2318,6 +2531,7 @@ impl Settlement {
         }
         match self.walkers[0].job {
             Some(Job::Gather(_) | Job::GatherArea(..)) => "Sammelt",
+            Some(Job::Move(_)) => "Unterwegs",
             Some(Job::Watch(_)) => "Hält Wache",
             Some(Job::Tend(_)) => "Pflegt ein Feld",
             None if self.walkers[0].bundle.is_some() => "Bringt eine Ladung heim",
@@ -2328,11 +2542,9 @@ impl Settlement {
     fn threat_in(&self, region: &Region, tile: Tile, radius: i16) -> bool {
         (self.quest == Quest::Bridge
             && self.count(Building::Shrine) > 0
-            && region
-                .guards
-                .iter()
-                .zip(&self.guards)
-                .any(|(&guard, &spirit)| spirit > 0 && guard.within(tile, radius)))
+            && self.guards.iter().enumerate().any(|(index, &spirit)| {
+                spirit > 0 && Tile::from_world(self.guard_world(region, index)).within(tile, radius)
+            }))
             || (self.outcome.is_some()
                 && region
                     .districts
@@ -2446,7 +2658,9 @@ impl Settlement {
                 } else {
                     1 + gifts.storm
                 };
-                for (&guard, spirit) in region.guards.iter().zip(&mut self.guards) {
+                for index in 0..self.guards.len() {
+                    let guard = Tile::from_world(self.guard_world(region, index));
+                    let spirit = &mut self.guards[index];
                     if guard.within(tile, radius) {
                         *spirit = spirit.saturating_sub(force);
                     }
@@ -2612,6 +2826,18 @@ impl Settlement {
             Quest::Bridge => format!("Baue Ansehen ({}/{}) auf und erfülle die Bitte. Oder vertreibe die Wachen mit Windstößen.", self.renown(), region.renown),
             Quest::Districts => format!("Führe die Nachbardörfer zusammen ({}/2). Siedlungen wählst du auf der Landkarte.", self.districts.iter().filter(|state| state.outcome.is_some()).count()),
             Quest::Complete => "Kapitel abgeschlossen. Du kannst weiterbauen oder weiterreisen.".into(),
+        }
+    }
+
+    pub fn side_quest(&self, region: &Region) -> SideQuest {
+        if region.sandbox || self.local_finished {
+            SideQuest::Complete
+        } else if !self.local_accepted {
+            SideQuest::Available
+        } else if self.local_quest(region).2 {
+            SideQuest::Ready
+        } else {
+            SideQuest::Active
         }
     }
 
@@ -2814,7 +3040,9 @@ impl Campaign {
                             Job::GatherArea(area, _) => {
                                 region.areas.get(area).is_some() && city.camps[area]
                             }
-                            Job::Watch(tile) | Job::Tend(tile) => region.bounds.contains(tile),
+                            Job::Move(tile) | Job::Watch(tile) | Job::Tend(tile) => {
+                                region.bounds.contains(tile)
+                            }
                         };
                         city.nodes.len() == region.sources.len()
                             && city.regrowth.len() == region.sources.len()
@@ -3022,6 +3250,25 @@ impl Game {
                 settlement.assign_area(region, area, material, hippo)
             }
             Action::CancelArea(area, material) => settlement.cancel_area(area, material),
+            Action::AcceptLocal => {
+                if settlement.side_quest(region) != SideQuest::Available {
+                    return Err("Dieser Auftrag wurde bereits angenommen.".into());
+                }
+                settlement.local_accepted = true;
+                Ok("Der Nebenauftrag steht jetzt unter Aufträge.".into())
+            }
+            Action::FinishLocal => {
+                if settlement.side_quest(region) != SideQuest::Ready {
+                    return Err("Erfülle zuerst die Ziele des Nebenauftrags.".into());
+                }
+                settlement.local_finished = true;
+                settlement.faith = settlement.faith.saturating_add(6);
+                gifts.earn();
+                research.earn(2);
+                Ok("Nebenauftrag erfüllt · 6 Glauben · 2 Erkenntnis".into())
+            }
+            Action::RecallHelpers => settlement.recall_helpers(),
+            Action::MoveHippo(tile) => settlement.move_hippo(region, tile),
             Action::Watch(tile) => settlement.watch(region, tile, *gifts),
             Action::Tend(tile) => settlement.tend(region, tile, *gifts),
             Action::Feed => settlement.feed(),
@@ -3114,16 +3361,6 @@ impl Game {
                 .campaign
                 .unlocked
                 .max((index + 1).min(self.regions.len() - 1));
-        }
-        if !city.local_finished
-            && city.quest.index() >= Quest::Bridge.index()
-            && city.local_quest(region).2
-        {
-            city.local_finished = true;
-            city.faith = city.faith.saturating_add(6);
-            self.campaign.gifts.earn();
-            self.campaign.research.earn(2);
-            return true;
         }
         main
     }
@@ -3579,7 +3816,7 @@ mod tests {
         let city = game.campaign.settlements[0].as_mut().unwrap();
         walker.route = city.route_to(&region, from, to, false).unwrap();
         assert_eq!(walker.route.front(), Some(&tile));
-        city.advance_walker(&mut walker, &region, Gifts::default(), 0.45);
+        city.advance_walker(&mut walker, &region, Gifts::default(), 0.45, 0);
         assert!(walker.position[1] < f32::from(tile.1));
         assert_eq!(walker.route.back(), Some(&to));
     }

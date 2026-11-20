@@ -47,6 +47,7 @@ pub struct Art {
     pub roof: Handle<Mesh>,
     pub curved_roof: Handle<Mesh>,
     pub masonry: Handle<Mesh>,
+    blossoms: Handle<Mesh>,
     pub ring: Handle<Mesh>,
     pub plan_corners: Handle<Mesh>,
     pub plan_cross: Handle<Mesh>,
@@ -102,6 +103,7 @@ impl Art {
             roof: meshes.add(roof_mesh(false)),
             curved_roof: meshes.add(roof_mesh(true)),
             masonry: meshes.add(masonry_mesh()),
+            blossoms: meshes.add(blossom_mesh()),
             ring: meshes.add(ring_mesh()),
             plan_corners: meshes.add(plan_corners()),
             plan_cross: meshes.add(plan_cross()),
@@ -193,6 +195,8 @@ pub struct WoodlandKit {
     pub crop: Handle<Scene>,
     lamp: Handle<Scene>,
     fern: Handle<Scene>,
+    harbor_lantern: Handle<Scene>,
+    watch_fern: Handle<Scene>,
 }
 
 impl WoodlandKit {
@@ -207,6 +211,8 @@ impl WoodlandKit {
             crop: scene("crop_strawberry"),
             lamp: scene("furniture_copper_lamp"),
             fern: scene("furniture_fern"),
+            harbor_lantern: scene("furniture_harbor_lantern"),
+            watch_fern: scene("watch_fern"),
         }
     }
 }
@@ -316,6 +322,32 @@ impl Geometry {
         self.quad(a, b, c, d, color);
     }
 
+    fn flagstone(&mut self, region: &Region, center: Vec3, size: Vec2, key: u32, color: Color) {
+        let bevel = 0.028 + (key & 7) as f32 * 0.003;
+        let turn = Quat::from_rotation_y(((key >> 4) & 31) as f32 * 0.012 - 0.185);
+        let border = [
+            (-0.66, -1.),
+            (-1., -0.62),
+            (-1., 0.57),
+            (-0.63, 1.),
+            (0.63, 0.95),
+            (1., 0.61),
+            (0.96, -0.54),
+            (0.67, -1.),
+        ];
+        let points = border.map(|(x, z)| turn * Vec3::new(x * size.x, 0., z * size.y));
+        let foot = points.map(|p| terrain::on_ground(region, center + p) + Vec3::Y * 0.028);
+        let top = points
+            .map(|p| terrain::on_ground(region, center + p * 0.89) + Vec3::Y * (0.028 + bevel));
+        let middle = terrain::on_ground(region, center) + Vec3::Y * (0.043 + bevel);
+        for index in 0..top.len() {
+            let next = (index + 1) % top.len();
+            let rim = color.mix(&rgb(0x7c6552), 0.21 + (index % 3) as f32 * 0.065);
+            self.quad(foot[index], foot[next], top[next], top[index], rim);
+            self.tri(middle, top[index], top[next], color);
+        }
+    }
+
     pub fn mesh(self) -> Mesh {
         Mesh::new(
             PrimitiveTopology::TriangleList,
@@ -371,8 +403,8 @@ fn roof_mesh(curved: bool) -> Mesh {
                 if z1 <= z0 {
                     continue;
                 }
-                let shade =
-                    rgb([0xe5d8c9, 0xf9f0e7, 0xeedfd0, 0xf3e7d8][(row * 13 + column * 7) % 4]);
+                let shade = rgb([0xd8b9a3, 0xfff5df, 0xeed5bf, 0xe9c6b0, 0xf0e1d3, 0xc8a590]
+                    [(row * 13 + column * 7) % 6]);
                 let ridge = (z0 + z1) * 0.5;
                 let uplift = if curved { 0.012 } else { 0.025 };
                 geometry.quad(
@@ -381,6 +413,12 @@ fn roof_mesh(curved: bool) -> Mesh {
                     Vec3::new(x1, y1 + uplift, ridge),
                     Vec3::new(x1, y1, z0),
                     shade,
+                );
+                geometry.tri(
+                    Vec3::new(x0, y0 - 0.021, z0),
+                    Vec3::new(x0, y0, z0),
+                    Vec3::new(x0, y0 + uplift, ridge),
+                    shade.mix(&rgb(0x9a715f), 0.39),
                 );
                 geometry.quad(
                     Vec3::new(x0, y0 + uplift, ridge),
@@ -427,19 +465,68 @@ fn masonry_mesh() -> Mesh {
             let start = -0.619 + index as f32 * 0.25 + (course % 2) as f32 * 0.118;
             let x0 = start.max(-0.499);
             let x1 = (start + 0.242).min(0.499);
-            let y0 = -0.499 + course as f32 * 0.2;
-            let y1 = y0 + 0.193;
+            let key = hash(index as i16, course as i16, 808);
+            let y0 = -0.494 + course as f32 * 0.2 + (key & 3) as f32 * 0.0017;
+            let y1 = y0 + 0.183;
+            if x1 - x0 < 0.022 {
+                continue;
+            }
             let color = rgb(bricks[(course * 7 + index * 3) % bricks.len()]);
+            let face = 0.505 + ((key >> 8) & 7) as f32 * 0.0019;
+            let edge = color.mix(&rgb(0x96846c), 0.25);
             geometry.quad(
-                Vec3::new(x0, y0, 0.5),
-                Vec3::new(x1, y0, 0.5),
-                Vec3::new(x1, y1, 0.5),
-                Vec3::new(x0, y1, 0.5),
+                Vec3::new(x0 + 0.008, y0 + 0.007, face),
+                Vec3::new(x1 - 0.008, y0 + 0.007, face),
+                Vec3::new(x1 - 0.005, y1, face),
+                Vec3::new(x0 + 0.006, y1 - 0.002, face),
                 color,
+            );
+            geometry.quad(
+                Vec3::new(x0, y0, 0.50),
+                Vec3::new(x1, y0, 0.50),
+                Vec3::new(x1 - 0.008, y0 + 0.007, face),
+                Vec3::new(x0 + 0.008, y0 + 0.007, face),
+                edge,
             );
         }
     }
     geometry.mesh()
+}
+
+fn blossom_mesh() -> Mesh {
+    let mut vines = Geometry::default();
+    for i in 0..19 {
+        let key = hash(i, 4, 677);
+        let t = f32::from(i) / 19.;
+        let anchor = Vec3::new(
+            (t * 7.7).sin() * 0.24 + (key % 17) as f32 * 0.014,
+            t * 1.1,
+            0.,
+        );
+        let leaf = rgb([0x597648, 0x758f52, 0x9ca757][(key % 3) as usize]);
+        let bloom = rgb([0xd85183, 0xef8b9b, 0xbd4b76, 0xf3b4a1][((key >> 5) % 4) as usize]);
+        for reach in [-1., 1.] {
+            let tip = anchor + Vec3::new(reach * (0.105 + t * 0.043), 0.088, 0.045);
+            let up = anchor + Vec3::new(0., 0.10, 0.042);
+            vines.tri(anchor - Vec3::Y * 0.059, tip, up, leaf);
+            vines.tri(up, tip, anchor - Vec3::Y * 0.059, leaf);
+            if i % 3 != 0 {
+                vines.tri(
+                    tip,
+                    tip + Vec3::new(0.075, 0.014, 0.022),
+                    tip + Vec3::new(0.023, 0.085, 0.027),
+                    bloom,
+                );
+                vines.tri(
+                    tip,
+                    tip + Vec3::new(0.023, 0.085, 0.027),
+                    tip + Vec3::new(-0.057, 0.038, 0.024),
+                    bloom,
+                );
+            }
+        }
+    }
+    vines.mesh()
 }
 
 pub fn stonework(parent: &mut ChildSpawnerCommands, art: &Art, at: Vec3, size: Vec3) {
@@ -952,19 +1039,25 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
         Vec3::new(0.11, 0.12, length + 0.69),
     );
     for x in [-width * 0.47, width * 0.47] {
-        for z in [-length * 0.49, length * 0.49] {
-            block(
-                parent,
-                art,
-                &art.dark_wood,
-                Vec3::new(x, h * 0.5 + 0.24, z),
-                Vec3::new(0.15, h, 0.15),
-            );
+        if biome != Biome::Aegean {
+            for z in [-length * 0.49, length * 0.49] {
+                block(
+                    parent,
+                    art,
+                    &art.dark_wood,
+                    Vec3::new(x, h * 0.5 + 0.24, z),
+                    Vec3::new(0.15, h, 0.15),
+                );
+            }
         }
         block(
             parent,
             art,
-            &art.timber,
+            if biome == Biome::Aegean {
+                &art.warm_stone
+            } else {
+                &art.timber
+            },
             Vec3::new(x, 1.16, 0.),
             Vec3::new(0.13, 0.12, length + 0.12),
         );
@@ -1040,7 +1133,11 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
         block(
             parent,
             art,
-            &art.door,
+            if biome == Biome::Aegean {
+                &art.cobalt
+            } else {
+                &art.door
+            },
             Vec3::new(0., 0.83, face + 0.076),
             Vec3::new(0.54, 1.04, 0.063),
         );
@@ -1052,6 +1149,10 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
             Vec3::splat(0.072),
         );
         for x in [-0.74, 0.74] {
+            if biome == Biome::Aegean {
+                shutter(parent, art, Vec3::new(x, 1.21, face + 0.03), 0.);
+                continue;
+            }
             block(
                 parent,
                 art,
@@ -1075,6 +1176,19 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
             );
         }
     }
+    if biome == Biome::Aegean {
+        if matches!(kind, Building::House | Building::Workshop) {
+            shutter(
+                parent,
+                art,
+                Vec3::new(width * 0.5 + 0.043, 1.22, -0.49),
+                std::f32::consts::FRAC_PI_2,
+            );
+        }
+        if kind == Building::House {
+            aegean_entry(parent, art, face);
+        }
+    }
     if kind != Building::Store {
         block(
             parent,
@@ -1091,6 +1205,74 @@ pub fn building(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind
             Vec3::new(0.37, 0.13, 0.46),
         );
     }
+}
+
+fn shutter(parent: &mut ChildSpawnerCommands, art: &Art, position: Vec3, turn: f32) {
+    let rotation = Quat::from_rotation_y(turn);
+    let mut piece = |surface: &Handle<StandardMaterial>, at: [f32; 3], size: [f32; 3]| {
+        part(
+            parent,
+            &art.cube,
+            surface,
+            position + rotation * Vec3::from(at),
+            Vec3::from(size),
+            rotation,
+        );
+    };
+    piece(&art.warm_stone, [0., 0., 0.], [0.62, 0.56, 0.079]);
+    piece(&art.dark_wood, [0., 0.025, 0.042], [0.34, 0.40, 0.034]);
+    piece(&art.ridge, [0., 0.071, 0.059], [0.23, 0.27, 0.020]);
+    piece(&art.limestone, [0., -0.26, 0.052], [0.65, 0.081, 0.173]);
+    for side in [-1., 1.] {
+        piece(
+            &art.cobalt,
+            [side * 0.243, 0.024, 0.075],
+            [0.172, 0.397, 0.058],
+        );
+        piece(
+            &art.blue,
+            [side * 0.226, -0.086, 0.11],
+            [0.16, 0.044, 0.025],
+        );
+    }
+}
+
+fn aegean_entry(parent: &mut ChildSpawnerCommands, art: &Art, face: f32) {
+    for i in 0..5 {
+        let angle = std::f32::consts::PI * i as f32 / 4.;
+        part(
+            parent,
+            &art.cube,
+            &art.limestone,
+            Vec3::new(angle.cos() * 0.38, 1.38 + angle.sin() * 0.16, face + 0.06),
+            Vec3::new(0.15, 0.16, 0.11),
+            Quat::from_rotation_z(angle - 1.57),
+        );
+    }
+    part(
+        parent,
+        &art.cylinder,
+        &art.roof_color[Biome::Aegean as usize],
+        Vec3::new(0.67, 0.26, face + 0.30),
+        Vec3::new(0.37, 0.30, 0.36),
+        Quat::IDENTITY,
+    );
+    part(
+        parent,
+        &art.blossoms,
+        &art.ground,
+        Vec3::new(0.66, 0.39, face + 0.32),
+        Vec3::new(0.71, 1.07, 1.),
+        Quat::from_rotation_y(0.29),
+    );
+    part(
+        parent,
+        &art.blossoms,
+        &art.ground,
+        Vec3::new(-1.02, 0.41, face + 0.11),
+        Vec3::new(0.51, 0.83, 1.),
+        Quat::from_rotation_y(-0.32),
+    );
 }
 
 fn civic_building(parent: &mut ChildSpawnerCommands, art: &Art, kind_biome: Biome, kind: Building) {
@@ -1308,11 +1490,11 @@ pub fn paved_roads(city: &Settlement, region: &Region) -> Mesh {
             .enumerate()
         {
             let seed = hash(tile.0, tile.1, i as u32);
-            ground.ground_box(
+            ground.flagstone(
                 region,
-                p + Vec3::new(x, 0.014, z),
-                0.19 + (seed % 4) as f32 * 0.013,
-                0.17,
+                p + Vec3::new(x, 0., z),
+                Vec2::new(0.19 + (seed % 4) as f32 * 0.013, 0.19),
+                seed,
                 pavers[(seed % 4) as usize],
             );
         }

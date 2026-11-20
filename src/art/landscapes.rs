@@ -461,36 +461,38 @@ fn ripple(foam: &mut Geometry, region: &Region, tile: Tile, key: u32) {
 
 fn stones(ground: &mut Geometry, region: &Region, palette: &Palette, tile: Tile, key: u32) {
     let base = rgb(palette.path);
-    let rotation = Quat::from_rotation_y((key % 37) as f32 * 0.017 - 0.31);
     let vertical = region.road(tile.offset(0, 1)) || region.road(tile.offset(0, -1));
-    for i in 0..3 {
-        let offset = (i as f32 - 1.) * 0.48;
-        let shift = (hash(tile.0, tile.1, i + 31) % 21) as f32 * 0.019 - 0.19;
+    let paved = region.kind == Biome::Aegean;
+    let count = if paved { 8 } else { 3 };
+    for i in 0..count {
+        let column = if paved { i / 2 } else { i };
+        let offset = if paved {
+            (column as f32 - 1.5) * 0.42
+        } else {
+            (i as f32 - 1.) * 0.48
+        };
+        let irregular = ((hash(tile.0, tile.1, i + 31) % 21) as f32 - 10.) * 0.011;
+        let shift = irregular
+            + if paved {
+                (i % 2) as f32 * 0.45 - 0.19
+            } else {
+                0.
+            };
         let center = tile.world()
             + if vertical {
                 Vec3::new(shift, 0., offset)
             } else {
                 Vec3::new(offset, 0., shift)
             };
-        let color = base.mix(
-            &rgb(palette.cliff),
-            0.04 + ((key >> (i * 3)) & 7) as f32 * 0.075,
-        );
-        let around = [
-            (-0.22, -0.13),
-            (-0.28, 0.05),
-            (-0.16, 0.21),
-            (0.18, 0.18),
-            (0.27, 0.01),
-            (0.17, -0.15),
-        ];
-        let center = terrain::on_ground(region, center) + Vec3::Y * 0.045;
-        let border = around.map(|(x, z)| {
-            terrain::on_ground(region, center + rotation * Vec3::new(x, 0., z)) + Vec3::Y * 0.028
-        });
-        for (a, b) in border.into_iter().zip(border.into_iter().cycle().skip(1)) {
-            ground.tri(center, a, b, color);
-        }
+        let shade = hash(tile.0, tile.1, i + 223);
+        let color = base.mix(&rgb(palette.cliff), 0.09 + (shade & 7) as f32 * 0.087);
+        let size = if paved {
+            Vec2::new(0.201, 0.218)
+        } else {
+            Vec2::new(0.21, 0.252)
+        };
+        let size = if vertical { size.yx() } else { size };
+        ground.flagstone(region, center, size, key ^ shade, color);
     }
 }
 

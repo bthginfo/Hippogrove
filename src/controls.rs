@@ -229,16 +229,25 @@ pub struct Controls {
     mouse: Option<Drag>,
     pad_buttons: u32,
     resume_pad: bool,
+    pinch_in_world: bool,
+}
+
+fn ground_point(
+    game: &Game,
+    camera: &Camera,
+    pose: &GlobalTransform,
+    screen: Vec2,
+) -> Option<Vec3> {
+    camera
+        .viewport_to_world(pose, screen)
+        .ok()
+        .and_then(|ray| terrain::ray_contact(game.region(), ray, game.city().bridge_fixed))
 }
 
 fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform, screen: Vec2) {
     let region = game.region();
     let city = game.city();
-    let Some(point) = camera
-        .viewport_to_world(pose, screen)
-        .ok()
-        .and_then(|ray| terrain::ray_contact(region, ray, city.bridge_fixed))
-    else {
+    let Some(point) = ground_point(game, camera, pose, screen) else {
         return;
     };
     let mut tile = Tile::from_world(point);
@@ -318,9 +327,10 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
             }
         }
         if play.tool == Tool::Miracles && play.miracle().offensive() {
-            for (&tile, &spirit) in region.guards.iter().zip(&city.guards) {
+            for (index, &spirit) in city.guards.iter().enumerate() {
                 if spirit > 0 {
-                    consider(tile, tile.world() + Vec3::Y * 0.65);
+                    let point = city.guard_world(region, index);
+                    consider(Tile::from_world(point), point + Vec3::Y * 0.65);
                 }
             }
             for (district, state) in region.districts.iter().zip(&city.districts) {
@@ -339,27 +349,14 @@ fn select(play: &mut Play, game: &Game, camera: &Camera, pose: &GlobalTransform,
     }
 }
 
-fn drag(
-    gesture: &mut Drag,
-    position: Vec2,
-    play: &mut Play,
-    game: &Game,
-    view: &mut CameraRig,
-    camera: &Camera,
-    pose: &GlobalTransform,
-    height: f32,
-) {
+fn drag(gesture: &mut Drag, position: Vec2, play: &Play, view: &mut CameraRig, height: f32) {
     let delta = position - gesture.last;
     if !gesture.dragging && gesture.start.distance(position) > 9. {
         gesture.dragging = true;
     }
     if gesture.dragging && !gesture.over_ui && play.panel == Panel::Closed {
-        if play.tool.aims_with_drag() {
-            select(play, game, camera, pose, position);
-        } else {
-            let scale = view.height / height.max(120.);
-            view.pan(-delta.x * scale, delta.y * scale);
-        }
+        let scale = view.rendered_height / height.max(120.);
+        view.pan(-delta.x * scale, delta.y * scale);
     }
     gesture.last = position;
 }
@@ -383,6 +380,35 @@ fn release(
                 play.activate(action, game, view, now);
             }
         } else if !over_ui && play.panel == Panel::Closed {
+            let city = game.city();
+            let region = game.region();
+            if play.tool == Tool::Hand
+                && city.held.is_none()
+                && view.rendered_height < 46.
+                && matches!(
+                    city.side_quest(region),
+                    crate::game::SideQuest::Available | crate::game::SideQuest::Ready
+                )
+                && camera
+                    .world_to_viewport(pose, crate::life::sign_position(region))
+                    .is_ok_and(|tip| tip.distance(position) <= 15.)
+            {
+                play.activate(UiAction::Panel(Panel::SideQuest), game, view, now);
+                return;
+            }
+            let hippo = city.walkers[0].world();
+            let ground = terrain::actor_height(game.region(), hippo, city.bridge_fixed);
+            if play.tool == Tool::Hand
+                && city.held.is_none()
+                && view.rendered_height < 48.
+                && camera
+                    .world_to_viewport(pose, hippo.with_y(ground + 0.92))
+                    .is_ok_and(|tip| tip.distance(position) <= 19.)
+            {
+                play.aim = city.walkers[0].tile();
+                play.activate(UiAction::Tool(Tool::Hippo), game, view, now);
+                return;
+            }
             select(play, game, camera, pose, position);
         }
     }
@@ -434,6 +460,7 @@ pub fn collect(
         controls.fingers.clear();
         controls.touch = None;
         controls.mouse = None;
+        controls.pinch_in_world = false;
         controls.resume_pad = true;
         touches.clear();
         mouse.clear();
@@ -449,12 +476,17 @@ pub fn collect(
         match event.phase {
             TouchPhase::Started => {
                 controls.fingers.insert(event.id, event.position);
+                let hit = hud::hit(&areas, event.position, scale);
                 if controls.fingers.len() == 1 {
-                    controls.touch = Some((
-                        event.id,
-                        Drag::new(event.position, hud::hit(&areas, event.position, scale)),
-                    ));
+                    controls.touch = Some((event.id, Drag::new(event.position, hit)));
                 } else {
+                    if controls.fingers.len() == 2 {
+                        controls.pinch_in_world = !hit.0
+                            && controls
+                                .touch
+                                .as_ref()
+                                .is_some_and(|(_, first)| !first.over_ui);
+                    }
                     controls.touch = None;
                 }
             }
@@ -471,29 +503,26 @@ pub fn collect(
                 if let (Some((before, previous)), Some((after, current))) =
                     (before, gesture_in_world(&controls.fingers))
                 {
-                    if play.panel == Panel::Closed {
-                        let scale = view.height / size.y.max(120.);
+                    if play.panel == Panel::Closed && controls.pinch_in_world {
+                        let scale = view.rendered_height / size.y.max(120.);
                         let delta = current - previous;
                         view.pan(-delta.x * scale, delta.y * scale);
-                        view.zoom((after / before).ln());
+                        view.zoom_toward(
+                            (after / before).ln(),
+                            ground_point(&game, camera, pose, previous),
+                        );
                     }
                 } else if let Some((finger, gesture)) = &mut controls.touch {
                     if *finger == event.id {
-                        drag(
-                            gesture,
-                            event.position,
-                            &mut play,
-                            &game,
-                            &mut view,
-                            camera,
-                            pose,
-                            size.y,
-                        );
+                        drag(gesture, event.position, &play, &mut view, size.y);
                     }
                 }
             }
             TouchPhase::Ended | TouchPhase::Canceled => {
                 controls.fingers.remove(&event.id);
+                if controls.fingers.len() < 2 {
+                    controls.pinch_in_world = false;
+                }
                 if controls
                     .touch
                     .as_ref()
@@ -542,9 +571,7 @@ pub fn collect(
         }
     }
     if let (Some(gesture), Some(cursor)) = (&mut controls.mouse, window.cursor_position()) {
-        drag(
-            gesture, cursor, &mut play, &game, &mut view, camera, pose, size.y,
-        );
+        drag(gesture, cursor, &play, &mut view, size.y);
     }
     for scroll in wheel.read().filter(|scroll| scroll.window == entity) {
         if play.panel == Panel::Closed {
@@ -577,7 +604,7 @@ pub fn collect(
     .zip(Tool::ALL)
     {
         if keys.just_pressed(key) && play.panel == Panel::Closed {
-            play.tool(tool);
+            play.activate(UiAction::Tool(tool), &mut game, &mut view, now);
         }
     }
     for (key, action) in [
@@ -593,6 +620,7 @@ pub fn collect(
         (KeyCode::KeyT, UiAction::Panel(Panel::Research)),
         (KeyCode::KeyI, UiAction::Panel(Panel::Inventory)),
         (KeyCode::KeyF, UiAction::Panel(Panel::Modes)),
+        (KeyCode::F1, UiAction::Panel(Panel::Menu)),
     ] {
         if keys.just_pressed(key) {
             play.activate(action, &mut game, &mut view, now);
@@ -664,13 +692,10 @@ pub fn collect(
             let i = (play.tool as i32 + horizontal).rem_euclid(Tool::ALL.len() as i32);
             play.tool(Tool::ALL[i as usize]);
         }
-        if vertical != 0 {
-            let choice = (play.option as i32 + vertical).rem_euclid(play.tool.choices() as i32);
-            play.choose(choice as usize);
-        }
+        let edge = Vec2::new(19., 25.);
         let cursor = (play.pointer.unwrap_or(size * 0.5)
             + Vec2::new(left.x, -left.y) * size.y * 0.83 * dt)
-            .clamp(Vec2::ZERO, size);
+            .clamp(edge, (size - edge).max(edge));
         play.pointer = Some(cursor);
         let over_ui = hud::hit(&areas, cursor, scale).0;
         if !over_ui && (left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13) {
@@ -678,6 +703,16 @@ pub fn collect(
         }
         if pressed & SOUTH != 0 {
             play.activate(UiAction::Confirm, &mut game, &mut view, now);
+        }
+        if vertical != 0 && play.panel == Panel::Closed {
+            let action = if vertical > 0 {
+                UiAction::Guide
+            } else if play.tool == Tool::Hand {
+                UiAction::Panel(Panel::Menu)
+            } else {
+                UiAction::Tool(play.tool)
+            };
+            play.activate(action, &mut game, &mut view, now);
         }
     } else {
         let direction = Vec2::new(horizontal as f32, vertical as f32);
@@ -688,17 +723,17 @@ pub fn collect(
             }
         }
     }
-    let progress_panel = if play.panel == Panel::Closed && play.tool == Tool::Build {
-        Panel::Catalog
+    let context = if play.panel == Panel::Closed && play.tool != Tool::Hand {
+        UiAction::Tool(play.tool)
     } else {
-        Panel::Progress
+        UiAction::Panel(Panel::Progress)
     };
     for (bit, action) in [
         (EAST, UiAction::Cancel),
-        (MENU, UiAction::Panel(Panel::Map)),
+        (MENU, UiAction::Panel(Panel::Menu)),
         (ROTATE, UiAction::Rotate),
         (GUIDE, UiAction::Guide),
-        (PROGRESS, UiAction::Panel(progress_panel)),
+        (PROGRESS, context),
     ] {
         if pressed & bit != 0 {
             play.activate(action, &mut game, &mut view, now);

@@ -1,4 +1,4 @@
-use super::{Art, block, mound, parcel, part, stonework};
+use super::{Art, block, mound, parcel, part, place_scene, stonework};
 use crate::{
     civic::Civic,
     region::{Biome, Material},
@@ -596,6 +596,13 @@ pub fn draw(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind: Ci
             }
             pennant(parent, art, biome, 1.46, 1.31, -0.21);
             exhibit(parent, art, Material::Food, 0.13, 0.43);
+            place_scene(
+                parent,
+                &art.waldwinkel.harbor_lantern,
+                Vec3::new(-1.56, 0.32, 1.17),
+                0.55,
+                0.13,
+            );
         }
         Civic::Garden => {
             for x in [-0.97, 0.97] {
@@ -608,6 +615,13 @@ pub fn draw(parent: &mut ChildSpawnerCommands, art: &Art, biome: Biome, kind: Ci
             for x in [-0.43, 0.43] {
                 lamp(parent, art, x, 0.49, 1.20);
             }
+            place_scene(
+                parent,
+                &art.waldwinkel.watch_fern,
+                Vec3::new(0., 0.08, 0.35),
+                0.082,
+                0.67,
+            );
         }
         Civic::Tavern => {
             shell(parent, art, biome, [0., -0.53], [2.43, 1.55, 1.51], true);

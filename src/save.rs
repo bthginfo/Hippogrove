@@ -8,7 +8,10 @@ use bevy::{
 
 use serde::Deserialize;
 
-use crate::game::{Campaign, Game, Saves};
+use crate::{
+    game::{Campaign, Game, Saves},
+    sound::Mix,
+};
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -22,6 +25,7 @@ pub struct SaveFile {
     path: PathBuf,
     last_saved: f32,
     revision: u64,
+    mix: Mix,
 }
 
 impl SaveFile {
@@ -51,7 +55,16 @@ impl SaveFile {
             path: root.join("campaign.json"),
             last_saved: 0.,
             revision: 0,
+            mix: Mix::default(),
         }
+    }
+
+    pub fn load_mix(&mut self) -> Mix {
+        self.mix = fs::read(self.path.with_file_name("ton.json"))
+            .ok()
+            .and_then(|data| serde_json::from_slice(&data).ok())
+            .unwrap_or_default();
+        self.mix
     }
 
     pub fn load(&self) -> Option<Saves> {
@@ -78,13 +91,17 @@ impl SaveFile {
     }
 
     pub fn write(&self, saves: &Saves) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?
-        }
-        let temporary = self.path.with_extension("tmp");
-        fs::write(&temporary, serde_json::to_vec(saves)?)?;
-        fs::rename(temporary, &self.path)
+        write_json(&self.path, saves)
     }
+}
+
+fn write_json(path: &std::path::Path, value: &impl serde::Serialize) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("tmp");
+    fs::write(&temporary, serde_json::to_vec(value)?)?;
+    fs::rename(temporary, path)
 }
 
 pub fn checkpoint(
@@ -101,6 +118,13 @@ pub fn checkpoint(
         .any(|state| matches!(state, AppLifecycle::WillSuspend | AppLifecycle::Suspended));
     let closed = closing.read().count() > 0 || exits.read().count() > 0;
     let now = time.elapsed_secs();
+    if file.mix != play.mix {
+        let path = file.path.with_file_name("ton.json");
+        match write_json(&path, &play.mix) {
+            Ok(()) => file.mix = play.mix,
+            Err(error) => warn!("Ton-Einstellungen konnten nicht gesichert werden: {error}"),
+        }
+    }
     if suspended || closed || file.revision != play.revision || now - file.last_saved >= 3. {
         match file.write(&game.saved_games()) {
             Ok(()) => {

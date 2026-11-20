@@ -4,10 +4,12 @@ mod civic;
 mod controls;
 mod game;
 mod hud;
+mod life;
 mod modes;
 mod play;
 mod region;
 mod save;
+mod sound;
 mod story;
 mod terrain;
 mod view;
@@ -39,7 +41,7 @@ pub fn main() {
         }
         controls::setup_native();
     }
-    let file = SaveFile::for_device();
+    let mut file = SaveFile::for_device();
     let saved = file.load().and_then(Game::resume);
     let first_launch = saved.is_none();
     if saved.is_none() {
@@ -47,6 +49,7 @@ pub fn main() {
     }
     let game = saved.unwrap_or_else(|| Game::start(Mode::Campaign(Biome::Valley)));
     let mut play = Play::new(&game);
+    play.mix = file.load_mix();
     if first_launch {
         play.panel = Panel::Modes;
         play.story = None;
@@ -93,7 +96,8 @@ pub fn main() {
         .init_resource::<Target>()
         .init_resource::<view::Board>()
         .init_resource::<view::HarvestEffects>()
-        .add_systems(Startup, (view::setup, hud::setup))
+        .add_event::<sound::Harvest>()
+        .add_systems(Startup, (view::setup, hud::setup, sound::setup))
         .add_systems(FixedUpdate, simulate)
         .add_systems(
             Update,
@@ -104,16 +108,20 @@ pub fn main() {
                 refresh_target,
                 view::sync_board,
                 view::harvest,
+                sound::update,
                 (
                     view::props,
                     view::animate,
+                    life::update,
                     view::gates.after(view::animate),
                     view::aim,
+                    view::animate_paw.after(view::aim),
                     atmosphere::update,
                     view::magic,
                 ),
                 hud::layout,
                 hud::update,
+                hud::camera_fade,
                 save::checkpoint,
                 screenshot,
             )
@@ -135,6 +143,7 @@ fn android_renderer() -> bevy::render::RenderPlugin {
             ..default()
         }
         .into(),
+        synchronous_pipeline_compilation: true,
         ..default()
     }
 }
@@ -186,6 +195,17 @@ fn embed_assets(app: &App) {
         embed!("models/waldwinkel/crop_strawberry.glb"),
         embed!("models/waldwinkel/furniture_copper_lamp.glb"),
         embed!("models/waldwinkel/furniture_fern.glb"),
+        embed!("models/waldwinkel/furniture_harbor_lantern.glb"),
+        embed!("models/waldwinkel/watch_fern.glb"),
+        embed!("audio/grove.ogg"),
+        embed!("audio/axe_cut.wav"),
+        embed!("audio/stone_break.wav"),
+        embed!("audio/harvest_sound.wav"),
+        embed!("audio/coast.wav"),
+        embed!("audio/rain_wood.wav"),
+        embed!("audio/fernwind.wav"),
+        embed!("audio/card_hit.wav"),
+        embed!("audio/card_shield.wav"),
     ];
     for (name, data) in files {
         assets.insert_asset(Path::new("assets").join(name), Path::new(name), data);

@@ -8,7 +8,7 @@ use bevy::{
 
 use crate::{
     art::{Art, rgb},
-    game::Game,
+    game::{DAY_LENGTH, Game},
     play::{CameraRig, Panel, Play},
     region::{Biome, Weather},
     terrain,
@@ -55,7 +55,7 @@ struct Sky {
 }
 
 impl Sky {
-    fn target(biome: Biome, weather: Weather) -> Self {
+    fn target(biome: Biome, weather: Weather, clock: f32) -> Self {
         let (sun, fill, horizon, lux, yaw, tilt) = match biome {
             Biome::Valley => (0xffe1b4, 0xe3efe5, 0xb7c9ab, 3100., -1.10, -0.88),
             Biome::Fjord => (0xffe8c6, 0xc2dcf0, 0x99b3c5, 2850., -0.85, -0.65),
@@ -87,6 +87,27 @@ impl Sky {
         sky.lux *= lux;
         sky.fill_amount *= fill;
         sky.haze = haze;
+        let time = clock.rem_euclid(DAY_LENGTH);
+        let dawn = 1. - terrain::smooth(time / 34.);
+        let dusk =
+            terrain::smooth((time - 103.) / 29.) * (1. - terrain::smooth((time - 141.) / 12.));
+        let moon =
+            terrain::smooth((time - 143.) / 13.) * (1. - terrain::smooth((time - 178.) / 14.));
+        let evening = (dusk + dawn * 0.57).clamp(0., 1.);
+        sky.sun = sky
+            .sun
+            .mix(&rgb(0xffbf86), evening * 0.58)
+            .mix(&rgb(0xa1b5ed), moon * 0.94);
+        sky.fill = sky.fill.mix(&rgb(0x9bb1e8), moon * 0.86);
+        sky.horizon = sky
+            .horizon
+            .mix(&rgb(0xedbc98), dusk * 0.43)
+            .mix(&rgb(0x526887), moon * 0.90);
+        sky.lux *= 1. - 0.72 * moon - 0.13 * dusk;
+        sky.fill_amount *= 1. - 0.21 * moon;
+        sky.yaw += time.min(150.) * 0.0035 - 0.16;
+        sky.tilt += 0.31 * evening + 0.22 * moon;
+        sky.haze += 0.10 * dusk + 0.09 * moon;
         sky
     }
 
@@ -195,7 +216,7 @@ pub(crate) fn update(
     } else {
         region.weather(city.weather_time)
     };
-    let target = Sky::target(region.kind, weather);
+    let target = Sky::target(region.kind, weather, city.weather_time);
     let delta = time.delta_secs().min(0.075);
     let easing = 1. - (-1.65 * delta).exp();
     let changed = state.biome != Some(region.kind);
@@ -213,21 +234,21 @@ pub(crate) fn update(
     background.0 = sky.horizon;
     sun.0.color = sky.sun;
     sun.0.illuminance = sky.lux;
-    sun.0.shadows_enabled = view.height <= 48.;
     sun.1.rotation = Quat::from_euler(EulerRot::YXZ, sky.yaw, sky.tilt, 0.);
-    let distance = Vec3::new(13., 22., 26.).length() * (view.height / 22.).max(1.);
+    let height = view.rendered_height;
+    let distance = CameraRig::arm(height).length();
     let density = 1.09 - 0.52 * sky.haze;
     fog.color = sky.horizon.with_alpha(sky.haze);
     fog.falloff = FogFalloff::Linear {
         start: distance * density,
-        end: distance + view.height * (1.23 + 1.07 * density),
+        end: distance + height * (1.23 + 1.07 * density),
     };
 
     if changed || (weather != Weather::Clear && state.weather != Some(weather)) {
         state.weather = Some(weather);
         state.presence = if changed { 1. } else { 0. };
     }
-    let active = weather != Weather::Clear && view.height < 39.;
+    let active = weather != Weather::Clear && height < 39.;
     let desired = if active { 1. } else { 0. };
     state.presence = state.presence.lerp(desired, (delta * 3.6).min(1.));
     let current = state.weather.unwrap_or(Weather::Clear);

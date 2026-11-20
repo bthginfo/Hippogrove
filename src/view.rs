@@ -9,9 +9,9 @@ use crate::{
     art::{self, Art, block, mound, part},
     game::{Building, Crop, Game, MAX_ROAD_RUN, MAX_WALKERS, Miracle, Quest, Walker},
     modes::Mode,
-    play::{CameraRig, Panel, Play, Target, Tool},
+    play::{CameraRig, Panel, PawGesture, Play, Target, Tool},
     region::{AREA_COUNT, Biome, CELL, Material, Tile},
-    terrain,
+    sound, terrain,
 };
 
 #[derive(Component)]
@@ -91,6 +91,12 @@ pub enum CarryView {
 pub struct Cloud;
 
 #[derive(Component)]
+pub struct Paw;
+
+#[derive(Component)]
+pub struct PawDigit(Vec3);
+
+#[derive(Component)]
 pub struct GroundRing(Option<(Mode, usize, Tile, i16, bool)>);
 
 #[derive(Clone, Copy, Component)]
@@ -154,7 +160,7 @@ pub fn setup(
             far: 790.,
             ..OrthographicProjection::default_3d()
         }),
-        Transform::from_translation(view.target + Vec3::new(13., 22., 26.))
+        Transform::from_translation(view.target + CameraRig::arm(view.height))
             .looking_at(view.target, Vec3::Y),
         Msaa::Off,
         Fxaa::default(),
@@ -182,6 +188,7 @@ pub fn setup(
             }
             let paw = parent
                 .spawn((
+                    Paw,
                     Transform::from_rotation(
                         Quat::from_rotation_x(-0.38) * Quat::from_rotation_z(-0.20),
                     ),
@@ -197,13 +204,9 @@ pub fn setup(
                     Vec3::new(0.55, 0.47, 0.24),
                 );
                 for x in [-0.12, 0.04, 0.2] {
-                    mound(
-                        digits,
-                        &art,
-                        &art.boot,
-                        Vec3::new(x, -0.38, 0.20),
-                        Vec3::new(0.16, 0.27, 0.19),
-                    );
+                    let rest = Vec3::new(x, -0.38, 0.20);
+                    let digit = mound(digits, &art, &art.boot, rest, Vec3::new(0.16, 0.27, 0.19));
+                    digits.commands().entity(digit).insert(PawDigit(rest));
                 }
             });
             for material in Material::ALL {
@@ -255,18 +258,26 @@ pub fn setup(
 
 pub fn move_camera(
     time: Res<Time>,
-    view: Res<CameraRig>,
+    mut view: ResMut<CameraRig>,
     game: Res<Game>,
     mut camera: Single<(&mut Transform, &mut Projection), With<WorldCamera>>,
 ) {
     let (pose, projection) = &mut *camera;
-    let follow = 1. - (-13. * time.delta_secs()).exp();
+    let delta = time.delta_secs().min(0.12);
+    let jump = std::mem::take(&mut view.jump);
+    let follow = if jump { 1. } else { 1. - (-13. * delta).exp() };
+    view.cover = if jump {
+        1.
+    } else {
+        (view.cover - delta * 3.8).max(0.)
+    };
     let elevation = terrain::height(game.region(), view.target).max(0.)
         * terrain::smooth((72. - view.height) / 47.);
+    let arm = CameraRig::arm(view.height);
     let desired =
-        view.target.with_y(elevation) + Vec3::new(13., 22., 26.) * (view.height / 22.).max(1.);
-    pose.translation = pose.translation.lerp(desired, follow);
-    pose.look_to(Vec3::new(-13., -22., -26.), Vec3::Y);
+        Transform::from_translation(view.target.with_y(elevation) + arm).looking_to(-arm, Vec3::Y);
+    pose.translation = pose.translation.lerp(desired.translation, follow);
+    pose.rotation = pose.rotation.slerp(desired.rotation, follow);
     if let Projection::Orthographic(ortho) = &mut **projection {
         let ScalingMode::FixedVertical {
             ref mut viewport_height,
@@ -275,6 +286,44 @@ pub fn move_camera(
             return;
         };
         *viewport_height += (view.height - *viewport_height) * follow;
+        view.rendered_height = *viewport_height;
+    }
+}
+
+fn paw_pulse(play: &Play, now: f32) -> (Option<PawGesture>, f32) {
+    let Some((gesture, started)) = play.paw_gesture else {
+        return (None, 0.);
+    };
+    let t = ((now - started) / 0.48).clamp(0., 1.);
+    (
+        (t < 1.).then_some(gesture),
+        (t * std::f32::consts::PI).sin(),
+    )
+}
+
+pub fn animate_paw(
+    time: Res<Time>,
+    play: Res<Play>,
+    game: Res<Game>,
+    mut paw: Single<&mut Transform, (With<Paw>, Without<PawDigit>)>,
+    mut digits: Query<(&PawDigit, &mut Transform), Without<Paw>>,
+) {
+    let (gesture, pulse) = paw_pulse(&play, time.elapsed_secs());
+    let holding: f32 = if game.city().held.is_some() { 1. } else { 0. };
+    let (reach, curl) = match gesture {
+        Some(PawGesture::Grab) => (pulse * 0.22, holding.max(pulse * 0.75)),
+        Some(PawGesture::Release) => (pulse * 0.17, pulse * 0.35),
+        Some(PawGesture::Cast) => (-pulse * 0.13, 0.15),
+        Some(PawGesture::Point) => (pulse * 0.14, holding),
+        None => (0., holding),
+    };
+    paw.translation = Vec3::new(0., -reach, reach * 0.49);
+    paw.rotation = Quat::from_rotation_x(-0.38 - reach * 1.8 + curl * 0.32)
+        * Quat::from_rotation_z(-0.20 + pulse * 0.1);
+    for (digit, mut pose) in &mut digits {
+        pose.translation =
+            digit.0 + Vec3::new(-digit.0.x * curl * 0.14, curl * 0.034, curl * 0.061);
+        pose.rotation = Quat::from_rotation_x(curl * 0.64);
     }
 }
 
@@ -288,14 +337,39 @@ fn contact_shadow(parent: &mut ChildSpawnerCommands, art: &Art, size: f32) {
     );
 }
 
-fn villager(parent: &mut ChildSpawnerCommands, art: &Art, guard: bool) {
-    let coat = if guard { &art.blue } else { &art.door };
+pub(crate) fn villager(parent: &mut ChildSpawnerCommands, art: &Art, guard: bool, variant: usize) {
+    let coat = if guard {
+        &art.blue
+    } else {
+        [&art.door, &art.cobalt, &art.red, &art.clay][variant % 4]
+    };
     mound(
         parent,
         art,
         coat,
         Vec3::Y * 0.62,
         Vec3::new(0.58, 0.61, 0.41),
+    );
+    mound(
+        parent,
+        art,
+        &art.plaster,
+        Vec3::new(0., 0.84, 0.088),
+        Vec3::new(0.41, 0.14, 0.34),
+    );
+    mound(
+        parent,
+        art,
+        &art.dark_wood,
+        Vec3::new(0., 0.49, 0.),
+        Vec3::new(0.58, 0.12, 0.41),
+    );
+    block(
+        parent,
+        art,
+        &art.ridge,
+        Vec3::new(0.02, 0.50, 0.207),
+        Vec3::new(0.084, 0.07, 0.036),
     );
     mound(
         parent,
@@ -313,7 +387,18 @@ fn villager(parent: &mut ChildSpawnerCommands, art: &Art, guard: bool) {
             Vec3::splat(0.055),
         );
     }
-    let hat = if guard { &art.blue } else { &art.plank };
+    mound(
+        parent,
+        art,
+        &art.skin,
+        Vec3::new(0., 0.965, 0.273),
+        Vec3::new(0.096, 0.079, 0.087),
+    );
+    let hat = if guard {
+        &art.blue
+    } else {
+        [&art.plank, &art.timber, &art.warm_stone][variant % 3]
+    };
     part(
         parent,
         &art.cylinder,
@@ -329,6 +414,15 @@ fn villager(parent: &mut ChildSpawnerCommands, art: &Art, guard: bool) {
         Vec3::Y * 1.27,
         Vec3::new(0.48, 0.23, 0.44),
     );
+    if !guard && variant % 3 == 1 {
+        mound(
+            parent,
+            art,
+            &art.dark_wood,
+            Vec3::new(0.11, 1.02, -0.13),
+            Vec3::new(0.33, 0.31, 0.26),
+        );
+    }
     if guard {
         block(
             parent,
@@ -385,7 +479,7 @@ fn spawn_walker(
             if hippo {
                 actor.spawn((SceneRoot(art.hippo_model.clone()), Transform::default()));
             } else {
-                villager(actor, art, walker.guard);
+                villager(actor, art, walker.guard, index);
             }
             for side in [-1., 1.] {
                 let leg_origin = Vec3::new(side * if hippo { 0.18 } else { 0.13 }, 0.40, 0.);
@@ -509,6 +603,7 @@ pub fn sync_board(
             ))
             .with_children(|parent| {
                 art::landscape(parent, &mut meshes, &art, region, city);
+                crate::life::spawn(parent, &art, region);
                 for (index, source) in region.sources.iter().enumerate() {
                     let p = grounded(source.tile);
                     let yaw =
@@ -668,7 +763,7 @@ pub fn sync_board(
                         ))
                         .with_children(|p| {
                             contact_shadow(p, &art, 0.76);
-                            villager(p, &art, true);
+                            villager(p, &art, true, i);
                         });
                 }
                 parent.spawn((
@@ -934,6 +1029,15 @@ pub fn props(
                 stock == 0 && (!dropping || age >= 0.42)
             }
         } else if let Some(guard) = guard {
+            if let Some(mut pose) = pose {
+                let location = terrain::on_ground(region, city.guard_world(region, guard.0));
+                let travel = location - pose.translation;
+                if travel.xz().length_squared() > 0.000002 {
+                    let heading = Quat::from_rotation_y(travel.x.atan2(travel.z));
+                    pose.rotation = pose.rotation.slerp(heading, 0.22);
+                }
+                pose.translation = location;
+            }
             city.guards.get(guard.0).is_some_and(|&spirit| spirit > 0)
         } else if let Some(crop) = crop {
             let scale = match city.buildings.get(crop.0).map(|site| site.crop) {
@@ -1105,9 +1209,26 @@ pub fn aim(
         city.bridge_fixed,
     ));
     let (cloud_pose, cloud_visible) = &mut *cloud;
-    cloud_pose.translation = p + Vec3::new(0.18, 1.56 + time.elapsed_secs().sin() * 0.065, -0.23);
+    let (gesture, pulse) = paw_pulse(&play, time.elapsed_secs());
+    let bounce = match gesture {
+        Some(PawGesture::Grab | PawGesture::Release) => -0.41 * pulse,
+        Some(PawGesture::Cast) => 0.21 * pulse,
+        Some(PawGesture::Point) => -0.15 * pulse,
+        None => 0.,
+    };
+    let destination = p + Vec3::new(
+        0.18,
+        1.53 + time.elapsed_secs().sin() * 0.057 + bounce,
+        -0.23,
+    );
+    let speed = if cloud_pose.translation.distance_squared(destination) > 150. {
+        1.
+    } else {
+        1. - (-17. * time.delta_secs().min(0.12)).exp()
+    };
+    cloud_pose.translation = cloud_pose.translation.lerp(destination, speed);
     cloud_pose.rotation = Quat::from_rotation_y(0.51);
-    cloud_pose.scale = Vec3::splat(1.17);
+    cloud_pose.scale = Vec3::splat(1.17 + pulse * 0.035);
     **cloud_visible = if open || play.story.is_some_and(|story| story.show_paw(region)) {
         Visibility::Visible
     } else {
@@ -1243,6 +1364,7 @@ pub fn harvest(
     art: Res<Art>,
     board: Res<Board>,
     mut effects: ResMut<HarvestEffects>,
+    mut sounds: EventWriter<sound::Harvest>,
 ) {
     let region = game.region();
     let city = game.city();
@@ -1284,8 +1406,13 @@ pub fn harvest(
             continue;
         };
         let point = terrain::on_ground(region, source.tile.world());
-        if point.distance_squared(view.target) > (view.height * 1.65).powi(2) {
+        let distance = point.distance(view.target);
+        if distance > view.height * 1.65 {
             continue;
+        }
+        let hearing = 1. - terrain::smooth((distance - 5.) / 19.);
+        if hearing > 0.02 {
+            sounds.write(sound::Harvest(source.material, hearing));
         }
         for i in 0..budget.min(if count == 0 { 12 } else { 6 }) {
             let angle =
