@@ -67,13 +67,34 @@ fn relief(region: &Region, point: Vec2) -> f32 {
             continue;
         }
         let progress = 1. - distance.sqrt() / radius;
-        let crooked = 0.72 + 0.28 * noise(point, 3.8, 54) + offset.x * 0.035;
+        let crooked = 0.67 + 0.43 * noise(point, 2.05, 54) + offset.x * 0.043;
         let steps = if region.kind == Biome::Terraces {
             ((progress * 4.).floor() * 0.21 + progress * 0.16).max(0.)
         } else {
-            progress.powf(0.83)
+            progress.powf(0.69)
         };
         height = height.max(scale * radius * steps * crooked);
+    }
+    let original = region.original_bounds();
+    let distance = (original.0.local() - point)
+        .max(point - original.1.local())
+        .max_element();
+    let headroom = 0.94 + smooth(distance / 6.7) * 42.;
+    for &ridge in &region.ridges {
+        let (width, along) = ridge.section(point);
+        if width <= 0. {
+            continue;
+        }
+        let ledges = noise(point, 2.7, 59);
+        let crests = 0.74 + (0.18 + along * 28.).sin().abs() * 0.18 + ledges * 0.15;
+        let slope = width.powf(1.62);
+        let ridge = if matches!(region.kind, Biome::Terraces | Biome::Lake) {
+            (slope * 7.).floor() / 9. + slope * 0.22
+        } else {
+            slope
+        } * ridge.3
+            * crests;
+        height = height.max(ridge.min(headroom));
     }
     if region.kind != Biome::Aegean {
         let outside = (f32::from(region.bounds.0.1) - point.y)
@@ -138,7 +159,7 @@ pub fn ray_contact(region: &Region, ray: Ray3d, bridge_fixed: bool) -> Option<Ve
     if ray.direction.y >= -0.03 {
         return None;
     }
-    let enter = ((28. - ray.origin.y) / ray.direction.y).max(0.);
+    let enter = ((49. - ray.origin.y) / ray.direction.y).max(0.);
     let exit = (WATER - 0.06 - ray.origin.y) / ray.direction.y;
     if !exit.is_finite() || exit <= enter {
         return None;
@@ -148,8 +169,8 @@ pub fn ray_contact(region: &Region, ray: Ray3d, bridge_fixed: bool) -> Option<Ve
         point.y > actor_height(region, point, bridge_fixed)
     };
     let mut previous = enter;
-    for index in 1..=24 {
-        let t = enter.lerp(exit, index as f32 / 24.);
+    for index in 1..=36 {
+        let t = enter.lerp(exit, index as f32 / 36.);
         if !above(t) {
             let mut a = previous;
             let mut b = t;

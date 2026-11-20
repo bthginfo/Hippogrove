@@ -167,9 +167,55 @@ def road(p, l, o, r):
         l([(x-3,y-3),(x+3,y+3)], SHADE, 2)
 
 
+def boards(p, l, o, r):
+    for y in [35, 24]:
+        p([(8,y+5),(34,y-12),(57,y-4),(57,y+5),(30,y+22),(8,y+14)], EDGE)
+        p([(10,y+5),(34,y-10),(55,y-4),(29,y+12)], '#edbc72')
+        p([(29,y+12),(55,y-4),(55,y+4),(29,y+19)], '#a56c42')
+        p([(10,y+6),(29,y+12),(29,y+19),(10,y+13)], '#c89050')
+        l([(17,y+8),(41,y-7)], '#f8d8a0', 2)
+
+
+def blocks(p, l, o, r):
+    for x, y in [(9, 39), (29, 38), (20, 23)]:
+        p([(x,y),(x+16,y-9),(x+29,y-5),(x+29,y+9),(x+15,y+17),(x,y+11)], '#b2a295')
+        p([(x,y),(x+16,y-9),(x+29,y-5),(x+15,y+4)], '#eadbba')
+        p([(x+15,y+4),(x+29,y-5),(x+29,y+9),(x+15,y+17)], '#a5968c')
+        l([(x+4,y+2),(x+13,y+6)], '#cdc0a4')
+
+
+def mallet(p, l, o, r):
+    l([(16,53),(39,29)], EDGE, 12)
+    l([(16,51),(40,27)], '#c39259', 8)
+    p([(20,24),(34,10),(58,19),(58,34),(44,45),(20,38)], EDGE)
+    p([(22,23),(34,13),(55,20),(43,30)], '#eab77b')
+    p([(43,30),(55,20),(55,33),(43,41)], '#9c663d')
+    p([(22,25),(43,31),(43,42),(22,36)], '#c88c55')
+
+
+def berry_basket(p, l, o, r):
+    o((10,23,55,58), '#ba8a56', EDGE)
+    o((10,22,55,42), '#e3b579', EDGE)
+    for x,y in [(18,23),(26,16),(35,20),(43,24),(28,29)]:
+        o((x-5,y-4,x+6,y+7), '#bb5147', '#773e36')
+        o((x-2,y-2,x+2,y+2), '#e89479')
+    o((39,13,54,22), '#79a560')
+    l([(13,43),(26,46),(40,45),(52,42)], '#ebc08a')
+    l([(16,50),(29,52),(46,48)], '#dfa875')
+
+
+def pouch(p, l, o, r):
+    p([(19,13),(43,13),(39,24),(49,33),(55,49),(48,56),(15,56),(9,49),(14,33),(25,24)], EDGE)
+    p([(22,15),(40,15),(36,26),(47,36),(51,48),(45,53),(18,53),(13,48),(17,35),(28,26)], '#c69460')
+    p([(22,36),(31,28),(42,33),(45,48),(27,51),(16,47)], GOLD)
+    l([(24,24),(40,24)], SHADE, 5)
+    l([(30,27),(25,36)], '#876440', 2)
+
+
 if __name__ == '__main__':
-    atlas = Image.new('RGBA', (4 * SIZE, 4 * SIZE))
-    glyphs = [wood, stone, food, prayer, mana, paw, hammer, people, hippo, magic, map_icon, scroll, book, chart, pin, road]
+    atlas = Image.new('RGBA', (4 * SIZE, 6 * SIZE))
+    glyphs = [wood, stone, food, prayer, mana, paw, hammer, people, hippo, magic, map_icon, scroll, book, chart, pin, road,
+              boards, blocks, mallet, berry_basket, pouch]
     for index, glyph in enumerate(glyphs):
         atlas.paste(icon(glyph), ((index % 4) * SIZE, (index // 4) * SIZE))
     out = Path(__file__).resolve().parent.parent / 'assets' / 'ui' / 'atlas.png'

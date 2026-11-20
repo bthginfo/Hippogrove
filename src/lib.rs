@@ -4,9 +4,11 @@ mod civic;
 mod controls;
 mod game;
 mod hud;
+mod modes;
 mod play;
 mod region;
 mod save;
+mod story;
 mod terrain;
 mod view;
 
@@ -19,8 +21,9 @@ use bevy::{
 
 use crate::{
     game::Game,
+    modes::Mode,
     play::{CameraRig, Panel, Play, Target},
-    region::Region,
+    region::Biome,
     save::SaveFile,
 };
 
@@ -37,12 +40,21 @@ pub fn main() {
         controls::setup_native();
     }
     let file = SaveFile::for_device();
-    let regions = Region::campaign();
-    let saved = file.load().and_then(|campaign| campaign.restore(&regions));
+    let saved = file.load().and_then(Game::resume);
+    let first_launch = saved.is_none();
     if saved.is_none() {
         file.preserve_unreadable();
     }
-    let game = Game::new(regions, saved);
+    let game = saved.unwrap_or_else(|| Game::start(Mode::Campaign(Biome::Valley)));
+    let mut play = Play::new(&game);
+    if first_launch {
+        play.panel = Panel::Modes;
+        play.story = None;
+    }
+    let mut view = CameraRig::new(&game);
+    if let Some(story) = play.story {
+        story.frame(game.region(), &mut view);
+    }
     let mut app = App::new();
     let plugins = DefaultPlugins
         .set(AssetPlugin {
@@ -72,26 +84,30 @@ pub fn main() {
     app.add_plugins(plugins)
         .insert_resource(ClearColor(art::rgb(0xc9d1a7)))
         .insert_resource(Time::<Fixed>::from_hz(24.))
-        .insert_resource(Play::new(&game))
-        .insert_resource(CameraRig::new(&game))
+        .insert_resource(play)
+        .insert_resource(view)
         .insert_resource(game)
         .insert_resource(file)
         .init_resource::<controls::Controls>()
         .init_resource::<hud::Hud>()
         .init_resource::<Target>()
         .init_resource::<view::Board>()
+        .init_resource::<view::HarvestEffects>()
         .add_systems(Startup, (view::setup, hud::setup))
         .add_systems(FixedUpdate, simulate)
         .add_systems(
             Update,
             (
                 controls::collect,
+                story::update,
                 view::move_camera,
                 refresh_target,
                 view::sync_board,
+                view::harvest,
                 (
                     view::props,
                     view::animate,
+                    view::gates.after(view::animate),
                     view::aim,
                     atmosphere::update,
                     view::magic,
@@ -161,6 +177,7 @@ fn embed_assets(app: &App) {
         embed!("fonts/DMSerifText-Regular.ttf"),
         embed!("models/hippo.glb"),
         embed!("ui/atlas.png"),
+        embed!("ui/welten.png"),
         embed!("models/waldwinkel/wood_tree.glb"),
         embed!("models/waldwinkel/resource_rock.glb"),
         embed!("models/waldwinkel/find_mushroom.glb"),

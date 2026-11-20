@@ -9,6 +9,7 @@ use crate::{
     art::rgb,
     civic::{Branch, Civic, Tech},
     game::{Action, Building, Game, Outcome, Quest, Settlement, Talent, stock_text},
+    modes::Mode,
     play::{Panel, Play, Target, Tool, UiAction},
     region::{Biome, Material, Region, Tile},
 };
@@ -64,6 +65,10 @@ pub(crate) enum Label {
     Mana,
     Controls,
     CityGoods,
+    Refined(usize),
+    Carried,
+    Capacity,
+    Subtitle,
 }
 
 #[derive(Component)]
@@ -75,6 +80,7 @@ pub struct Toast;
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Layout {
     region: usize,
+    mode: Mode,
     tool: Tool,
     option: usize,
     panel: Panel,
@@ -92,6 +98,8 @@ struct Layout {
     tech: Tech,
     research_count: u32,
     insight: u16,
+    carried: Option<Material>,
+    free_build_tab: bool,
 }
 
 #[derive(Resource, Default)]
@@ -104,14 +112,15 @@ pub struct Hud {
     icons: Handle<Image>,
     atlas: Handle<TextureAtlasLayout>,
     maps: Vec<Handle<Image>>,
+    maps_mode: Option<Mode>,
+    world_art: Handle<Image>,
+    world_cards: Handle<TextureAtlasLayout>,
 }
 
 pub fn setup(
     mut hud: ResMut<Hud>,
     assets: Res<AssetServer>,
     mut atlases: ResMut<Assets<TextureAtlasLayout>>,
-    mut images: ResMut<Assets<Image>>,
-    game: Res<Game>,
 ) {
     hud.regular = assets.load("embedded://fonts/DMSans-Medium.ttf");
     hud.bold = assets.load("embedded://fonts/DMSans-Bold.ttf");
@@ -120,15 +129,18 @@ pub fn setup(
     hud.atlas = atlases.add(TextureAtlasLayout::from_grid(
         UVec2::splat(64),
         4,
-        4,
+        6,
         None,
         None,
     ));
-    hud.maps = game
-        .regions
-        .iter()
-        .map(|region| images.add(chart(region)))
-        .collect();
+    hud.world_art = assets.load("embedded://ui/welten.png");
+    hud.world_cards = atlases.add(TextureAtlasLayout::from_grid(
+        UVec2::new(200, 168),
+        5,
+        1,
+        None,
+        None,
+    ));
 }
 
 fn chart(region: &Region) -> Image {
@@ -146,7 +158,13 @@ fn chart(region: &Region) -> Image {
             let color = if region.water(tile) {
                 water
             } else if region.rocky(tile) {
-                0x988f75
+                if region.kind == Biome::Fjord {
+                    0xc3d2d9
+                } else {
+                    0x988f75
+                }
+            } else if region.source_at(tile).is_some() {
+                0x73845e
             } else if region.road(tile) {
                 0xe0c69b
             } else {
@@ -201,6 +219,8 @@ fn button_glyph(action: UiAction) -> Option<usize> {
         UiAction::Panel(Panel::Quests) | UiAction::ToggleObjective => Some(11),
         UiAction::Panel(Panel::Catalog) => Some(12),
         UiAction::Panel(Panel::Research) => Some(9),
+        UiAction::Panel(Panel::Inventory) => Some(20),
+        UiAction::Panel(Panel::Modes) => Some(10),
         UiAction::ResearchBranch(branch) => Some(branch_glyph(branch)),
         UiAction::SelectTech(tech) => Some(branch_glyph(tech.branch())),
         UiAction::Guide => Some(14),
@@ -377,13 +397,29 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
             BorderRadius::all(Val::Px(15.)),
         ))
         .with_children(|panel| {
-            text(
-                panel,
-                hud,
-                &game.region().name,
-                if layout.compact { 25. } else { 30. },
-                LIGHT,
-            );
+            panel
+                .spawn(Node {
+                    column_gap: Val::Px(11.),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|title| {
+                    text(
+                        title,
+                        hud,
+                        &game.region().name,
+                        if layout.compact { 25. } else { 30. },
+                        LIGHT,
+                    );
+                    button(
+                        title,
+                        hud,
+                        "Vorräte",
+                        UiAction::Panel(Panel::Inventory),
+                        false,
+                        false,
+                    );
+                });
             panel
                 .spawn(Node {
                     column_gap: Val::Px(7.),
@@ -448,11 +484,11 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
     if layout.compact {
         let mut nav = row();
         nav.position_type = PositionType::Absolute;
-        nav.top = Val::Px(EDGE + 90.);
+        nav.top = Val::Px(EDGE + 105.);
         nav.left = Val::Px(EDGE);
         parent
             .spawn(nav)
-            .with_children(|tabs| navigation(tabs, hud, layout.quest));
+            .with_children(|tabs| navigation(tabs, hud, layout.quest, layout.mode));
     }
 
     parent
@@ -505,8 +541,16 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                             button(
                                 links,
                                 hud,
-                                "Aufträge",
-                                UiAction::Panel(Panel::Quests),
+                                if game.mode.sandbox() {
+                                    "Baubuch"
+                                } else {
+                                    "Aufträge"
+                                },
+                                UiAction::Panel(if game.mode.sandbox() {
+                                    Panel::Catalog
+                                } else {
+                                    Panel::Quests
+                                }),
                                 false,
                                 false,
                             );
@@ -564,7 +608,7 @@ fn stat(parent: &mut ChildSpawnerCommands, hud: &Hud, icon: usize, name: &str, v
         });
 }
 
-fn navigation(parent: &mut ChildSpawnerCommands, hud: &Hud, quest: Quest) {
+fn navigation(parent: &mut ChildSpawnerCommands, hud: &Hud, quest: Quest, mode: Mode) {
     let complete = quest == Quest::Complete;
     button(
         parent,
@@ -577,8 +621,18 @@ fn navigation(parent: &mut ChildSpawnerCommands, hud: &Hud, quest: Quest) {
     button(
         parent,
         hud,
-        if complete { "Weiterreisen" } else { "Kapitel" },
-        UiAction::Panel(Panel::Journey),
+        if mode.sandbox() {
+            "Spielmodi"
+        } else if complete {
+            "Weiterreisen"
+        } else {
+            "Kapitel"
+        },
+        UiAction::Panel(if mode.sandbox() {
+            Panel::Modes
+        } else {
+            Panel::Journey
+        }),
         complete,
         false,
     );
@@ -608,7 +662,7 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
             if !layout.compact {
                 toolbar
                     .spawn(row())
-                    .with_children(|tabs| navigation(tabs, hud, layout.quest));
+                    .with_children(|tabs| navigation(tabs, hud, layout.quest, layout.mode));
             }
             if play.tool.choices() > 1 {
                 toolbar.spawn(row()).with_children(|options| {
@@ -754,12 +808,18 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
             BorderRadius::all(Val::Px(12.)),
         ))
         .with_children(|map| {
-            for (tile, color) in [
+            let towns = [
                 (region.start, DARK),
                 (region.rival_shrine, 0x8b5b3f),
                 (region.districts[0].center, PAPER),
                 (region.districts[1].center, PAPER),
-            ] {
+            ];
+            let camps = region
+                .areas
+                .iter()
+                .zip(game.city().camps)
+                .map(|(area, built)| (area.center, if built { 0xfbe39e } else { 0xb67648 }));
+            for (tile, color) in towns.into_iter().chain(camps) {
                 let p = position(tile);
                 map.spawn((
                     Node {
@@ -801,6 +861,18 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
             false,
         );
     });
+    parent.spawn(row()).with_children(|camps| {
+        for (index, area) in region.areas.iter().enumerate() {
+            button(
+                camps,
+                hud,
+                &area.name,
+                UiAction::Focus(area.center),
+                game.city().camps[index],
+                false,
+            );
+        }
+    });
     parent.spawn(row()).with_children(|districts| {
         for (index, district) in region.districts.iter().enumerate() {
             districts
@@ -821,7 +893,9 @@ fn map_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
                         false,
                     );
                     label(card, hud, Label::District(index), 15., INK);
-                    text(card, hud, &district.story, 15., MUTED);
+                    if !short {
+                        text(card, hud, &district.story, 15., MUTED);
+                    }
                 });
         }
     });
@@ -865,7 +939,7 @@ fn catalog_panel(
     let entries: Vec<_> = if let Some(branch) = play.catalog_branch {
         Civic::ALL
             .into_iter()
-            .filter(|kind| kind.spec().branch == branch)
+            .filter(|kind| kind.available_in(game.region().kind) && kind.spec().branch == branch)
             .map(Building::Civic)
             .collect()
     } else {
@@ -1044,7 +1118,9 @@ fn research_panel(
                     );
                     let names: Vec<_> = Civic::ALL
                         .into_iter()
-                        .filter(|kind| kind.spec().unlock == selected)
+                        .filter(|kind| {
+                            kind.available_in(game.region().kind) && kind.spec().unlock == selected
+                        })
                         .map(|kind| kind.spec().name)
                         .collect();
                     text(detail, hud, &names.join(" · "), 15., INK);
@@ -1125,6 +1201,274 @@ fn inspection_panel(
     }
 }
 
+fn mode_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout) {
+    parent.spawn(row()).with_children(|header| {
+        panel_heading(header, hud, "Hippogrove", layout.short);
+        button(
+            header,
+            hud,
+            "Kampagnen",
+            UiAction::ModeTab(false),
+            !layout.free_build_tab,
+            false,
+        );
+        button(
+            header,
+            hud,
+            "Freies Bauen",
+            UiAction::ModeTab(true),
+            layout.free_build_tab,
+            false,
+        );
+        if game.has_save(game.mode) {
+            button(header, hud, "Zurück", UiAction::Cancel, false, true);
+        }
+    });
+    parent.spawn(row()).with_children(|cards| {
+        for biome in Biome::ALL {
+            let mode = if layout.free_build_tab {
+                Mode::Sandbox(biome)
+            } else {
+                Mode::Campaign(biome)
+            };
+            let selected = game.mode == mode && game.has_save(mode);
+            cards
+                .spawn((
+                    Button,
+                    HitArea,
+                    ControlButton {
+                        action: UiAction::SelectMode(mode),
+                        selected,
+                        strong: false,
+                    },
+                    Node {
+                        width: Val::Percent(if layout.short { 48. } else { 32. }),
+                        min_height: Val::Px(if layout.short { 61. } else { 85. }),
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.),
+                        padding: UiRect::all(Val::Px(4.)),
+                        border: UiRect::all(Val::Px(2.)),
+                        ..default()
+                    },
+                    BackgroundColor(rgb(if selected { JADE } else { SURFACE })),
+                    BorderColor(rgb(BRASS)),
+                    Outline::new(Val::Px(3.), Val::Px(2.), Color::NONE),
+                    BorderRadius::all(Val::Px(13.)),
+                ))
+                .with_children(|card| {
+                    card.spawn((
+                        ImageNode::from_atlas_image(
+                            hud.world_art.clone(),
+                            TextureAtlas {
+                                layout: hud.world_cards.clone(),
+                                index: biome as usize,
+                            },
+                        ),
+                        Node {
+                            width: Val::Px(if layout.short { 61. } else { 70. }),
+                            height: Val::Px(if layout.short { 49. } else { 64. }),
+                            flex_shrink: 0.,
+                            ..default()
+                        },
+                        BorderRadius::all(Val::Px(7.)),
+                    ));
+                    card.spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    })
+                    .with_children(|words| {
+                        let foreground = if selected { INK } else { LIGHT };
+                        text(words, hud, mode.name(), 15., foreground);
+                        let detail = if game.has_save(mode) {
+                            "Fortsetzen"
+                        } else if mode.sandbox() {
+                            "Ohne Gegner · Alle Baupläne"
+                        } else {
+                            "3 Kapitel"
+                        };
+                        text(
+                            words,
+                            hud,
+                            detail,
+                            12.,
+                            if selected { MUTED } else { SUBTLE },
+                        );
+                    });
+                });
+        }
+    });
+    if !layout.free_build_tab && game.has_save(Mode::Chronicle) {
+        button(
+            parent,
+            hud,
+            "Chronik fortsetzen",
+            UiAction::SelectMode(Mode::Chronicle),
+            game.mode == Mode::Chronicle,
+            false,
+        );
+    }
+}
+
+fn inventory_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout, kind: Biome) {
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::SpaceBetween,
+            column_gap: Val::Px(8.),
+            ..default()
+        })
+        .with_children(|heading| {
+            heading.spawn(row()).with_children(|name| {
+                glyph(name, hud, 20, 31.);
+                panel_heading(name, hud, "Vorräte", layout.short);
+            });
+            button(heading, hud, "Zurück", UiAction::Cancel, false, true);
+        });
+    for row in [
+        [
+            (
+                kind.material(Material::Wood),
+                0,
+                Label::Stock(Material::Wood),
+            ),
+            (
+                kind.material(Material::Stone),
+                1,
+                Label::Stock(Material::Stone),
+            ),
+            (
+                kind.material(Material::Food),
+                19,
+                Label::Stock(Material::Food),
+            ),
+        ],
+        [
+            ("Bretter", 16, Label::Refined(0)),
+            ("Quader", 17, Label::Refined(1)),
+            ("Werkzeug", 18, Label::Refined(2)),
+        ],
+    ] {
+        parent
+            .spawn(Node {
+                width: Val::Percent(100.),
+                column_gap: Val::Px(7.),
+                ..default()
+            })
+            .with_children(|cards| {
+                for (name, image, amount) in row {
+                    cards
+                        .spawn((
+                            Node {
+                                flex_grow: 1.,
+                                flex_basis: Val::Px(0.),
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::Center,
+                                flex_direction: if layout.short {
+                                    FlexDirection::Row
+                                } else {
+                                    FlexDirection::Column
+                                },
+                                column_gap: Val::Px(5.),
+                                padding: UiRect::all(Val::Px(5.)),
+                                min_height: Val::Px(if layout.short { 71. } else { 114. }),
+                                border: UiRect::all(Val::Px(1.)),
+                                ..default()
+                            },
+                            BackgroundColor(rgb(0xfcf3de)),
+                            BorderColor(rgb(0xdac398)),
+                            BorderRadius::all(Val::Px(12.)),
+                        ))
+                        .with_children(|card| {
+                            glyph(card, hud, image, if layout.short { 48. } else { 64. });
+                            card.spawn(Node {
+                                align_items: AlignItems::Center,
+                                flex_direction: FlexDirection::Column,
+                                ..default()
+                            })
+                            .with_children(|details| {
+                                text(details, hud, name, 15., INK);
+                                label(details, hud, amount, 24., DARK);
+                            });
+                        });
+                }
+            });
+    }
+    parent
+        .spawn((
+            Node {
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: Val::Px(8.),
+                padding: UiRect::axes(Val::Px(10.), Val::Px(4.)),
+                ..default()
+            },
+            BackgroundColor(rgb(0xe8dfc4)),
+            BorderRadius::all(Val::Px(10.)),
+        ))
+        .with_children(|cargo| {
+            cargo.spawn(row()).with_children(|bundle| {
+                let picture = match layout.carried {
+                    Some(Material::Wood) => 0,
+                    Some(Material::Stone) => 1,
+                    Some(Material::Food) => 19,
+                    None => 5,
+                };
+                glyph(bundle, hud, picture, 34.);
+                label(bundle, hud, Label::Carried, 15., INK);
+            });
+            label(cargo, hud, Label::Capacity, 13., MUTED);
+        });
+}
+
+fn cutscene(parent: &mut ChildSpawnerCommands, hud: &Hud, layout: Layout) {
+    parent
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(EDGE),
+            top: Val::Px(EDGE),
+            ..default()
+        })
+        .with_children(|skip| {
+            button(
+                skip,
+                hud,
+                "Überspringen",
+                UiAction::FinishStory,
+                false,
+                false,
+            );
+        });
+    parent
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(EDGE),
+            right: Val::Px(EDGE),
+            bottom: Val::Px(if layout.short { 20. } else { 34. }),
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn((
+                Node {
+                    max_width: Val::Px(660.),
+                    padding: UiRect::axes(Val::Px(19.), Val::Px(10.)),
+                    border: UiRect::all(Val::Px(1.)),
+                    ..default()
+                },
+                BackgroundColor(rgb(0x172d25).with_alpha(0.93)),
+                BorderColor(rgb(BRASS)),
+                BorderRadius::all(Val::Px(13.)),
+            ))
+            .with_children(|card| {
+                let subtitle = text(card, hud, "", if layout.short { 18. } else { 23. }, LIGHT);
+                card.commands().entity(subtitle).insert((
+                    Label::Subtitle,
+                    TextLayout::new_with_justify(JustifyText::Center),
+                ));
+            });
+        });
+}
+
 fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play, layout: Layout) {
     let region = game.region();
     let city = game.city();
@@ -1142,16 +1486,24 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             },
             BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
-            box_node.spawn(row()).with_children(|nav| {
+            if !matches!(play.panel, Panel::Inventory | Panel::Modes) {
+                box_node.spawn(row()).with_children(|nav| {
                 button(nav,hud,"Kapitel",UiAction::Panel(Panel::Journey),play.panel==Panel::Journey,false);
                 button(nav,hud,"Landkarte",UiAction::Panel(Panel::Map),play.panel==Panel::Map,false);
                 button(nav,hud,"Fortschritt",UiAction::Panel(Panel::Progress),play.panel==Panel::Progress,false);
                 button(nav,hud,"Aufträge",UiAction::Panel(Panel::Quests),play.panel==Panel::Quests,false);
                 button(nav,hud,"Zurück",UiAction::Cancel,false,true);
-            });
+                });
+            }
             match play.panel {
                 Panel::Journey => {
-                    panel_heading(box_node,hud,if game.campaign_complete() { "Die Schreine sind vereint" } else { "Die Schreine am Wasser" },layout.short);
+                    box_node.spawn(row()).with_children(|heading| {
+                        panel_heading(heading,hud,if game.campaign_complete() { "Die Schreine sind vereint" } else { game.mode.name() },layout.short);
+                        if game.campaign.active == 0 && !game.mode.sandbox() {
+                            button(heading,hud,"Einführung",UiAction::ReplayArrival,false,false);
+                        }
+                        button(heading,hud,"Spielmodi",UiAction::Panel(Panel::Modes),false,false);
+                    });
                     box_node.spawn(row()).with_children(|chapters| {
                         for (index,candidate) in game.regions.iter().enumerate() {
                             let result=game.campaign.settlements[index].as_ref().filter(|place| place.quest == Quest::Complete).and_then(|place|place.outcome);
@@ -1169,6 +1521,8 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 Panel::Catalog => catalog_panel(box_node,hud,game,play,layout.short),
                 Panel::Research => research_panel(box_node,hud,game,play.tech,layout.short),
                 Panel::Inspection => inspection_panel(box_node,hud,game,play,layout.short),
+                Panel::Inventory => inventory_panel(box_node, hud, layout, region.kind),
+                Panel::Modes => mode_panel(box_node, hud, game, layout),
                 Panel::Progress => {
                     text(box_node,hud,"Gott, Siedlung und Kreatur",31.,INK);
                     label(box_node,hud,Label::Progress,17.,MUTED);
@@ -1177,6 +1531,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                             button(talents,hud,&format!("{} {}/2",talent.name(),game.campaign.gifts.rank(talent)),UiAction::Do(Action::Learn(talent)),false,false);
                         }
                         button(talents,hud,"Forschung",UiAction::Panel(Panel::Research),false,false);
+                        button(talents,hud,"Vorräte",UiAction::Panel(Panel::Inventory),false,false);
                         button(talents,hud,"Nilpferd loben",UiAction::Do(Action::Praise),false,false);
                     });
                     text(box_node,hud,"Aufträge geben Talentpunkte. Das Nilpferd lernt mit Lob nach erledigter Arbeit. Wache auf Rang 2, Feldpflege auf Rang 3.",17.,INK);
@@ -1191,7 +1546,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     label(box_node,hud,Label::Rival,16.,MUTED);
                     label(box_node,hud,Label::LocalQuest,16.,DARK);
                 }
-                Panel::Closed=>{}
+                Panel::Closed | Panel::Story => {}
             }
             // The same feedback is visible while purchasing a talent or choosing a chapter.
             label(box_node,hud,Label::Notice,16.,DARK);
@@ -1206,7 +1561,16 @@ pub fn layout(
     play: Res<Play>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut scale: ResMut<UiScale>,
+    mut images: ResMut<Assets<Image>>,
 ) {
+    if hud.maps_mode != Some(game.mode) {
+        hud.maps = game
+            .regions
+            .iter()
+            .map(|region| images.add(chart(region)))
+            .collect();
+        hud.maps_mode = Some(game.mode);
+    }
     let safe = crate::controls::safe_insets(&window);
     let [left, top_inset, right, bottom_inset] = safe.map(f32::from);
     let size = Vec2::new(
@@ -1219,6 +1583,7 @@ pub fn layout(
     }
     let key = Layout {
         region: game.campaign.active,
+        mode: game.mode,
         tool: play.tool,
         option: play.option,
         panel: play.panel,
@@ -1244,6 +1609,14 @@ pub fn layout(
         } else {
             0
         },
+        carried: if play.panel == Panel::Inventory {
+            game.city()
+                .held
+                .map(|bundle| game.region().sources[bundle.source].material)
+        } else {
+            None
+        },
+        free_build_tab: play.free_build_tab,
     };
     if hud.layout == Some(key) {
         return;
@@ -1277,6 +1650,8 @@ pub fn layout(
                 if play.panel == Panel::Closed {
                     top(safe_root, &hud, &game, key);
                     bottom(safe_root, &hud, &play, key);
+                } else if play.panel == Panel::Story {
+                    cutscene(safe_root, &hud, key);
                 } else {
                     modal(safe_root, &hud, &game, &play, key);
                 }
@@ -1320,6 +1695,27 @@ pub fn update(
                 "{} Bretter · {} Quader · {} Werkzeug",
                 city.society.goods[0], city.society.goods[1], city.society.goods[2]
             ),
+            Label::Refined(index) => city.society.goods[*index].to_string(),
+            Label::Carried => city.held.map_or_else(
+                || "Pfote ist frei".into(),
+                |bundle| {
+                    format!(
+                        "{} {} in der Pfote",
+                        bundle.count,
+                        region.sources[bundle.source].material.name()
+                    )
+                },
+            ),
+            Label::Capacity => format!("{} Lagerplatz je Rohstoff", city.storage_cap()),
+            Label::Subtitle => play
+                .story
+                .map_or_else(String::new, |story| story.caption(region).into()),
+            Label::Quest if game.mode.sandbox() => if play.objective_expanded {
+                "Freies Bauen −"
+            } else {
+                "Freies Bauen +"
+            }
+            .into(),
             Label::Quest => format!(
                 "{} {}",
                 city.quest.name(),

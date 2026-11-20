@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::game::Stock;
+use crate::{game::Stock, region::Biome};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Branch {
@@ -123,6 +123,13 @@ impl Default for Research {
 }
 
 impl Research {
+    pub fn all_plans() -> Self {
+        let mut research = Self::default();
+        for tech in Branch::ALL.into_iter().flat_map(Branch::topics) {
+            research.learned |= 1 << tech as u16;
+        }
+        research
+    }
     pub fn knows(self, tech: Tech) -> bool {
         self.learned & (1 << tech as u8) != 0
     }
@@ -210,6 +217,12 @@ pub enum Civic {
     Beacon,
     Barracks,
     Bastion,
+    Gate,
+    Forester,
+    WinterHall,
+    SeedPavilion,
+    WaterTerrace,
+    OlivePress,
 }
 
 pub struct Spec {
@@ -223,7 +236,7 @@ pub struct Spec {
 }
 
 impl Civic {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 27] = [
         Self::Lodge,
         Self::Courtyard,
         Self::Nursery,
@@ -245,7 +258,34 @@ impl Civic {
         Self::Beacon,
         Self::Barracks,
         Self::Bastion,
+        Self::Gate,
+        Self::Forester,
+        Self::WinterHall,
+        Self::SeedPavilion,
+        Self::WaterTerrace,
+        Self::OlivePress,
     ];
+
+    pub fn regional(biome: Biome) -> Self {
+        [
+            Self::Forester,
+            Self::WinterHall,
+            Self::SeedPavilion,
+            Self::WaterTerrace,
+            Self::OlivePress,
+        ][biome as usize]
+    }
+
+    pub fn available_in(self, biome: Biome) -> bool {
+        !matches!(
+            self,
+            Self::Forester
+                | Self::WinterHall
+                | Self::SeedPavilion
+                | Self::WaterTerrace
+                | Self::OlivePress
+        ) || self == Self::regional(biome)
+    }
 
     pub fn beds(self) -> usize {
         match self {
@@ -420,6 +460,60 @@ impl Civic {
                 1,
                 [3, 1, 0],
                 [0, 0, 0],
+            ),
+            Self::Gate => (
+                "Palisadentor",
+                "Schützt am Weg und öffnet sich selbstständig für Gläubige und Nilpferd.",
+                Defense,
+                Palisades,
+                1,
+                [5, 3, 0],
+                [0, 0, 0],
+            ),
+            Self::Forester => (
+                "Försterhof",
+                "Pflegt Eichenholzvorkommen im Umkreis und trägt Holz ins Lager.",
+                Industry,
+                Workshops,
+                2,
+                [9, 5, 0],
+                [0, 0, 0],
+            ),
+            Self::WinterHall => (
+                "Winterhalle",
+                "Wärmt das Dorf im Schneefall und spart Wintervorräte.",
+                Culture,
+                Commons,
+                2,
+                [11, 6, 0],
+                [1, 0, 0],
+            ),
+            Self::SeedPavilion => (
+                "Saatpavillon",
+                "Felder in der Nähe keimen schneller. Das Saatgut profitiert vom Flussnebel.",
+                Homes,
+                Families,
+                2,
+                [8, 6, 0],
+                [1, 0, 0],
+            ),
+            Self::WaterTerrace => (
+                "Wasserterrasse",
+                "Leitet Seewasser auf Felder im Umkreis. Schützt sie in der Trockenzeit.",
+                Homes,
+                Waterworks,
+                2,
+                [7, 10, 0],
+                [0, 2, 0],
+            ),
+            Self::OlivePress => (
+                "Olivenpresse",
+                "Presst Oliven für die Feste. Bei Seebrise ist das Öl besonders gefragt und bringt Glauben.",
+                Industry,
+                Workshops,
+                2,
+                [7, 10, 0],
+                [0, 1, 0],
             ),
             Self::Beacon => (
                 "Signalfeuer",

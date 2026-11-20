@@ -1,0 +1,42 @@
+[
+  {
+    "biome":"Valley",
+    "chapters":[
+      {"name":"Weidental","subtitle":"Ein Haus am Quellweg","lore":"Am Weidenfluss erinnert sich der Hain an die erste Wolkenpfote. Ein Dorf wartet auf sein erstes Dach."},
+      {"name":"Eichenpass","subtitle":"Das Zeichen der Mühlenhüter","lore":"Die Mühlen stehen still, seit zwei Täler um das Wasser ringen. Verbinde sie mit einem neuen Übergang.","rival":"Die Mühlenhüter"},
+      {"name":"Quellbogen","subtitle":"Das Bündnis der drei Quellen","lore":"Die Höfe am Quellbogen bitten um Speicher und Versorgung. Führe sie mit einer lebendigen Stadt zusammen.","rival":"Hüterin Alva"}
+    ]
+  },
+  {
+    "biome":"Fjord",
+    "chapters":[
+      {"name":"Kiefernbucht","subtitle":"Das erste Feuer","lore":"An der Kiefernbucht wartet ein Holzhaus auf den Winter. Halte das Feuer am Schrein wach."},
+      {"name":"Runensund","subtitle":"Der Ruf der Runensteine","lore":"Ein neuer Fjord trennt zwei Hallen. Leuchtsignale führen Händler und Gläubige durch den Schnee.","rival":"Sigrun vom Runenufer"},
+      {"name":"Nordlichtpforte","subtitle":"Die letzte Thingnacht","lore":"Unter dem Nordlicht beraten die Siedlungen, wie sie den langen Winter teilen. Versorge beide Ufer und führe das Thing zusammen.","rival":"Die Thingwache"}
+    ]
+  },
+  {
+    "biome":"Terraces",
+    "chapters":[
+      {"name":"Reisterrassen","subtitle":"Das Wasser der oberen Felder","lore":"Unter Perlnebel führen Terrassen zum Fluss. Die Hüter der Schleusen warten auf ein Zeichen."},
+      {"name":"Kranichschlucht","subtitle":"Die Schleuse der Kraniche","lore":"Erlen und rote Ahornhaine säumen den neuen Kanal. Ein Saatpavillon kann die Felder wieder verbinden.","rival":"Die Kranichschiffer"},
+      {"name":"Jadekessel","subtitle":"Die Reisschalen der Dämmerung","lore":"Große Reisfelder liegen zwischen Felsstufen. Zwei Dörfer brauchen eine gemeinsame Straße und verlässliche Versorgung.","rival":"Meisterin Lin"}
+    ]
+  },
+  {
+    "biome":"Lake",
+    "chapters":[
+      {"name":"Papyrusufer","subtitle":"Wasser für das Schilfdorf","lore":"Am warmen See teilen sich Akazien und Papyrus den Ufersaum. Durch Trockenzeit und Handel kann das junge Dorf wachsen."},
+      {"name":"Akazienbogen","subtitle":"Der Pfad zwischen den Brunnen","lore":"Über rötliche Terrassen führen Karawanenwege zum See. Brunnen und Wege halten die Siedlungen auch in der Trockenzeit zusammen.","rival":"Die Brunnenhüter"},
+      {"name":"Sonnenoase","subtitle":"Das Fest der Datteln","lore":"Die Höfe am langen Seeufer bringen ihre Ernten zur Oase. Eine Stadt aus Sandstein soll den letzten Handelspfad schützen.","rival":"Der Rat von Nuru"}
+    ]
+  },
+  {
+    "biome":"Aegean",
+    "chapters":[
+      {"name":"Ägäisbogen","subtitle":"Die Stimme der Oliveninseln","lore":"Aiolos wartet auf das Fest der Winde. Am Ägäisbogen wachsen Oliven zwischen Kalkstein und dem Meer."},
+      {"name":"Korallenpass","subtitle":"Die Händler an der Doppelmole","lore":"Die Inseln tauschen Amphoren und Zypressenholz. Verbinde die Ufer und gewinne den alten Olivenhafen.","rival":"Die Händler von Nerea"},
+      {"name":"Sternenhafen","subtitle":"Das letzte Fest der Winde","lore":"Die Siedlungen bauen Bühnen und warten auf das Orakel. Im Sternenhafen entscheidet sich, wer die Küste zusammenführt.","rival":"Der Rat der Aioliden"}
+    ]
+  }
+]
