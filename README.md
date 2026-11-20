@@ -2,17 +2,19 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-Hippogrove 1.0 spielt sich im Querformat per Touch oder mit angeschlossenem Controller. Fünf Themenkampagnen haben je drei Kapitel. In Europa, im nordischen Fjord, auf ostasiatischen Terrassen, am afrikanisch inspirierten See und in der griechischen Ägäis stiftest du Bündnisse oder gewinnst Siedlungen mit Wundern und Wachen. Für jede Landschaft gibt es auch **Freies Bauen** mit offenen Brücken, allen Plänen und einem eigenen Spielstand. [Kampagnen und Sandbox](docs/V1.md#kampagnen-und-freies-bauen)
+Hippogrove spielt sich im Querformat per Touch oder mit angeschlossenem Controller. Fünf Themenkampagnen haben je drei Kapitel. In Europa, im nordischen Fjord, auf ostasiatischen Terrassen, am afrikanisch inspirierten See und in der griechischen Ägäis stiftest du Bündnisse oder gewinnst Siedlungen mit Wundern und Wachen. Für jede Landschaft gibt es auch **Freies Bauen** mit offenen Brücken, allen Plänen und einem eigenen Spielstand. [Kampagnen und Sandbox](docs/V1.md#kampagnen-und-freies-bauen)
 
 ![Der Ägäisbogen im Spiel mit Theater, Hafen, Badhaus und dem Nilpferd](docs/aegaeisbogen-spiel.jpg)
 
 ## Spielen
 
-Auf Android öffnest du die signierte Test-APK aus deinen Downloads. Benötigt werden Android 8 oder neuer, ein 64-Bit-Gerät und Vulkan. [Hippogrove 1.0.0 für Android](https://github.com/bthginfo/Hippogrove/releases/tag/v1.0.0)
+Auf Android öffnest du die signierte Test-APK aus deinen Downloads. Benötigt werden Android 8 oder neuer, ein 64-Bit-Gerät und Vulkan. [Hippogrove 1.1.0 für Android](https://github.com/bthginfo/Hippogrove/releases/tag/v1.1.0)
 
 Wähle eine Kampagne. Eine Kamerafahrt mit Untertiteln führt dich zur ersten Quest. Tippe auf einen Holzstoß und bestätige **Greifen**. Wähle dann den Sammelplatz und **Ablegen**. Mit **Gläubige** und **Nilpferd** erteilst du Sammelaufträge. **Zum Ziel** zeigt einen passenden Zielpunkt für das aktive Werkzeug. In **Fortschritt** setzt du Talentpunkte ein. Das Nilpferd lernt durch Lob nach einer Lieferung, Wache oder Ernte.
 
 Unter **Planen** zeichnest du Wege mit Anfang und Ende. Ausbauten brauchen eine Werkstatt und einen Anschluss an den Dorfweg. Das **Baubuch** zeigt 33 Gebäudearten pro Landschaft, darunter das automatisch öffnende Palisadentor und einen regionalen Bau. Insgesamt gibt es 37 Gebäudearten. Im **Forschungsmenü** erschließt du 12 Technologien über vier Zweige. Am Wegenetz können Familien wachsen, Betriebe Vorprodukte und Werkzeug herstellen, Treffpunkte die Stimmung heben und Wachhäuser Wachen ausbilden. Auf der **Landkarte** springst du zu Dörfern und Rohstoffgebieten. Dort baust du Sammellager, die Wege verkürzen und deiner Pfote den Abbau vor Ort erlauben. Unter **Vorräte** siehst du die Rohstoffe, Vorprodukte und das getragene Bündel als bebilderte Gegenstände.
+
+Wähle auf der **Landkarte** ein Rohstoffgebiet, um seine drei Vorkommen zu vergleichen. Mit einem Sammellager kannst du dort Gläubige und das Nilpferd beauftragen. Sie wechseln zu einer anderen erreichbaren Quelle, wenn die erste leer ist. **Zur Quelle** richtet die Kamera für den Abbau von Hand aus. Mit einer Ladung in der Pfote führt **Zum Ziel** zum nächsten Lagerplatz. [Sammelaufträge und Bildvorlage](docs/Sammelauftraege.md)
 
 Tippe auf den Titel des aktiven Auftrags, um ihn einzuklappen. Der goldene Knopf zeigt die Aktion für das ausgewählte Ziel. Im Nilpferd-Werkzeug findest du Lob, Snack und Pause unter **Pflege**. Der Fokusrahmen zeigt im Menü, welche Aktion du per Controller oder Tastatur bestätigst.
 
