@@ -65,7 +65,7 @@ pub(super) fn populate(
             ))
             .with_children(|p| {
                 contact_shadow(p, art, 0.48);
-                villager(p, art, false, i + 2);
+                villager(p, art, region.kind, false, i + 2);
             });
     }
     if !region.tutorial {
@@ -78,7 +78,7 @@ pub(super) fn populate(
                         Visibility::Inherited,
                     ))
                     .with_children(|q| {
-                        villager(q, art, false, 3);
+                        villager(q, art, region.kind, false, 3);
                     });
                 }
                 block(
@@ -107,7 +107,7 @@ pub(super) fn populate(
             ))
             .with_children(|p| {
                 contact_shadow(p, art, 0.65);
-                villager(p, art, false, 2);
+                villager(p, art, region.kind, false, 2);
                 block(
                     p,
                     art,

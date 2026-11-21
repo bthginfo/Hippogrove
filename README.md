@@ -2,9 +2,11 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-**[Hippogrove 1.8.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/a757cde055954ee278bc38339002bdb016756461/Hippogrove-1.8.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.8.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/a757cde055954ee278bc38339002bdb016756461/Hippogrove-1.8.0.apk.sha256)
+**[Hippogrove 1.8.1 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/3f543d61f6519d2d2f11acd1fceafb6b30753d25/Hippogrove-1.8.1.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.8.1) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/3f543d61f6519d2d2f11acd1fceafb6b30753d25/Hippogrove-1.8.1.apk.sha256)
 
-Mit **1.8.0** beginnt jede Themenkampagne mit deinem eigenen Dorf. Du baust in deinem Tempo, lernst danach ein Nachbardorf kennen und entscheidest, wann die Rivalität beginnt. Jede Landschaft hat eine neu modellierte Rivalenkreatur.
+In **1.8.1** haben die Bewohner jeder Insel drei zivile Modelle und eine eigene Wache im kantigen 3D-Stil der Siedlungen. Sammler tragen einen sichtbaren Flechtkorb. Auch die fünf Rivalenkreaturen haben neue Modelle. Über **Dörfer → Kreatur ansehen** springt die Kamera zum Tier. [Bewohner der fünf Inseln](docs/glaeubige.jpg) · [Rivalenkreaturen](docs/rivalenkreaturen.jpg)
+
+Seit **1.8.0** beginnt jede Themenkampagne mit deinem eigenen Dorf. Du baust in deinem Tempo, lernst danach ein Nachbardorf kennen und entscheidest, wann die Rivalität beginnt.
 
 Seit **1.7.2** kannst du im Hauptmenü unter **Spielstände** einzelne Kampagnen, freie Bauwelten, die Chronik und das Tutorial löschen. Die Bestätigung nennt den gewählten Spielstand. Am Controller ist **Abbrechen** vorgewählt. Nach dem Löschen des letzten Spielstands kannst du auf der Übungsinsel neu beginnen.
 
@@ -187,11 +189,15 @@ Die Blender-Quelle liegt in `art/Hippogrove.blend`. `blender -b -P art/build_sce
 
 `blender -b -P art/build_villages.py` erzeugt die Hütten und Lager aller fünf Welten. Jedes der Gebäude ist ein einzelnes Mesh mit eingearbeiteten Farben und Reliefdetails. [Blender-Quelle für die Dörfer](art/build_villages.py)
 
+Filzkappen im Weidental, Wollkrägen im Fjord, geflochtene Hüte auf den Terrassen, Leinentücher am See und Chitone in der Ägäis unterscheiden die Bewohner schon auf der Karte. Die Figuren teilen sich die Modelle und Farben ihrer Region. Arme und Beine behalten beim Gehen und Tragen eigene Drehpunkte. `blender -b -P art/make_rivals.py` exportiert die fünf Rivalenkreaturen. [Bewohnermodelle](src/art/people.rs) · [Blender-Quelle der Rivalenkreaturen](art/make_rivals.py)
+
 Die Karten reichen bis 178 × 140 Felder. Gebirgsketten, Täler, dichte Haine, Felsformationen und modellierte Küsten machen die Landschaft lesbar. Beim Sammeln kippen Bäume, Stein bricht in Splitter und Früchte lösen sich vom Strauch. Bevy stimmt Sonnenwinkel, Fülllicht, Dunst und Schatten auf die jeweilige Welt ab. Das Höhenprofil bestimmt gleichzeitig, wo Figuren laufen, wo Regen auftrifft und welchen Bodenpunkt die Wolkenpfote auswählt. Acht Vegetations-, Siedlungs- und Rohstoffmodelle stammen aus Waldwinkel 1.1.0. [Licht, Wetter und Herkunft der Modelle](docs/V1.md#gelände-licht-wetter-und-physik)
 
 Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus Waldwinkel 1.5. Die sechs Originalstücke umfassen „Die kleine Bucht“ für Titel und Tutorial sowie je eine eigene Besetzung und Bearbeitung für die fünf Landschaften. Beim Inselwechsel blendet die Musik über. Zum Rendern nutzt `art/build_music.py` FluidSynth, NumPy, pyFluidSynth, FFmpeg und die Instrumente von GeneralUser GS 2.0.3. Musik, Umgebung und Effekte lassen sich im Spielmenü unter **Ton** einzeln schalten. [Waldwinkel 1.5](https://github.com/bthginfo/waldwinkel/tree/8a98a76a2921690b533015e3f57fadccc2c66b24) · [Instrumentenbank und Lizenz](https://github.com/mrbumpy409/GeneralUser-GS/blob/684543d5e5efaef08d02be50dcda8d552478fa60/documentation/LICENSE.txt)
 
 ## Geprüfter Stand
+
+Für **1.8.1** bestanden 64 Rust-Tests. Bei 1280 × 800 wurden in allen fünf Kampagnen die zivilen Varianten, Wachen, Sammelkörbe und Rivalenkreaturen im Spiel geprüft. Ein Sammler bewegte sich mit sichtbarem Korb. Das signierte Update von 1.8.0 auf 1.8.1 erhielt auf Android 15 die vorhandene Speicherdatei bytegleich. Mit A am virtuellen Gamepad ließ sich das Weidental fortsetzen. Ein Spieltest auf einem physischen Galaxy Tab S9 FE+ steht aus.
 
 Für **1.8.0** bestanden 64 Rust-Tests. Ein Controller-Durchlauf im gerenderten Spiel bei 1280 × 800 begann ohne Spielstand und führte vom Tutorial über Hütte, Lager und Feld bis zum Besuch und zur freiwilligen Rivalität. Die Angriffswarnung öffnete die Abwehr bei pausiertem Spieltimer. Alle fünf neuen Kreaturen erschienen in ihren Kampagnen.
 

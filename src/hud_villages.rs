@@ -1,5 +1,5 @@
 use super::*;
-use crate::game::Allegiance;
+use crate::{game::Allegiance, region::Tile};
 
 fn compact(short: bool) -> ButtonStyle {
     ButtonStyle {
@@ -181,7 +181,17 @@ pub(super) fn council(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game,
             false,
             style,
         );
-        if !region.sandbox {
+        if region.has_rival_creature() && city.rival_resolve > 0 {
+            styled_button(
+                bar,
+                hud,
+                "Kreatur ansehen",
+                UiAction::Focus(Tile::from_world(city.rival_world(region))),
+                false,
+                false,
+                style,
+            );
+        } else if !region.sandbox {
             styled_button(
                 bar,
                 hud,

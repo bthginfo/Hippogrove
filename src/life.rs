@@ -128,18 +128,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands, art: &Art, region: &Regio
                         .with_scale(Vec3::splat(0.86)),
                     Visibility::Inherited,
                 ))
-                .with_children(|actor| {
-                    villager(actor, art, false, number + 1);
-                    for side in [-1., 1.] {
-                        fauna_piece(
-                            actor,
-                            art,
-                            &art.boot,
-                            Vec3::new(side * 0.13, 0.19, 0.044),
-                            Vec3::new(0.23, 0.40, 0.30),
-                        );
-                    }
-                });
+                .with_children(|actor| villager(actor, art, region.kind, false, number + 1));
         }
     }
     let shores = [

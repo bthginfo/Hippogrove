@@ -436,128 +436,30 @@ fn contact_shadow(parent: &mut ChildSpawnerCommands, art: &Art, size: f32) {
     );
 }
 
-pub(crate) fn villager(parent: &mut ChildSpawnerCommands, art: &Art, guard: bool, variant: usize) {
-    let coat = if guard {
-        &art.blue
-    } else {
-        [&art.door, &art.cobalt, &art.red, &art.clay][variant % 4]
-    };
-    mound(
-        parent,
-        art,
-        coat,
-        Vec3::Y * 0.62,
-        Vec3::new(0.58, 0.61, 0.41),
-    );
-    mound(
-        parent,
-        art,
-        &art.plaster,
-        Vec3::new(0., 0.84, 0.088),
-        Vec3::new(0.41, 0.14, 0.34),
-    );
-    mound(
-        parent,
-        art,
-        &art.dark_wood,
-        Vec3::new(0., 0.49, 0.),
-        Vec3::new(0.58, 0.12, 0.41),
-    );
-    block(
-        parent,
-        art,
-        &art.ridge,
-        Vec3::new(0.02, 0.50, 0.207),
-        Vec3::new(0.084, 0.07, 0.036),
-    );
-    mound(
-        parent,
-        art,
-        &art.skin,
-        Vec3::new(0., 0.99, 0.06),
-        Vec3::new(0.56, 0.51, 0.43),
-    );
-    for x in [-0.12, 0.12] {
-        mound(
-            parent,
-            art,
-            &art.eye,
-            Vec3::new(x, 1.01, 0.247),
-            Vec3::splat(0.055),
-        );
-    }
-    mound(
-        parent,
-        art,
-        &art.skin,
-        Vec3::new(0., 0.965, 0.273),
-        Vec3::new(0.096, 0.079, 0.087),
-    );
-    let hat = if guard {
-        &art.blue
-    } else {
-        [&art.plank, &art.timber, &art.warm_stone][variant % 3]
-    };
-    part(
-        parent,
-        &art.cylinder,
-        hat,
-        Vec3::Y * 1.19,
-        Vec3::new(0.76, 0.087, 0.67),
-        Quat::IDENTITY,
-    );
-    mound(
-        parent,
-        art,
-        hat,
-        Vec3::Y * 1.27,
-        Vec3::new(0.48, 0.23, 0.44),
-    );
-    if !guard && variant % 3 == 1 {
-        mound(
-            parent,
-            art,
-            &art.dark_wood,
-            Vec3::new(0.11, 1.02, -0.13),
-            Vec3::new(0.33, 0.31, 0.26),
-        );
-    }
-    if guard {
-        block(
-            parent,
-            art,
-            &art.timber,
-            Vec3::new(0.35, 0.65, 0.15),
-            Vec3::new(0.063, 1.32, 0.063),
-        );
-        block(
-            parent,
-            art,
-            &art.blue,
-            Vec3::new(0.48, 1.21, 0.15),
-            Vec3::new(0.26, 0.29, 0.05),
-        );
-        for x in [-0.15, 0.15] {
-            mound(
-                parent,
-                art,
-                &art.dark_wood,
-                Vec3::new(x, 0.20, 0.045),
-                Vec3::new(0.24, 0.42, 0.30),
-            );
-        }
-    }
+pub(crate) fn villager(
+    parent: &mut ChildSpawnerCommands,
+    art: &Art,
+    biome: Biome,
+    guard: bool,
+    variant: usize,
+) {
+    art.people.standing(parent, biome, guard, variant);
 }
+
+#[derive(Component)]
+pub(crate) struct GathererPack(usize);
 
 fn spawn_walker(
     parent: &mut ChildSpawnerCommands,
     art: &Art,
+    biome: Biome,
     index: usize,
     walker: &Walker,
     ground: f32,
     growth: CreatureGrowth,
 ) {
     let hippo = walker.hippo;
+    let costume = (!hippo).then(|| art.people.get(biome, index, walker.guard));
     let scale = actor_scale(walker, growth);
     parent
         .spawn((
@@ -579,16 +481,27 @@ fn spawn_walker(
             if hippo {
                 actor.spawn((SceneRoot(art.hippo_model.clone()), Transform::default()));
                 art::companion_decor(actor, art);
-            } else {
-                villager(actor, art, walker.guard, index);
+            } else if let Some(costume) = costume {
+                art.people.body(actor, costume);
+                if !walker.guard {
+                    let basket = art.people.basket(actor, biome);
+                    actor
+                        .commands()
+                        .entity(basket)
+                        .insert((GathererPack(index), Visibility::Hidden));
+                }
             }
             for side in [-1., 1.] {
-                let leg_origin = Vec3::new(side * if hippo { 0.18 } else { 0.13 }, 0.40, 0.);
-                let arm_origin = Vec3::new(
-                    side * if hippo { 0.34 } else { 0.25 },
-                    if hippo { 0.92 } else { 0.75 },
-                    0.065,
-                );
+                let leg_origin = if hippo {
+                    Vec3::new(side * 0.18, 0.40, 0.)
+                } else {
+                    art::people::People::limb_origin(side, false)
+                };
+                let arm_origin = if hippo {
+                    Vec3::new(side * 0.34, 0.92, 0.065)
+                } else {
+                    art::people::People::limb_origin(side, true)
+                };
                 actor
                     .spawn((
                         Limb {
@@ -601,22 +514,24 @@ fn spawn_walker(
                         Visibility::Visible,
                     ))
                     .with_children(|leg| {
-                        let mat = if hippo { &art.purple } else { &art.dark_wood };
-                        mound(
-                            leg,
-                            art,
-                            mat,
-                            Vec3::new(0., -0.18, 0.),
-                            Vec3::new(0.24, 0.41, 0.25),
-                        );
-                        let boot = if hippo { &art.boot } else { &art.timber };
-                        mound(
-                            leg,
-                            art,
-                            boot,
-                            Vec3::new(0., -0.31, 0.084),
-                            Vec3::new(0.28, 0.17, 0.36),
-                        );
+                        if let Some(costume) = costume {
+                            art.people.limb(leg, costume, false);
+                        } else {
+                            mound(
+                                leg,
+                                art,
+                                &art.purple,
+                                Vec3::new(0., -0.18, 0.),
+                                Vec3::new(0.24, 0.41, 0.25),
+                            );
+                            mound(
+                                leg,
+                                art,
+                                &art.boot,
+                                Vec3::new(0., -0.31, 0.084),
+                                Vec3::new(0.28, 0.17, 0.36),
+                            );
+                        }
                     });
                 actor
                     .spawn((
@@ -630,21 +545,24 @@ fn spawn_walker(
                         Visibility::Visible,
                     ))
                     .with_children(|arm| {
-                        let mat = if hippo { &art.purple } else { &art.skin };
-                        mound(
-                            arm,
-                            art,
-                            mat,
-                            Vec3::new(0., -0.16, 0.),
-                            Vec3::new(0.22, 0.40, 0.22),
-                        );
-                        mound(
-                            arm,
-                            art,
-                            mat,
-                            Vec3::new(0., -0.30, 0.02),
-                            Vec3::new(0.19, 0.18, 0.20),
-                        );
+                        if let Some(costume) = costume {
+                            art.people.limb(arm, costume, true);
+                        } else {
+                            mound(
+                                arm,
+                                art,
+                                &art.purple,
+                                Vec3::new(0., -0.16, 0.),
+                                Vec3::new(0.22, 0.40, 0.22),
+                            );
+                            mound(
+                                arm,
+                                art,
+                                &art.purple,
+                                Vec3::new(0., -0.30, 0.02),
+                                Vec3::new(0.19, 0.18, 0.20),
+                            );
+                        }
                     });
             }
             for material in Material::ALL {
@@ -770,7 +688,7 @@ fn opening_farm(parent: &mut ChildSpawnerCommands, art: &Art, repaired: bool) {
             Transform::from_xyz(-0.75, 0.04, 0.73).with_scale(Vec3::splat(0.76)),
             Visibility::Inherited,
         ))
-        .with_children(|person| villager(person, art, false, 1));
+        .with_children(|person| villager(person, art, Biome::Valley, false, 1));
 }
 
 pub fn sync_board(
@@ -971,7 +889,7 @@ pub fn sync_board(
                         ))
                         .with_children(|p| {
                             contact_shadow(p, &art, 0.76);
-                            villager(p, &art, true, i);
+                            villager(p, &art, region.kind, true, i);
                         });
                 }
                 if region.has_rival_creature() {
@@ -998,7 +916,7 @@ pub fn sync_board(
                         ))
                         .with_children(|figure| {
                             contact_shadow(figure, &art, 0.76);
-                            villager(figure, &art, false, 1);
+                            villager(figure, &art, region.kind, false, 1);
                             art::rival_leader(figure, &art, region.kind);
                         });
                     parent
@@ -1302,6 +1220,7 @@ pub fn sync_board(
             spawn_walker(
                 parent,
                 &art,
+                region.kind,
                 index,
                 walker,
                 terrain::actor_height(region, walker.world(), city.bridge_fixed),
@@ -1476,6 +1395,7 @@ pub fn animate(
     play: Res<Play>,
     mut actors: Query<(&mut WalkerView, &mut Transform), Without<Limb>>,
     mut limbs: Query<(&Limb, &mut Transform), Without<WalkerView>>,
+    mut baskets: Query<(&GathererPack, &mut Visibility)>,
 ) {
     let delta = time.delta_secs().clamp(0.0001, 0.10);
     let city = game.city();
@@ -1575,6 +1495,26 @@ pub fn animate(
         pose.scale = pose.scale.lerp(target_scale, 1. - (-3.8 * delta).exp());
         if let Some(state) = motion.get_mut(meta.index) {
             *state = (meta.phase, meta.speed);
+        }
+    }
+    for (pack, mut visibility) in &mut baskets {
+        let gathering = city.walkers.get(pack.0).is_some_and(|walker| {
+            matches!(
+                walker.job,
+                Some(
+                    crate::game::Job::Gather(_)
+                        | crate::game::Job::GatherArea(..)
+                        | crate::game::Job::Refill(_)
+                )
+            )
+        });
+        let next = if gathering {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != next {
+            *visibility = next;
         }
     }
     for (limb, mut pose) in &mut limbs {

@@ -18,6 +18,7 @@ use crate::{
 mod alignment;
 mod landscapes;
 mod nature;
+pub(crate) mod people;
 mod rivals;
 mod settlement_models;
 
@@ -78,7 +79,6 @@ pub struct Art {
     pub white: Handle<StandardMaterial>,
     pub purple: Handle<StandardMaterial>,
     pub boot: Handle<StandardMaterial>,
-    pub skin: Handle<StandardMaterial>,
     pub eye: Handle<StandardMaterial>,
     pub berry: Handle<StandardMaterial>,
     pub gold: Handle<StandardMaterial>,
@@ -100,6 +100,7 @@ pub struct Art {
     pub waldwinkel: WoodlandKit,
     villages: [VillageArt; 5],
     plots: [Handle<Mesh>; 5],
+    pub(crate) people: people::People,
     pub hippo_model: Handle<Scene>,
     pub rival_models: [Handle<Scene>; 5],
     pub deposits: [[Handle<Mesh>; 6]; 5],
@@ -149,7 +150,6 @@ impl Art {
             white: paint(mats, 0xffedc9),
             purple: paint(mats, 0xa790b9),
             boot: paint(mats, 0x7f6a93),
-            skin: paint(mats, 0xebbb93),
             eye: paint(mats, 0x382c35),
             berry: paint(mats, 0xb95743),
             gold: glow(mats, 0xf5dc97, 1.),
@@ -198,6 +198,7 @@ impl Art {
                 }
             }),
             plots: Biome::ALL.map(|biome| meshes.add(plot_mesh(biome))),
+            people: people::People::load(meshes, mats),
             hippo_model: assets.load("embedded://models/hippo.glb#Scene0"),
             rival_models: ["valley", "fjord", "terraces", "lake", "aegean"]
                 .map(|key| assets.load(format!("embedded://models/rivals/{key}.glb#Scene0"))),
