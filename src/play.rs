@@ -108,6 +108,7 @@ pub enum Panel {
     Quests,
     SideQuest,
     Sound,
+    Display,
     Catalog,
     Research,
     Inspection,
@@ -128,6 +129,7 @@ pub enum UiAction {
     MenuPage(u8),
     FoldTracker,
     WorkGuide,
+    Reading(crate::display::ReadingSize),
     CheckSite,
     Tool(Tool),
     Order(Tool, usize),
@@ -224,6 +226,7 @@ pub struct Play {
     pub tech: Tech,
     pub focus: Option<UiAction>,
     pub menu_page: u8,
+    pub reading: crate::display::ReadingSize,
     pub notice: String,
     pub notice_until: f32,
     pub notice_kind: Feedback,
@@ -283,6 +286,7 @@ impl Play {
             tech: Tech::Foundations,
             focus: delivery.then_some(UiAction::Focus(game.region().depot)),
             menu_page: 0,
+            reading: Default::default(),
             notice: String::new(),
             notice_until: 0.,
             notice_kind: Feedback::Action,
@@ -1124,7 +1128,8 @@ impl Play {
                     | UiAction::Cancel
                     | UiAction::ModeTab(_)
                     | UiAction::SelectMode(_)
-                    | UiAction::Panel(Panel::Sound | Panel::Modes)
+                    | UiAction::Panel(Panel::Sound | Panel::Modes | Panel::Display)
+                    | UiAction::Reading(_)
                     | UiAction::Sound(_)
                     | UiAction::TestSound
                     | UiAction::EnableSound
@@ -1625,6 +1630,10 @@ impl Play {
             UiAction::SelectMode(mode) => {
                 self.choose_mode(mode, game, view, now);
             }
+            UiAction::Reading(size) => {
+                self.reading = size;
+                self.set_focus(Some(action));
+            }
             UiAction::Sound(bus) => self.mix.toggle(bus),
             UiAction::TestSound => {
                 self.sound_cues.push(Cue::Test);
@@ -1770,6 +1779,7 @@ impl Play {
         self.focus = match panel {
             Panel::Menu => Some(UiAction::MainMenu),
             Panel::Projects(_) => Some(UiAction::Cancel),
+            Panel::Display => Some(UiAction::Reading(self.reading)),
             Panel::Sound => Some(UiAction::TestSound),
             Panel::Wheel(wheel) => Some(
                 self.practice_step
@@ -1857,10 +1867,12 @@ impl Play {
                 let revision = self.revision.wrapping_add(1);
                 let gamepad = self.gamepad;
                 let mix = self.mix;
+                let reading = self.reading;
                 *self = Self::new(game);
                 self.revision = revision;
                 self.gamepad = gamepad;
                 self.mix = mix;
+                self.reading = reading;
                 *view = CameraRig::new(game);
                 view.jump = true;
                 if let Some(story) = self.story {

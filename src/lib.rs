@@ -3,6 +3,7 @@ mod atmosphere;
 mod civic;
 mod context;
 mod controls;
+mod display;
 mod game;
 mod growth;
 mod hud;
@@ -59,6 +60,7 @@ pub fn main() {
     let mut play = Play::new(&game);
     play.show_main_menu(&game);
     play.mix = file.load_mix();
+    play.reading = file.load_reading();
     let view = CameraRig::new(&game);
     let mut app = App::new();
     let plugins = DefaultPlugins

@@ -2,9 +2,11 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-**[Hippogrove 1.7.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/874efc3817997f74f9627400e4563711fcc30bff/Hippogrove-1.7.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.7.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/874efc3817997f74f9627400e4563711fcc30bff/Hippogrove-1.7.0.apk.sha256)
+**[Hippogrove 1.7.1 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/762d6738e02af275467f049e4033a3ab2595c5db/Hippogrove-1.7.1.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.7.1) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/762d6738e02af275467f049e4033a3ab2595c5db/Hippogrove-1.7.1.apk.sha256)
 
-In **1.7.0** baust du zusammen mit deinem Nilpferd ein Werk für die Insel. Im Weidental bittet Mira um eine Bachmühle. Du bringst das Holz, dein Nilpferd hebt das Rad in die Mühle und ein Feld am Dorfweg liefert den Anschluss. Bei der Einweihung entscheidest du, ob dein Nilpferd Erfahrung, deine Gottheit einen Talentpunkt oder dein Dorf die doppelte Leistung erhält.
+Mit **1.7.1** stellt sich die Anzeige auf dem Tablet auf deinen Controller ein. Schrift und Auswahlräder wachsen mit der nutzbaren Fläche. Unter **Anzeige** kannst du den Leseabstand selbst wählen.
+
+Seit **1.7.0** baust du zusammen mit deinem Nilpferd ein Werk für die Insel. Im Weidental bittet Mira um eine Bachmühle. Du bringst das Holz, dein Nilpferd hebt das Rad in die Mühle und ein Feld am Dorfweg liefert den Anschluss. Bei der Einweihung entscheidest du, ob dein Nilpferd Erfahrung, deine Gottheit einen Talentpunkt oder dein Dorf die doppelte Leistung erhält.
 
 Die signierte Standalone-App braucht Android 8 oder neuer und Vulkan. Die APK unterstützt ARM64 und x86_64. Die frühere Playtest-App und die Standalone-App haben eigene Spielstände.
 
@@ -21,6 +23,16 @@ Wähle im Hauptmenü **Tutorial**. Auf der Übungsinsel führen acht Etappen vom
 Tippe in der Welt auf ein Objekt oder drücke am Controller **R3**. Am Holzstoß kannst du ein Bündel greifen, dein Nilpferd losschicken oder einen freien Dorfbewohner einteilen. Ein fast volles Lager nimmt an, was hineinpasst. Der Rest bleibt in deiner Pfote. Halte direkt auf dem Holz oder auf **Greifen**, um bis zu 18 Einheiten zu nehmen. Ein trockenes Feld bietet Regen an, ein reifes Feld die Ernte. Bei einer Familie oder Hütte kannst du einmal pro Spieltag drei Nahrung teilen. Das bringt zwei Glauben und hebt die Stimmung des Dorfes für diesen Tag. Kosten und Erträge erscheinen am Ort der Aktion.
 
 ![Objektmenü am Holzstoß mit den Aktionen Bündel greifen und Nilpferd sammeln lassen](docs/objektmenue-weidental.jpg)
+
+### Auf dem Tablet mit Controller spielen
+
+Öffne im Hauptmenü **Anzeige** oder während des Spiels **Start → Spiel → Anzeige**. **Automatisch** nutzt auf größeren Bildschirmen mehr Platz für Schrift und Räder, sobald du den Controller verwendest. Für ein Tablet auf einem Ständer gibt es **Groß**. **Kompakt** lässt mehr Platz für die Insel. Die Wahl bleibt nach dem Beenden gespeichert.
+
+Um eine Partie zu verlassen, drücke im Spiel **Start/Options**, dann **A/Kreuz** auf **Hauptmenü**. **Spiel fortsetzen** bringt dich zurück. Das funktioniert auch aus dem Baurad. Lieferungen und verfolgte Aufträge bleiben gespeichert.
+
+Im Pausenmenü blättern **LB/L1** und **RB/R1** durch die drei Seiten. Im Spiel öffnen **X/Quadrat** das Baurad, **Y/Dreieck** die Wunder und **RB/R1** mit der freien Pfote die Kreatur. **L3** führt zum verfolgten Ziel, **R3** öffnet das Objektmenü. Der helle Innenrand mit dunkler Außenlinie zeigt, was **A/Kreuz** auslöst. Mit **B/Kreis** kehrst du zur vorherigen Auswahl zurück.
+
+![Baurad mit sichtbarem Controllerfokus im 16:10-Querformat](docs/tablet-baurad.jpg)
 
 ### Aufträge verfolgen und Rohstoffe erkennen
 
@@ -168,6 +180,10 @@ Die Karten reichen bis 178 × 140 Felder. Gebirgsketten, Täler, dichte Haine, F
 Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus Waldwinkel 1.5. Die sechs Originalstücke umfassen „Die kleine Bucht“ für Titel und Tutorial sowie je eine eigene Besetzung und Bearbeitung für die fünf Landschaften. Beim Inselwechsel blendet die Musik über. Zum Rendern nutzt `art/build_music.py` FluidSynth, NumPy, pyFluidSynth, FFmpeg und die Instrumente von GeneralUser GS 2.0.3. Musik, Umgebung und Effekte lassen sich im Spielmenü unter **Ton** einzeln schalten. [Waldwinkel 1.5](https://github.com/bthginfo/waldwinkel/tree/8a98a76a2921690b533015e3f57fadccc2c66b24) · [Instrumentenbank und Lizenz](https://github.com/mrbumpy409/GeneralUser-GS/blob/684543d5e5efaef08d02be50dcda8d552478fa60/documentation/LICENSE.txt)
 
 ## Geprüfter Stand
+
+Für **1.7.1** bestanden 60 Rust-Tests. Im gerenderten Spiel wurden die Controllerwege bei 1280 × 800 geprüft. Bei 2560 × 1600 mit zweifacher Pixeldichte lagen die Schaltflächen des Baurads auf denselben logischen Positionen. Die komplette R3-Beschriftung lag bei beiden Tablet-Auflösungen und bei 512 × 288 innerhalb des Bildes. Vor und nach Ablauf der Auftragsbestätigung lagen alle vier Ecken der Liefertaste auf denselben Pixeln.
+
+Auf der Insel und im offenen Baurad führte **Start → A** ins Hauptmenü. Nach **Spiel fortsetzen** waren der aktive Auftrag, die drei gelieferten Holz und der Lagerbestand erhalten. Das Update von 1.7.0 auf 1.7.1 wurde auf Android 15 installiert. Dabei blieb die vorhandene Speicherdatei bytegleich. Ein Test auf einem physischen Galaxy Tab S9 FE+ steht aus.
 
 In Version 1.7.0 bestehen 59 Rust-Tests. Die zusätzlichen Prüfungen decken die Inselwerke aller 15 Themenkapitel ab, einschließlich Teillieferungen, Ankunft des Nilpferds, Weganschluss und einmaliger Widmung. Auch die Übernahme eines Spielstands ohne Werk und ohne Bauerfahrung wird geprüft.
 

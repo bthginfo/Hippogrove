@@ -261,6 +261,7 @@ pub struct Controls {
     touch: Option<(u64, Drag)>,
     mouse: Option<Drag>,
     pad_buttons: u32,
+    pad_connected: bool,
     resume_pad: bool,
     pinch_in_world: bool,
     key_grab: bool,
@@ -885,6 +886,8 @@ pub fn collect(
     };
     controls.resume_pad = false;
     controls.pad_buttons = pad.buttons;
+    let attached = pad.connected && !controls.pad_connected;
+    controls.pad_connected = pad.connected;
     if !pad.connected {
         play.gamepad = false;
         if std::mem::take(&mut controls.pad_grab) {
@@ -896,13 +899,24 @@ pub fn collect(
     }
     let raw_left = deadzone(pad.left);
     let right = deadzone(pad.right);
-    if pressed != 0 || raw_left != Vec2::ZERO || right != Vec2::ZERO || pad.zoom.abs() > 0.13 {
+    if attached
+        || pressed != 0
+        || raw_left != Vec2::ZERO
+        || right != Vec2::ZERO
+        || pad.zoom.abs() > 0.13
+    {
         if !play.gamepad {
             play.pointer = None;
             play.gamepad = true;
         }
     }
     if !play.gamepad {
+        return;
+    }
+    if play.panel == Panel::Menu && pressed & (WHEEL | GUIDE) != 0 {
+        let direction = if pressed & WHEEL != 0 { 2 } else { 1 };
+        let page = (play.menu_page + direction) % 3;
+        play.activate(UiAction::MenuPage(page), &mut game, &mut view, now);
         return;
     }
     if play.panel == Panel::Closed && pressed & CONTEXT != 0 {

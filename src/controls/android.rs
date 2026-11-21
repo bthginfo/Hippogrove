@@ -161,6 +161,19 @@ unsafe extern "C" fn __wrap_AInputQueue_getEvent(
 }
 
 #[unsafe(no_mangle)]
+extern "system" fn Java_game_hippogrove_GameActivity_attachController(
+    _env: *mut c_void,
+    _class: *mut c_void,
+    id: i32,
+) {
+    let mut state = CONTROLLER.lock().unwrap_or_else(|state| state.into_inner());
+    if state.id.is_none() {
+        state.id = Some(id);
+        state.publish();
+    }
+}
+
+#[unsafe(no_mangle)]
 extern "system" fn Java_game_hippogrove_GameActivity_resetController(
     _env: *mut c_void,
     _class: *mut c_void,

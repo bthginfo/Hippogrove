@@ -26,6 +26,7 @@ pub struct SaveFile {
     last_saved: f32,
     revision: u64,
     mix: Mix,
+    reading: crate::display::ReadingSize,
 }
 
 impl SaveFile {
@@ -56,7 +57,16 @@ impl SaveFile {
             last_saved: 0.,
             revision: 0,
             mix: Mix::default(),
+            reading: Default::default(),
         }
+    }
+
+    pub fn load_reading(&mut self) -> crate::display::ReadingSize {
+        self.reading = fs::read(self.path.with_file_name("anzeige.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        self.reading
     }
 
     pub fn load_mix(&mut self) -> Mix {
@@ -118,6 +128,13 @@ pub fn checkpoint(
         .any(|state| matches!(state, AppLifecycle::WillSuspend | AppLifecycle::Suspended));
     let closed = closing.read().count() > 0 || exits.read().count() > 0;
     let now = time.elapsed_secs();
+    if file.reading != play.reading {
+        let path = file.path.with_file_name("anzeige.json");
+        match write_json(&path, &play.reading) {
+            Ok(()) => file.reading = play.reading,
+            Err(error) => warn!("Anzeige konnte nicht gesichert werden: {error}"),
+        }
+    }
     if file.mix != play.mix {
         let path = file.path.with_file_name("ton.json");
         match write_json(&path, &play.mix) {

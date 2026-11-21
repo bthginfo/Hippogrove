@@ -6,6 +6,7 @@ import android.hardware.input.InputManager;
 import android.media.AudioManager;
 import android.os.Build;
 import android.view.DisplayCutout;
+import android.view.InputDevice;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -15,6 +16,7 @@ public final class GameActivity extends NativeActivity
         implements InputManager.InputDeviceListener, View.OnApplyWindowInsetsListener {
     static { System.loadLibrary("hippogrove"); }
 
+    private static native void attachController(int device);
     private static native void resetController(int device);
     private static native void publishInsets(int left, int top, int right, int bottom);
 
@@ -46,6 +48,7 @@ public final class GameActivity extends NativeActivity
     protected void onResume() {
         super.onResume();
         inputs.registerInputDeviceListener(this, null);
+        detectControllers();
     }
 
     @Override
@@ -62,6 +65,7 @@ public final class GameActivity extends NativeActivity
             resetController(-1);
             return;
         }
+        detectControllers();
         getWindow().getDecorView().requestApplyInsets();
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController controller = getWindow().getInsetsController();
@@ -75,7 +79,24 @@ public final class GameActivity extends NativeActivity
         }
     }
 
-    @Override public void onInputDeviceAdded(int id) { }
-    @Override public void onInputDeviceChanged(int id) { }
-    @Override public void onInputDeviceRemoved(int id) { resetController(id); }
+    private void detectControllers() {
+        if (inputs == null || !hasWindowFocus()) return;
+        for (int id : inputs.getInputDeviceIds()) detectController(id);
+    }
+
+    private void detectController(int id) {
+        InputDevice device = inputs.getInputDevice(id);
+        if (device != null && !device.isVirtual() && hasWindowFocus()
+                && (device.supportsSource(InputDevice.SOURCE_GAMEPAD)
+                || device.supportsSource(InputDevice.SOURCE_JOYSTICK))) {
+            attachController(id);
+        }
+    }
+
+    @Override public void onInputDeviceAdded(int id) { detectController(id); }
+    @Override public void onInputDeviceChanged(int id) { detectController(id); }
+    @Override public void onInputDeviceRemoved(int id) {
+        resetController(id);
+        detectControllers();
+    }
 }

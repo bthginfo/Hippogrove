@@ -158,6 +158,7 @@ struct Layout {
     folded: bool,
     work_stage: crate::game::WorkStage,
     work_pinned: bool,
+    reading: crate::display::ReadingSize,
     work_paid: u16,
     appeal: Option<usize>,
     mix: Option<Mix>,
@@ -167,6 +168,7 @@ struct Layout {
     road_started: bool,
     compact: bool,
     short: bool,
+    narrow_legend: bool,
     narrow_modal: bool,
     safe: [u16; 4],
     catalog: Option<Branch>,
@@ -1644,6 +1646,7 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                 gamepad_legend(
                     hud_root,
                     hud,
+                    layout,
                     &[
                         ("LB/L1", None, "Auswahlrad"),
                         ("X", Some(PAD_SQUARE), "Bauen"),
@@ -1668,11 +1671,19 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
 fn gamepad_legend(
     parent: &mut ChildSpawnerCommands,
     hud: &Hud,
+    layout: Layout,
     bindings: &[(&str, Option<usize>, &str)],
 ) {
+    let spacious = !layout.short && !layout.compact;
     parent
         .spawn(Node {
-            flex_wrap: FlexWrap::Wrap,
+            width: Val::Percent(100.),
+            display: Display::Grid,
+            grid_template_columns: vec![
+                GridTrack::auto();
+                if layout.narrow_legend { 3 } else { 6 }
+            ],
+            justify_items: JustifyItems::Center,
             justify_content: JustifyContent::Center,
             column_gap: Val::Px(4.),
             row_gap: Val::Px(3.),
@@ -1692,11 +1703,11 @@ fn gamepad_legend(
                         BorderRadius::all(Val::Px(5.)),
                     ))
                     .with_children(|item| {
-                        text(item, hud, binding, 12., GOLD);
+                        text(item, hud, binding, if spacious { 16. } else { 12. }, GOLD);
                         if let Some(index) = alternate {
-                            glyph(item, hud, index, 13.);
+                            glyph(item, hud, index, if spacious { 18. } else { 13. });
                         }
-                        text(item, hud, action, 12., LIGHT);
+                        text(item, hud, action, if spacious { 15. } else { 12. }, LIGHT);
                     });
             }
         });
@@ -1876,6 +1887,18 @@ fn main_menu(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
         styled_button(
             choices,
             hud,
+            "Anzeige",
+            UiAction::Panel(Panel::Display),
+            false,
+            false,
+            ButtonStyle {
+                icon: Some(10),
+                ..style
+            },
+        );
+        styled_button(
+            choices,
+            hud,
             "Ton",
             UiAction::Panel(Panel::Sound),
             false,
@@ -1916,6 +1939,15 @@ fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
             );
         }
     });
+    if layout.gamepad && !layout.short {
+        text(
+            parent,
+            hud,
+            "LB/L1 und RB/R1 wechseln die Menüseite.",
+            15.,
+            MUTED,
+        );
+    }
     if layout.menu_page == 2 && !game.region().tutorial {
         styled_button(
             parent,
@@ -1946,6 +1978,7 @@ fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
             ("Wunder", Panel::Spells, 9),
         ],
         2 => &[
+            ("Anzeige", Panel::Display, 10),
             ("Steuerung", Panel::Controls, 14),
             ("Ton", Panel::Sound, 28),
             ("Spielmodi", Panel::Modes, 10),
@@ -4198,6 +4231,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 play.panel,
                 Panel::MainMenu
                     | Panel::Work
+                    | Panel::Display
                     | Panel::Dedication
                     | Panel::Talent(_)
                     | Panel::Progress
@@ -4220,7 +4254,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     | Panel::Inspection
             ));
     parent.spawn((
-        Node{width:Val::Percent(100.),height:Val::Percent(100.),align_items:AlignItems::Center,
+        Node{width:Val::Percent(100.),height:Val::Percent(100.),flex_direction:FlexDirection::Column,align_items:AlignItems::Center,
             justify_content:JustifyContent::Center,..default()},
 
     )).with_children(|shade| {
@@ -4234,10 +4268,12 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
             if !matches!(play.panel, Panel::MainMenu | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection | Panel::Briefing | Panel::Graduation | Panel::Departure) {
-                let actions = if play.panel == Panel::Menu {
-                    [("Hauptmenü", UiAction::MainMenu, false), ("Fortsetzen", UiAction::Resume, true)]
+                let actions: &[(&str, UiAction, bool)] = if play.at_title() {
+                    &[("Zurück", UiAction::Cancel, true)]
+                } else if play.panel == Panel::Menu {
+                    &[("Hauptmenü", UiAction::MainMenu, false), ("Fortsetzen", UiAction::Resume, true)]
                 } else {
-                    [("Zur Insel", UiAction::Resume, false), ("Zurück", UiAction::Cancel, true)]
+                    &[("Zur Insel", UiAction::Resume, false), ("Zurück", UiAction::Cancel, true)]
                 };
                 modal_header(box_node, hud, match play.panel {
                     Panel::Town(_) => "Stadtplanung",
@@ -4257,8 +4293,9 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     Panel::SideQuest => "Nebenauftrag",
                     Panel::FirstDelivery => "Wohin mit dem Holz?",
                     Panel::Sound => "Ton",
+                    Panel::Display => "Anzeige",
                     _ => "",
-                }, layout.short, &actions);
+                }, layout.short, actions);
             }
             match play.panel {
                 Panel::Briefing => {
@@ -4328,6 +4365,20 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 Panel::Inventory => inventory_panel(box_node, hud, layout, region.kind),
                 Panel::Modes => mode_panel(box_node, hud, game, layout),
                 Panel::Progress=>works::progress(box_node,hud,game,layout.short),
+                Panel::Display=>{
+                    text(box_node, hud, "Leseabstand", if layout.short {18.} else {23.}, INK);
+                    box_node.spawn(column_grid(3)).with_children(|choices| {
+                        for value in crate::display::ReadingSize::ALL {
+                            styled_button(choices,hud,value.name(),UiAction::Reading(value),play.reading==value,false,ButtonStyle {compact: layout.short, ..default()});
+                        }
+                    });
+                    let hint = match play.reading {
+                        crate::display::ReadingSize::Auto => "Mit Controller werden Schrift, Auswahlräder und Tastenhinweise für mehr Abstand größer.",
+                        crate::display::ReadingSize::Large => "Große Schrift und Bedienelemente für das Tablet auf dem Tisch.",
+                        crate::display::ReadingSize::Compact => "Kleinere Menüs lassen auf der Insel mehr Platz zum Planen.",
+                    };
+                    text(box_node,hud,hint,if layout.short {15.} else {18.},MUTED);
+                }
                 Panel::Talent(t)=>works::talents(box_node,hud,game,t,layout.short),
                 Panel::Work=>works::panel(box_node,hud,game,layout.short),
                 Panel::Dedication=>works::dedication(box_node,hud,game,layout.short),
@@ -4337,14 +4388,20 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 Panel::FirstDelivery => first_delivery_panel(box_node, hud, game, layout.short),
                 Panel::Closed | Panel::Context | Panel::Story | Panel::Wheel(_) => {}
             }
-            // The same feedback is visible while purchasing a talent or choosing a chapter.
-            if !matches!(play.panel, Panel::MainMenu | Panel::Controls | Panel::Map | Panel::FirstDelivery | Panel::Modes | Panel::Catalog | Panel::Inspection) && !layout.narrow_modal {
-                feedback_toast(box_node, hud, Node::default(), false);
-            }
             if layout.gamepad && !layout.narrow_modal && !matches!(play.panel, Panel::Work | Panel::Progress|Panel::Talent(_)|Panel::Dedication|Panel::Controls | Panel::Catalog | Panel::Inspection | Panel::Quests | Panel::SideQuest | Panel::Graduation | Panel::Departure | Panel::Briefing | Panel::Village(_) | Panel::Projects(_) | Panel::Town(_) | Panel::Household(_) | Panel::Council) {
                 text(box_node, hud, "Stick oder Steuerkreuz · A wählen · B zurück", 12., MUTED);
             }
         });
+        // The message may wrap or expire while a player is reaching for the next button.
+        // Reserve its space outside the card so the buttons keep their screen positions.
+        if !matches!(play.panel, Panel::MainMenu | Panel::Display | Panel::Controls | Panel::Map | Panel::FirstDelivery | Panel::Modes | Panel::Catalog | Panel::Inspection) && !layout.narrow_modal {
+            shade.spawn(Node {
+                width: Val::Percent(92.), max_width: Val::Px(720.),
+                height: Val::Px(if layout.short {38.} else {48.}), flex_shrink: 0.,
+                align_items: AlignItems::Start, justify_content: JustifyContent::Center,
+                padding: UiRect::top(Val::Px(4.)), ..default()
+            }).with_children(|slot| feedback_toast(slot, hud, Node { max_width: Val::Percent(100.), ..default() }, false));
+        }
     });
 }
 
@@ -4373,14 +4430,8 @@ pub fn layout(
         window.width() - left - right,
         window.height() - top_inset - bottom_inset,
     );
-    // A landscape phone can have less vertical room than a complete journal card.
-    // Scale the modal content inside the safe area while its backdrop fills the window.
-    let wanted =
-        if !matches!(play.panel, Panel::Closed | Panel::Context | Panel::Story) && size.y < 352. {
-            (size.y / 352.).clamp(0.64, 1.)
-        } else {
-            (size.x / 1500.).min(size.y / 720.).clamp(1., 1.14)
-        };
+    let is_modal = !matches!(play.panel, Panel::Closed | Panel::Context | Panel::Story);
+    let wanted = play.reading.scale(size, play.gamepad, is_modal);
     if (scale.0 - wanted).abs() > 0.01 {
         scale.0 = wanted;
     }
@@ -4400,6 +4451,7 @@ pub fn layout(
         folded: play.tracker_folded,
         work_stage: game.city().work.stage,
         work_pinned: game.city().work.pinned,
+        reading: play.reading,
         work_paid: game.city().work.delivered,
         appeal: game.city().projects.appeal.as_ref().map(|a| a.village),
         side_quest: if matches!(
@@ -4421,6 +4473,7 @@ pub fn layout(
         road_started: play.road_anchor.is_some(),
         compact: size.x / scale.0 < 920.,
         short: size.y / scale.0 < 490. || (play.panel == Panel::Map && size.x / scale.0 < 690.),
+        narrow_legend: size.x / scale.0 < 550.,
         narrow_modal: match play.panel {
             Panel::Map => size.x / scale.0 < 550.,
             Panel::Area(_) => size.x / scale.0 < 550. || size.y / scale.0 < 320.,
@@ -5023,7 +5076,12 @@ pub(crate) fn update(
         } else {
             BRASS
         });
-        outline.color = if focused { rgb(0x68502d) } else { Color::NONE };
+        outline.color = if focused { rgb(0x684924) } else { Color::NONE };
+        if focused && play.gamepad {
+            outline.width = Val::Px(4.);
+            outline.offset = Val::Px(1.);
+            border.0 = rgb(0xffdf86);
+        }
     }
 }
 
