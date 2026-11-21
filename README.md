@@ -2,9 +2,9 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-**[Hippogrove 1.4.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/ad64d5e6512126c3d96f0d13012b6908bec09daf/Hippogrove-1.4.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.4.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/ad64d5e6512126c3d96f0d13012b6908bec09daf/Hippogrove-1.4.0.apk.sha256)
+**[Hippogrove 1.5.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/35256bac5fe0290bae4dff8ca26ebc78ee7d9d39/Hippogrove-1.5.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.5.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/35256bac5fe0290bae4dff8ca26ebc78ee7d9d39/Hippogrove-1.5.0.apk.sha256)
 
-Version 1.4.0 verbindet Kreaturentraining, Dorfproduktion und die Reise zur nächsten Insel. Lobe eine Lieferung, bring Baumaterial direkt zum Übergang und entscheide, wie du die Nachbardörfer gewinnst. Bestehende Standalone-Spielstände lassen sich fortsetzen.
+In Version 1.5.0 kannst du dein Nilpferd und die Bewohner zur Ernte, zur Bergung oder zum Inselrat rufen. Gewonnene Dörfer bleiben Handelspartner. Deine Entscheidung am Übergang bestimmt, was sie dir an späteren Spieltagen anbieten.
 
 Die signierte Standalone-App braucht Android 8 oder neuer und Vulkan. Die APK unterstützt ARM64 und x86_64. Die frühere Playtest-App und die Standalone-App haben eigene Spielstände.
 
@@ -21,6 +21,16 @@ Wähle im Hauptmenü **Tutorial**. Auf der Übungsinsel führen acht Etappen vom
 Tippe in der Welt auf ein Objekt oder drücke am Controller **R3**. Am Holzstoß kannst du ein Bündel greifen, dein Nilpferd losschicken oder einen freien Dorfbewohner einteilen. Ein fast volles Lager nimmt an, was hineinpasst. Der Rest bleibt in deiner Pfote. Halte direkt auf dem Holz oder auf **Greifen**, um bis zu 18 Einheiten zu nehmen. Ein trockenes Feld bietet Regen an, ein reifes Feld die Ernte. Bei einer Familie oder Hütte kannst du einmal pro Spieltag drei Nahrung teilen. Das bringt zwei Glauben und hebt die Stimmung des Dorfes für diesen Tag. Kosten und Erträge erscheinen am Ort der Aktion.
 
 ![Objektmenü am Holzstoß mit den Aktionen Bündel greifen und Nilpferd sammeln lassen](docs/objektmenue-weidental.jpg)
+
+### Mit dem Dorf spielen
+
+Wähle auf einer Kampagneninsel oder im freien Bauen **Dorfruf**. Am Gamepad findest du ihn im Wunderrad unter **Y / Dreieck**. Das Spiel zeigt den Treffpunkt. Die Bewohner unterbrechen ihre Arbeit und gehen selbst dorthin. Jede leuchtende Laterne steht für jemanden, der angekommen ist. Geh währenddessen bauen oder erkunde die Insel. **Zum Festkreis** bringt dich zurück.
+
+Sobald dein Nilpferd und ein Dorfbewohner am Platz sind, kannst du für sechs Wunderkraft handeln. Jeder weitere Teilnehmer verstärkt die Wirkung. Beim **Holzzug** oder **Steinzug** birgt die Gruppe je Person bis zu drei Einheiten aus der gewählten Quelle. Beim **Erntetanz** bringt jeder anwesende Dorfbewohner ein Feld in der Umgebung ein. Ein **Inselrat** schützt das Dorf. Bei einem unentschiedenen Nachbardorf können drei Teilnehmer sein Vertrauen gewinnen. Gib ihm dann die Dorfgabe, um das Bündnis zu schließen. Ein Machtruf senkt den Widerstand und kostet Stimmung. Nach einem erfolgreichen Ruf erholt sich das Dorf 36 Spielsekunden. Du kannst einen laufenden Ruf kostenlos auflösen.
+
+![Nilpferd und Bewohner beim Holzzug am Eichenpass. Die Laternen markieren ihre Plätze.](docs/dorfruf-eichenpass.jpg)
+
+Nach einem Kapitelabschluss bringt dich **Handeln** zu einem verfügbaren Angebot. **Reisebuch** öffnet die Inselbilanz und die Weiterreise. Öffne nach dem Beitritt eines Nachbardorfs die **Karte** und wähle seinen Namen. Dort siehst du den Tauschkurs. Am Dorf kannst du das Geschäft mit der Pfote oder im Objektmenü abschließen. Ein Verbündeter liefert acht Waren für vier, ein eroberter Ort fünf für vier. In einem eroberten Ort kannst du die fünf Waren als Tribut nehmen. Das kostet sechs Stimmung und prägt den Ruf deiner Stadt. Pro Ort ist ein Geschäft am Spieltag möglich. Die **Dorfchronik** im Spielmenü hält die letzten fünf Ereignisse fest.
 
 Im Hauptmenü erreichst du unter **Ton** den **Testton** und kannst Musik, Umgebung und Effekte einzeln schalten oder gemeinsam einschalten. Der Testton nutzt die Medienlautstärke deines Geräts.
 
@@ -48,7 +58,7 @@ Bei einem Nachbardorf führt die Zielführung zum Bauplatz am örtlichen Weg, zu
 
 Jedes Kapitel hat eigene Bitten und einen Nebenauftrag. Im Weidenland versorgst du Mühlen und Höfe, im Fjord sicherst du Winterquartiere und auf den Terrassen bringst du mehrere Reisernten ein. Am See verbinden neue Wege die Brunnen und Märkte. In der Ägäis produzierst du Öl und richtest ein Theater für das Fest der Winde ein. Das Auftragsfenster zeigt den Fortschritt jedes Ziels. Bei Straßenaufträgen zeigt die Führung einen angeschlossenen Weg zur Bestätigung. Für regionale Baupläne öffnet sie die erforderliche Forschung. Wähle Sägewerk, Steinhof, Schmiede oder Olivenpresse direkt an, um die nächste Schicht vorzuziehen. Das Objektmenü zeigt Einsatz und Ertrag, der Betrieb arbeitet danach automatisch weiter. Schon besuchte Kapitel aus älteren Spielständen behalten ihre Aufträge.
 
-Tippe oben rechts auf **Zum Ziel** oder drücke **L3**, um Ort und Werkzeug für den aktuellen Auftrag zu finden. Unter **Menü → Aufträge** stehen die Aufgaben, ihr Fortschritt und die Bitten aus dem Dorf. Ein `!` auf der Karte kennzeichnet einen verfügbaren Nebenauftrag, ein `?` eine abholbare Belohnung. Der goldene Knopf zeigt die Aktion am ausgewählten Ziel. **Nilpferd** öffnet die Befehle zum Sammeln, Herbeirufen und zur Pflege. Das **Zauberbuch** zeigt die Voraussetzungen für Wunder. Der Fokusrahmen zeigt im Menü, welche Aktion du per Controller oder Tastatur bestätigst.
+Tippe beim Inselziel auf **Ziel zeigen** oder drücke **L3**, um Ort und Werkzeug für den aktuellen Auftrag zu finden. Unter **Menü → Aufträge** stehen die Aufgaben, ihr Fortschritt und die Bitten aus dem Dorf. Ein `!` auf der Karte kennzeichnet einen verfügbaren Nebenauftrag, ein `?` eine abholbare Belohnung. Der goldene Knopf zeigt die Aktion am ausgewählten Ziel. **Nilpferd** öffnet die Befehle zum Sammeln, Herbeirufen und zur Pflege. Das **Zauberbuch** zeigt die Voraussetzungen für Wunder. Der Fokusrahmen zeigt im Menü, welche Aktion du per Controller oder Tastatur bestätigst.
 
 | Steuerung | Kamera und Ziel | Aktionen |
 | --- | --- | --- |
@@ -103,8 +113,10 @@ Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus W
 
 ## Geprüfter Stand
 
-Alle 42 Rust-Tests für 1.4.0 waren erfolgreich. Mit virtuellem Gamepad wurden das Tutorial von einem leeren Spielstand und die Kampagne ab Joras erster Lieferung geprüft. Im Weidental entstanden ein Brunnen für Weidenhain und ein Markt für Sonnenried. Beide Bündnisse lieferten beim ersten Anlegen am Eichenpass acht Nahrung. In einem vorbereiteten Korallenpass-Spielstand wurden Werkbänke erforscht, Steinhof und Olivenpresse gebaut und beide Ölpressungen über das Objektmenü ausgeführt.
+Die 47 Rust-Tests für 1.5.0 waren erfolgreich. Sie prüfen unter anderem den Dorfruf in allen fünf Themenkampagnen, die Abrechnung bei knappem Lagerplatz, den Handel nach dem Laden eines Spielstands und die Entscheidung zwischen Vertrauen und Einschüchterung.
 
-Im Android-15-Emulator wurde die signierte 1.4.0 über die installierte 1.3.0 aktualisiert. Über das Hauptmenü ließ sich die begonnene Übung auf der Insel mit dem erhaltenen Bündel fortsetzen. Ein Test auf einem physischen Galaxy Tab S9 FE+ mit angeschlossenem Controller steht aus.
+Mit virtuellem Gamepad wurden ein Holzzug am Eichenpass, ein Machtruf im Grenzkonflikt der Chronik und eine Ernte im abgeschlossenen Weidental gespielt. In Weidenhain ließen sich vier Flussstein gegen acht Waldbeeren tauschen. Die Dorfchronik hielt den Tausch fest. In einem weiteren Durchlauf ließen sich Hausbau, Ernte, Übergang, beide Bündnisse und die Überfahrt zum Eichenpass mit dem virtuellen Gamepad abschließen.
+
+Auf Android 15 wurde die signierte Standalone-App über Version 1.4.0 installiert. Die vorhandene Speicherdatei blieb bytegleich. Im Emulator kamen auf der abgeschlossenen Insel per Touch vier Figuren zum Erntetanz zusammen und brachten zehn Nahrung ein. Ein Test auf einem physischen Galaxy Tab S9 FE+ mit angeschlossenem Controller steht aus.
 
 Die Rust-Tests spielen den Friedensweg durch die 15 Themenkapitel sowie die fünf Kapitel der Chronik und den Kampfweg im Weidental. Sie prüfen auch die Forschungs- und Produktionsketten, Geburten, Patrouillen, Wunder, die Menüführung und die Übernahme älterer Spielstände. [Spielaufnahmen und Prüfungen für 1.0](docs/V1.md) · [Stadtentwicklung](docs/Stadtentwicklung.md)

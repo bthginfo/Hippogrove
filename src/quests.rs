@@ -72,7 +72,7 @@ pub enum Goal {
 }
 
 impl Goal {
-    fn amount(self, city: &Settlement, region: &Region) -> (u16, u16) {
+    pub(crate) fn amount(self, city: &Settlement, region: &Region) -> (u16, u16) {
         match self {
             Self::Harvests { count } => (city.harvests, count),
             Self::Reserve { material, count } => (city.stock[material.index()], count),

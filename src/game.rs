@@ -1,3 +1,8 @@
+#[path = "district_trade.rs"]
+mod district_trade;
+#[path = "gathering.rs"]
+mod gathering;
+pub use gathering::{Gatherings, Rite};
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, VecDeque},
@@ -341,6 +346,7 @@ pub enum Outcome {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DistrictStatus {
+    pub last_deal: Option<(u32, bool)>,
     pub resolve: u8,
     pub outcome: Option<Outcome>,
 }
@@ -348,6 +354,7 @@ pub struct DistrictStatus {
 impl Default for DistrictStatus {
     fn default() -> Self {
         Self {
+            last_deal: None,
             resolve: 4,
             outcome: None,
         }
@@ -526,11 +533,15 @@ pub enum Action {
     Muster(Tile),
     Patrol(Tile),
     Settle(usize),
+    Trade(usize, bool),
     Camp(usize),
     Assign(Tile, bool),
     AssignArea(usize, Material, bool),
     CancelArea(usize, Material),
     ShareMeal(Tile),
+    Call(Rite, Tile),
+    Invoke(bool),
+    DismissCircle,
     Produce(Tile),
     AcceptLocal,
     FinishLocal,
@@ -688,6 +699,10 @@ pub struct Settlement {
     #[serde(default)]
     pub society: Society,
     #[serde(default)]
+    pub gatherings: Gatherings,
+    #[serde(default)]
+    pub journal: VecDeque<String>,
+    #[serde(default)]
     pub roads: Vec<Tile>,
     #[serde(default)]
     pub districts: [DistrictStatus; 2],
@@ -760,7 +775,7 @@ fn rival_starting_resolve() -> u8 {
 impl Settlement {
     fn completed_work(&self) -> [u16; 3] {
         [
-            self.hippo_deliveries,
+            self.hippo_deliveries.saturating_add(self.gatherings.hauls),
             self.hippo_harvests,
             self.hippo_watches,
         ]
@@ -774,6 +789,8 @@ impl Settlement {
             mana: 20.,
             buildings: Vec::new(),
             society: Society::default(),
+            gatherings: Gatherings::default(),
+            journal: VecDeque::new(),
             roads: Vec::new(),
             districts: [DistrictStatus::default(); 2],
             camps: [false; AREA_COUNT],
@@ -920,6 +937,7 @@ impl Settlement {
                 });
         let food = self.stock[Material::Food.index()];
         structures
+            + self.gatherings.renown.min(8)
             + (food / 3).min(6)
             + self.harvests.min(3) * 2
             + self
@@ -1264,7 +1282,7 @@ impl Settlement {
         let served = self
             .district_site(region, index)
             .is_some_and(|site| district.need != DistrictNeed::Shelter || site.upgraded);
-        if !served {
+        if !served && !self.gatherings.welcomed[index] {
             return Err(format!(
                 "{} am örtlichen Weg oder Windstöße · Widerstand {}",
                 Self::district_need(district.need),
@@ -1290,7 +1308,7 @@ impl Settlement {
         self.districts[index].outcome = Some(outcome);
         self.faith = self.faith.saturating_add(8);
         Ok(format!(
-            "{} · {} · neuer Sammelplatz",
+            "{} · {} · Sammelplatz und Handel eröffnet",
             district.name,
             outcome.name()
         ))
@@ -1426,6 +1444,14 @@ impl Settlement {
             _ => {}
         }
         for cell in kind.tiles(tile) {
+            if self
+                .gatherings
+                .circle
+                .as_ref()
+                .is_some_and(|circle| circle.guests.iter().any(|(_, spot)| *spot == cell))
+            {
+                return Err("Dieser Platz gehört gerade zum Festkreis.".into());
+            }
             if !self.influence(region, cell) {
                 return Err("Der ganze Grundriss muss im Einflussgebiet liegen.".into());
             }
@@ -2032,7 +2058,15 @@ impl Settlement {
         }
         walker.stride = 0.;
 
-        if let Some(bundle) = walker.bundle {
+        let circle_spot = self
+            .gatherings
+            .circle
+            .as_ref()
+            .and_then(|c| c.guests.iter().find(|(i, _)| *i == index).map(|(_, t)| *t));
+        if let Some(bundle) = walker.bundle
+            && (circle_spot.is_none()
+                || self.stock[region.sources[bundle.source].material.index()] < self.storage_cap())
+        {
             if let Some(route) = self.route_to_store(region, walker.tile()) {
                 if !route.is_empty() {
                     walker.route = route;
@@ -2052,6 +2086,10 @@ impl Settlement {
                     if walker.hippo {
                         self.hippo_deliveries = self.hippo_deliveries.saturating_add(1);
                         self.last_hippo_load = accepted;
+                        self.note(format!(
+                            "Nilpferd liefert {accepted} {}",
+                            region.kind.material(region.sources[bundle.source].material)
+                        ));
                         let completed = walker.job.filter(|job| match *job {
                             Job::Gather(source) | Job::Refill(source) => source == bundle.source,
                             Job::GatherArea(area, material) => region
@@ -2075,6 +2113,18 @@ impl Settlement {
                 }
             }
             walker.pause = 1.;
+            return;
+        }
+
+        if let Some(spot) = circle_spot {
+            if walker.tile() != spot {
+                walker.route = self
+                    .route_to(region, walker.tile(), spot, false)
+                    .unwrap_or_default();
+            }
+            if walker.route.is_empty() {
+                walker.pause = 0.65;
+            }
             return;
         }
 
@@ -2221,6 +2271,7 @@ impl Settlement {
     }
 
     fn tick(&mut self, region: &Region, gifts: Gifts, dt: f32) -> u16 {
+        self.gatherings.rest = (self.gatherings.rest - dt).max(0.);
         self.pet_cooldown = (self.pet_cooldown - dt).max(0.);
         let base = if self.count(Building::Shrine) > 0 {
             1.70
@@ -2486,6 +2537,12 @@ impl Settlement {
         if self.society.meal_day == Some((self.weather_time / DAY_LENGTH) as u32) {
             morale += 8;
         }
+        let today = (self.weather_time / DAY_LENGTH) as u32;
+        morale -= 6 * self
+            .districts
+            .iter()
+            .filter(|d| d.last_deal == Some((today, true)))
+            .count() as i16;
         match self.reputation.tone() {
             Tone::Gentle if self.stock[2] >= 6 => {
                 morale += 7;
@@ -2556,7 +2613,7 @@ impl Settlement {
                 _ => {}
             }
         }
-        self.society.morale = morale.min(100);
+        self.society.morale = morale.clamp(0, 100) as u16;
         self.new_child(region);
         insight
     }
@@ -3165,6 +3222,13 @@ impl Settlement {
         if self.walkers[0].bundle.is_some() {
             return "Bringt eine Ladung heim";
         }
+        if let Some(circle) = &self.gatherings.circle {
+            return if circle.present(self).1 {
+                "Wartet am Festkreis"
+            } else {
+                "Geht zum Festkreis"
+            };
+        }
         match self.walkers[0].job {
             Some(Job::Refill(_)) => "Sichert Vorräte",
             Some(Job::Gather(_) | Job::GatherArea(..)) => "Sammelt",
@@ -3590,6 +3654,87 @@ impl Settlement {
         }
     }
 
+    pub fn note(&mut self, entry: String) {
+        if self.journal.front() == Some(&entry) {
+            return;
+        }
+        self.journal.truncate(4);
+        self.journal.push_front(entry);
+    }
+
+    pub fn next_task(&self, region: &Region) -> String {
+        if self.quest == Quest::Districts
+            && self
+                .quest_step(region)
+                .and_then(|s| s.pending(self, region))
+                .is_none()
+            && let Some((i, (d, _))) = region
+                .districts
+                .iter()
+                .zip(&self.districts)
+                .enumerate()
+                .find(|(_, (_, s))| s.outcome.is_none())
+        {
+            if self.district_plan(region, i).is_ok() {
+                return format!("{} aufnehmen", d.name);
+            }
+            if self.gatherings.welcomed[i]
+                || self
+                    .district_site(region, i)
+                    .is_some_and(|s| d.need != DistrictNeed::Shelter || s.upgraded)
+            {
+                return format!("Gabe für {}", d.name);
+            }
+            return format!("{} für {}", Self::district_need(d.need), d.name);
+        }
+        if self.quest == Quest::Shelter
+            && !self.waiting_for_first_delivery()
+            && self.held.is_none()
+            && self.count(Building::House) > 0
+            && self.count(Building::Store) > 0
+            && self.hippo_deliveries == 0
+            && self.walkers[0].job.is_some()
+        {
+            return "Dein Nilpferd liefert".into();
+        }
+        if let Some(goal) = self
+            .quest_step(region)
+            .and_then(|s| s.pending(self, region))
+        {
+            return match goal {
+                Goal::Building {
+                    kind,
+                    upgraded,
+                    roadside,
+                    ..
+                } => {
+                    let verb = if upgraded {
+                        "ausbauen"
+                    } else if roadside {
+                        "am Weg bauen"
+                    } else {
+                        "bauen"
+                    };
+                    format!("{} {verb}", kind.name())
+                }
+                Goal::Reserve { material, count } => format!(
+                    "Noch {} {} einlagern",
+                    count.saturating_sub(self.stock[material.index()]),
+                    region.kind.material(material)
+                ),
+                Goal::Roads { count } => format!("Weg anlegen · {}/{count}", self.roads.len()),
+                _ => {
+                    let (have, need) = goal.amount(self, region);
+                    format!("{} · {have}/{need}", goal.prompt())
+                }
+            };
+        }
+        if self.quest == Quest::Bridge && self.gift_given && self.renown() < region.renown {
+            return format!("Noch {} Ansehen gewinnen", region.renown - self.renown());
+        }
+        self.objective(region).0.into()
+    }
+
     pub fn quest_step(&self, region: &Region) -> Option<&'static QuestStep> {
         let quests = region.quests?;
         match self.quest {
@@ -3720,7 +3865,9 @@ impl Settlement {
                 stock_text(self.crossing_due(region))
             ),
             Quest::Districts => format!("Nachbardörfer versorgen · {point}"),
-            Quest::Complete => "Karte öffnen und weiterreisen.".into(),
+            Quest::Complete => {
+                "Handeln führt zu den Waren. Im Reisebuch siehst du deine Inseln.".into()
+            }
             _ => point.into(),
         }
     }
@@ -4081,6 +4228,9 @@ impl Campaign {
             self.version = SAVE_VERSION;
             self.intro_seen = true;
         }
+        for city in self.settlements.iter_mut().flatten() {
+            city.journal.truncate(5);
+        }
         self.sync_creature_work();
         self.valid(regions).then_some(self)
     }
@@ -4111,7 +4261,16 @@ impl Campaign {
                                 region.bounds.contains(tile)
                             }
                         };
-                        city.nodes.len() == region.sources.len()
+                        city.gatherings.rest.is_finite()
+                            && city.gatherings.circle.as_ref().is_none_or(|c| {
+                                region.bounds.contains(c.center)
+                                    && (2..=4).contains(&c.guests.len())
+                                    && c.guests[0].0 == 0
+                                    && c.guests.iter().all(|(i, t)| {
+                                        *i < city.walkers.len() && region.bounds.contains(*t)
+                                    })
+                            })
+                            && city.nodes.len() == region.sources.len()
                             && city.regrowth.len() == region.sources.len()
                             && city.guards.len() == region.guards.len()
                             && (city.opening.is_none() || region.opening_farm().is_some())
@@ -4354,6 +4513,7 @@ impl Game {
             }
             Action::Muster(tile) => settlement.muster(region, tile),
             Action::Patrol(tile) => settlement.patrol(region, tile),
+            Action::Trade(index, tribute) => settlement.district_trade(region, index, tribute),
             Action::Settle(index) => settlement.claim_district(region, index).inspect(|_| {
                 gifts.earn();
                 research.earn(2);
@@ -4388,6 +4548,9 @@ impl Game {
             Action::MoveHippo(tile) => settlement.move_hippo(region, tile),
             Action::Watch(tile) => settlement.watch(region, tile, *gifts),
             Action::Tend(tile) => settlement.tend(region, tile, *gifts),
+            Action::Call(kind, near) => settlement.gather(region, kind, near),
+            Action::DismissCircle => settlement.dismiss_circle(),
+            Action::Invoke(awe) => settlement.finish_circle(region, awe),
             Action::Produce(tile) => settlement.produce(region, tile, true),
             Action::ShareMeal(tile) => {
                 settlement.meal_ready(region, tile)?;
@@ -4400,12 +4563,21 @@ impl Game {
             Action::Pet => settlement.pet(),
             Action::Feed => settlement.feed(),
             Action::Rest => {
+                let called = settlement.gatherings.circle.is_some();
+                if called {
+                    settlement.dismiss_circle()?;
+                }
                 settlement.supply_help_paused = true;
                 let hippo = &mut settlement.walkers[0];
                 hippo.job = None;
                 hippo.route.clear();
                 hippo.pause = 0.;
-                Ok("Das Nilpferd legt eine Pause ein.".into())
+                Ok(if called {
+                    "Dorfruf beendet · Das Nilpferd ruht."
+                } else {
+                    "Das Nilpferd legt eine Pause ein."
+                }
+                .into())
             }
             Action::Cast(spell, tile) => settlement.cast(region, spell, tile, *gifts),
             Action::Repair => settlement.repair(region),
@@ -4490,6 +4662,9 @@ impl Game {
             }
         }?;
         let (city_change, creature_change) = match action {
+            Action::Trade(_, true) => (-4, 0),
+            Action::Invoke(false) => (3, 3),
+            Action::Invoke(true) => (-6, -5),
             Action::Pet => (0, 3),
             Action::ShareMeal(_) => (3, 1),
             Action::Praise | Action::Feed => (0, 2),
@@ -4508,6 +4683,29 @@ impl Game {
         };
         settlement.reputation.shift(city_change);
         gifts.creature.nature.shift(creature_change);
+        if settlement.gatherings.circle.is_some()
+            && matches!(
+                action,
+                Action::Assign(_, true)
+                    | Action::AssignArea(_, _, true)
+                    | Action::MoveHippo(_)
+                    | Action::Watch(_)
+                    | Action::Tend(_)
+            )
+        {
+            text.push_str(" · Dein Nilpferd übernimmt nach dem Dorfruf.");
+        }
+        if matches!(action, Action::Invoke(_)) {
+            self.campaign.sync_creature_work();
+        }
+        if !matches!(action, Action::Grab(..) | Action::MoveHippo(_))
+            && !matches!(action, Action::Hand(_) if self.city().held.is_some())
+        {
+            self.campaign.settlements[index]
+                .as_mut()
+                .unwrap()
+                .note(text.clone());
+        }
         if self.advance_quests() {
             text.push_str(" · Auftrag erfüllt");
         }
@@ -4533,6 +4731,9 @@ impl Game {
         let region = &self.regions[index];
         let previous = city.outcome;
         let main = city.advance_quest(region);
+        if main && !region.tutorial {
+            city.note(format!("Neues Ziel · {}", city.quest_title(region)));
+        }
         if main && region.tutorial {
             self.campaign.practice_finished = true;
         }

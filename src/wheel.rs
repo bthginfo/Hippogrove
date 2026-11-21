@@ -180,6 +180,12 @@ impl Wheel {
                             UiAction::Order(Tool::Miracles, Miracle::Mend as usize),
                             "",
                         ),
+                        slot(
+                            "Dorfruf",
+                            3,
+                            UiAction::Panel(Panel::Gathering),
+                            "Nilpferd und Dorf für ein gemeinsames Wunder rufen",
+                        ),
                     ]
                 }
             }

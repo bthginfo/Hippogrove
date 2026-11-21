@@ -91,6 +91,8 @@ pub enum Panel {
     Orders(Tool),
     Spells,
     Journey,
+    Gathering,
+    VillageLog,
     Departure,
     Map,
     Area(usize),
@@ -132,7 +134,6 @@ pub enum UiAction {
     AreaMaterial(Material),
     AreaSource(usize, Material),
     Landscape,
-    ToggleObjective,
     Catalog(Option<Branch>),
     CatalogPage(usize),
     PreviewBuilding(Building),
@@ -222,6 +223,8 @@ pub struct Play {
     pub grab: Option<GrabHold>,
     pub guide_marker: Option<(Tile, f32)>,
     pub hippo_happy_at: Option<f32>,
+    pub celebration: Option<(Tile, bool, f32, crate::game::Rite)>,
+    circle_ready: bool,
     supply_help: Option<Material>,
     hippo_deliveries: u16,
     pub(crate) practice_step: Option<PracticeStep>,
@@ -275,6 +278,8 @@ impl Play {
             grab: None,
             guide_marker: None,
             hippo_happy_at: None,
+            celebration: None,
+            circle_ready: false,
             supply_help: game.city().automatic_supply(game.region()),
             hippo_deliveries: game.city().hippo_deliveries,
             practice_step: None,
@@ -366,6 +371,16 @@ impl Play {
         match self.tool {
             Tool::Hand
                 if city.held.is_none()
+                    && city
+                        .gatherings
+                        .circle
+                        .as_ref()
+                        .is_some_and(|c| c.center == self.aim) =>
+            {
+                Action::Invoke(false)
+            }
+            Tool::Hand
+                if city.held.is_none()
                     && self.aim.within(region.bridge(), 1)
                     && city.quest == Quest::Bridge
                     && !city.gift_given
@@ -378,7 +393,12 @@ impl Play {
                 }
             }
             Tool::Hand if city.held.is_none() && region.district_at(self.aim).is_some() => {
-                Action::Settle(region.district_at(self.aim).unwrap())
+                let index = region.district_at(self.aim).unwrap();
+                if city.has_trading_partner(region, index) {
+                    Action::Trade(index, false)
+                } else {
+                    Action::Settle(index)
+                }
             }
             Tool::Hand
                 if city.held.is_none()
@@ -597,7 +617,7 @@ impl Play {
         }
         let local = city.district_site(region, index);
         let upgrade = district.need == crate::region::DistrictNeed::Shelter;
-        if local.is_some_and(|site| !upgrade || site.upgraded) {
+        if city.gatherings.welcomed[index] || local.is_some_and(|site| !upgrade || site.upgraded) {
             return self.guide_cost(game, district.gift).unwrap_or(center);
         }
         if city.city_rank() < 2 {
@@ -1299,9 +1319,9 @@ impl Play {
                     now + 4.,
                 );
             }
-            UiAction::Guide | UiAction::ToggleObjective | UiAction::ToolTarget => {
+            UiAction::Guide | UiAction::ToolTarget => {
                 let city = game.city();
-                if matches!(action, UiAction::Guide | UiAction::ToggleObjective)
+                if matches!(action, UiAction::Guide)
                     && matches!(self.panel, Panel::Closed | Panel::Quests)
                     && !game.region().tutorial
                     && !game.region().sandbox
@@ -1450,6 +1470,36 @@ impl Play {
                     self.open_panel(Panel::Area(index));
                     self.area_material = area.material;
                     self.focus = Some(UiAction::AreaMaterial(area.material));
+                }
+            }
+            UiAction::Panel(Panel::Gathering) if game.region().tutorial => {
+                self.notify(
+                    "Auf den großen Inseln kannst du dein Dorf zusammenrufen.",
+                    Feedback::Selection,
+                    now + 4.,
+                );
+            }
+            UiAction::Panel(Panel::Gathering) => {
+                self.open_panel(Panel::Gathering);
+                if self.panel == Panel::Gathering {
+                    let city = game.city();
+                    self.focus = Some(if let Some(c) = &city.gatherings.circle {
+                        if c.ready(city) {
+                            UiAction::Do(Action::Invoke(false))
+                        } else {
+                            UiAction::Focus(c.center)
+                        }
+                    } else if city.gatherings.rest > 0. {
+                        UiAction::Resume
+                    } else {
+                        let kind = crate::game::Rite::ALL
+                            .into_iter()
+                            .find(|&kind| {
+                                city.gathering_place(game.region(), kind, self.aim).is_ok()
+                            })
+                            .unwrap_or(crate::game::Rite::Council);
+                        UiAction::Do(Action::Call(kind, self.aim))
+                    });
                 }
             }
             UiAction::Panel(panel) => {
@@ -1638,7 +1688,7 @@ impl Play {
                         |(_, choice)| choice,
                     ),
             ),
-            Panel::Controls => Some(UiAction::Cancel),
+            Panel::Controls | Panel::VillageLog => Some(UiAction::Cancel),
             Panel::Briefing => Some(UiAction::Resume),
             Panel::Map => Some(UiAction::Landscape),
             Panel::Orders(tool) => Some(UiAction::Order(
@@ -1742,6 +1792,12 @@ impl Play {
                 .settlements
                 .get(4)
                 .is_some_and(Option::is_none);
+        let circle_before = game
+            .city()
+            .gatherings
+            .circle
+            .as_ref()
+            .map(|c| (c.center, c.kind));
         let stock_before = game.city().stock;
         let faith_before = game.city().faith;
         let result = game.act(action);
@@ -1801,6 +1857,31 @@ impl Play {
                 }
                 self.receipt = Some((self.aim, now, changes.join(" · ")));
             }
+            if matches!(action, Action::Call(..))
+                && let Some(c) = &game.city().gatherings.circle
+            {
+                self.focus_tile(c.center, view);
+                self.circle_ready = false;
+                self.notice_panel = Panel::Closed;
+            }
+            if let Action::Invoke(awe) = action
+                && let Some((center, kind)) = circle_before
+            {
+                self.focus_tile(center, view);
+                self.celebration = Some((center, awe, now, kind));
+                self.hippo_happy_at = Some(now);
+                self.notice_panel = Panel::Closed;
+            }
+            if action == Action::DismissCircle {
+                self.close_panels();
+                self.notice_panel = Panel::Closed;
+            }
+            if matches!(action, Action::Build(..))
+                && !game.region().sandbox
+                && !game.region().tutorial
+            {
+                self.tool(Tool::Hand);
+            }
             self.guide_marker = None;
             let took = !carried && game.city().held.is_some();
             let chose_delivery = opening_choice.is_none()
@@ -1812,7 +1893,7 @@ impl Play {
                 Action::Hand(_) if carried => Cue::Drop,
                 Action::Grab(..) | Action::Hand(_) if game.city().held.is_some() => Cue::Lift,
                 Action::Pet | Action::Praise => Cue::Pet,
-                Action::ShareMeal(_) | Action::Produce(_) => Cue::Reward,
+                Action::ShareMeal(_) | Action::Trade(..) | Action::Produce(_) => Cue::Reward,
                 Action::Hand(tile) if game.region().source_at(tile).is_none() => Cue::Gather,
                 Action::Cast(spell, _) => Cue::Cast(spell),
                 Action::Build(..) | Action::Upgrade(_) | Action::Road(..) | Action::Repair => {
@@ -1822,6 +1903,9 @@ impl Play {
                 | Action::Assign(..)
                 | Action::AssignArea(..)
                 | Action::RecallHelpers => Cue::Order,
+                Action::Call(..) => Cue::Quest,
+                Action::Invoke(true) => Cue::Cast(Miracle::Thunder),
+                Action::Invoke(false) => Cue::Reward,
                 Action::AcceptLocal => Cue::Quest,
                 Action::FinishLocal | Action::Research(_) | Action::Learn(_) => Cue::Reward,
                 Action::Give => Cue::Drop,
@@ -1895,6 +1979,8 @@ impl Play {
                 view.jump = true;
                 self.previous_quest = game.city().quest;
                 self.previous_side_quest = game.city().side_quest(game.region());
+                self.celebration = None;
+                self.circle_ready = false;
                 self.hippo_happy_at = None;
                 self.hippo_deliveries = game.city().hippo_deliveries;
                 self.supply_help = game.city().automatic_supply(game.region());
@@ -1956,6 +2042,20 @@ impl Play {
         let city = game.city();
         let region = game.region();
         let quest = city.quest;
+        let ready = city
+            .gatherings
+            .circle
+            .as_ref()
+            .is_some_and(|c| c.ready(city));
+        if ready && !self.circle_ready {
+            self.notify(
+                "Der Kreis ist bereit. Du kannst wirken oder auf weitere Helfer warten.",
+                Feedback::Quest,
+                now + 5.,
+            );
+            self.sound_cues.push(Cue::Gather);
+        }
+        self.circle_ready = ready;
         if quest != self.previous_quest
             && !region.tutorial
             && (self.notice_kind != Feedback::Quest || now >= self.notice_until)
@@ -2245,6 +2345,17 @@ impl Target {
                 self.legal = city.building_at(tile).is_some();
                 "Ausbau ansehen".into()
             }
+            Action::Trade(index, tribute) => {
+                let terms = city.trade_offer(region, index).terms(region.kind);
+                self.detail = match city.trade_ready(region, index, tribute) {
+                    Ok(_) => format!("{} · {terms}", region.districts[index].name),
+                    Err(reason) => {
+                        self.legal = false;
+                        reason
+                    }
+                };
+                "Waren tauschen".into()
+            }
             Action::Settle(index) => {
                 let district = &region.districts[index];
                 let mut label = "Beitreten lassen";
@@ -2400,6 +2511,16 @@ impl Target {
                     .and_then(Civic::production)
                     .unwrap_or("Fertigen")
                     .into()
+            }
+            Action::Invoke(_) => {
+                if let Some(c) = &city.gatherings.circle {
+                    self.legal = c.ready(city) && city.mana >= 6.;
+                    self.detail = format!("{} · {} · 6 Wunderkraft", c.kind.name(), c.status(city));
+                    c.kind.finish().into()
+                } else {
+                    self.legal = false;
+                    "Dorfruf beendet".into()
+                }
             }
             Action::Repair => {
                 let due = city.crossing_due(region);

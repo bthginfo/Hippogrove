@@ -65,6 +65,7 @@ pub(crate) enum Label {
     ManaUse,
     Objective,
     CampaignHint,
+    CircleStatus,
     Quest,
     Notice,
     Confirm,
@@ -143,6 +144,7 @@ struct Layout {
     side_quest: SideQuest,
     mix: Option<Mix>,
     campaign_complete: bool,
+    circle_active: bool,
     talents: [u8; Talent::ALL.len()],
     road_started: bool,
     compact: bool,
@@ -373,7 +375,7 @@ pub fn world_labels(
     if let Some((tile, at, message)) = play
         .receipt
         .as_ref()
-        .filter(|(_, at, _)| now - at < 2.3 && play.panel == Panel::Closed)
+        .filter(|(_, at, _)| now - at < 2.3 && play.panel == Panel::Closed && available.y >= 460.)
     {
         let point = crate::terrain::on_ground(game.region(), tile.world()) + Vec3::Y * 1.5;
         if let Ok(point) = camera.world_to_viewport(pose, point) {
@@ -562,7 +564,7 @@ fn button_glyph(action: UiAction) -> Option<usize> {
         UiAction::Panel(Panel::Map) => Some(10),
         UiAction::Panel(Panel::Journey) => Some(12),
         UiAction::Panel(Panel::Progress) => Some(13),
-        UiAction::Panel(Panel::Quests) | UiAction::ToggleObjective => Some(11),
+        UiAction::Panel(Panel::Quests) => Some(11),
         UiAction::Panel(Panel::Catalog) => Some(12),
         UiAction::Panel(Panel::Research) => Some(9),
         UiAction::Panel(Panel::Inventory) => Some(20),
@@ -757,8 +759,6 @@ fn styled_button(
                     .id();
                 if matches!(action, UiAction::Confirm) {
                     copy.commands().entity(entity).insert(Label::Confirm);
-                } else if matches!(action, UiAction::ToggleObjective) {
-                    copy.commands().entity(entity).insert(Label::Quest);
                 } else if matches!(action, UiAction::CatalogBuild) {
                     copy.commands().entity(entity).insert(Label::CatalogAction);
                 }
@@ -932,26 +932,13 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                                 );
                             }
                         });
-                    if !game.mode.sandbox() && game.mode != Mode::Tutorial {
-                        styled_button(
-                            right,
-                            hud,
-                            game.city().objective(game.region()).0,
-                            UiAction::ToggleObjective,
-                            false,
-                            false,
-                            ButtonStyle {
-                                caption: Some(Label::CampaignHint),
-                                ..quick
-                            },
-                        );
-                    }
-                    if game.region().has_rival_creature() && layout.quest == Quest::Bridge {
-                        label(right, hud, Label::RaidAlert, 14., GOLD);
-                    }
                 });
         });
 
+    if game.mode != Mode::Tutorial {
+        island_agenda(parent, hud, game, layout);
+        return;
+    }
     feedback_toast(
         parent,
         hud,
@@ -965,6 +952,143 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
         },
         true,
     );
+}
+
+fn island_agenda(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout) {
+    let edge = if layout.short { 8. } else { EDGE };
+    let quick = ButtonStyle {
+        compact: true,
+        height: Some(if layout.short { 37. } else { 44. }),
+        ..default()
+    };
+    parent
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(if layout.compact { 63. } else { 70. }),
+            left: Val::Px(edge),
+            right: Val::Px(edge),
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Start,
+            column_gap: Val::Px(6.),
+            ..default()
+        })
+        .with_children(|bar| {
+            bar.spawn((
+                HitArea,
+                Node {
+                    max_width: Val::Percent(if layout.short { 74. } else { 64. }),
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(6.),
+                    padding: UiRect::axes(Val::Px(6.), Val::Px(3.)),
+                    border: UiRect::left(Val::Px(3.)),
+                    ..default()
+                },
+                BackgroundColor(rgb(PAPER)),
+                BorderColor(rgb(BRASS)),
+                BorderRadius::all(Val::Px(7.)),
+            ))
+            .with_children(|card| {
+                card.spawn(Node {
+                    min_width: Val::Px(0.),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Start,
+                    ..default()
+                })
+                .with_children(|copy| {
+                    let title = if game.region().sandbox {
+                        "Freies Bauen".into()
+                    } else if game.city().quest == Quest::Complete {
+                        "Insel gesichert".into()
+                    } else {
+                        format!("Inselziel · {} / 4", game.city().quest.index() + 1)
+                    };
+                    text(copy, hud, &title, 11., MUTED);
+                    label(
+                        copy,
+                        hud,
+                        Label::Quest,
+                        if layout.short { 14. } else { 17. },
+                        INK,
+                    );
+                    if game.region().sandbox && !layout.short {
+                        text(copy, hud, "Die Nachbardörfer bieten Waren an.", 13., MUTED);
+                    } else if !layout.short {
+                        label(copy, hud, Label::CampaignHint, 13., MUTED);
+                    }
+                });
+                if game.region().sandbox || game.city().quest == Quest::Complete {
+                    let market = game
+                        .region()
+                        .districts
+                        .iter()
+                        .enumerate()
+                        .find(|(i, _)| game.city().trade_ready(game.region(), *i, false).is_ok())
+                        .map_or(UiAction::Panel(Panel::Map), |(_, district)| {
+                            UiAction::Focus(district.center)
+                        });
+                    styled_button(card, hud, "Handeln", market, false, false, quick);
+                }
+                if !game.region().sandbox {
+                    styled_button(
+                        card,
+                        hud,
+                        if game.city().quest == Quest::Complete {
+                            if layout.gamepad {
+                                "L3 · Reisebuch"
+                            } else {
+                                "Reisebuch"
+                            }
+                        } else if layout.gamepad {
+                            "L3 · Ziel"
+                        } else {
+                            "Ziel zeigen"
+                        },
+                        UiAction::Guide,
+                        false,
+                        false,
+                        quick,
+                    );
+                }
+            });
+            bar.spawn(Node {
+                max_width: Val::Percent(40.),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::End,
+                ..default()
+            })
+            .with_children(|right| {
+                styled_button(
+                    right,
+                    hud,
+                    if layout.circle_active {
+                        "Zum Festkreis"
+                    } else {
+                        "Dorfruf"
+                    },
+                    UiAction::Panel(Panel::Gathering),
+                    false,
+                    layout.circle_active,
+                    ButtonStyle {
+                        icon: Some(3),
+                        ..quick
+                    },
+                );
+                if layout.circle_active {
+                    right
+                        .spawn((
+                            Node {
+                                padding: UiRect::axes(Val::Px(4.), Val::Px(2.)),
+                                ..default()
+                            },
+                            BackgroundColor(rgb(DARK)),
+                        ))
+                        .with_children(|chip| label(chip, hud, Label::CircleStatus, 12., LIGHT));
+                }
+                if game.region().has_rival_creature() && layout.quest == Quest::Bridge {
+                    label(right, hud, Label::RaidAlert, 13., GOLD);
+                }
+            });
+        });
 }
 
 fn feedback_toast(parent: &mut ChildSpawnerCommands, hud: &Hud, mut node: Node, overlay: bool) {
@@ -1155,6 +1279,7 @@ fn placement_bar(
                     BorderRadius::all(Val::Px(13.)),
                 ))
                 .with_children(|toolbar| {
+                    feedback_toast(toolbar, hud, Node::default(), true);
                     toolbar
                         .spawn(Node {
                             column_gap: Val::Px(7.),
@@ -1317,6 +1442,15 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
             ..default()
         })
         .with_children(|hud_root| {
+            feedback_toast(
+                hud_root,
+                hud,
+                Node {
+                    max_width: Val::Percent(96.),
+                    ..default()
+                },
+                true,
+            );
             hud_root
                 .spawn((
                     HitArea,
@@ -1709,7 +1843,11 @@ fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: 
             ("Forschung", Panel::Research),
             ("Ton", Panel::Sound),
             ("Steuerung", Panel::Controls),
+            ("Dorfchronik", Panel::VillageLog),
         ] {
+            if panel == Panel::VillageLog && game.region().tutorial {
+                continue;
+            }
             let action = UiAction::Panel(panel);
             styled_button(
                 links,
@@ -2015,6 +2153,198 @@ fn map_chart(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
         });
 }
 
+fn gathering_panel(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    game: &Game,
+    play: &Play,
+    layout: Layout,
+) {
+    use crate::game::Rite;
+    let city = game.city();
+    let region = game.region();
+    let compact = ButtonStyle {
+        compact: true,
+        height: Some(if layout.short { 34. } else { 45. }),
+        ..default()
+    };
+    if let Some(c) = &city.gatherings.circle {
+        if layout.short {
+            panel_heading(parent, hud, c.kind.name(), true);
+        } else {
+            island_heading(parent, hud, region.kind, c.kind.name(), "Dorfruf", false);
+        }
+        let (present, _) = c.present(city);
+        text(
+            parent,
+            hud,
+            &format!("{present} von {} am Platz · 6 Wunderkraft", c.guests.len()),
+            16.,
+            INK,
+        );
+        let detail=match c.kind {
+            Rite::Timber | Rite::Stone => format!("Je Person bis zu 3 {} aus der markierten Quelle.", region.kind.material(c.kind.material().unwrap())),
+            Rite::Harvest => "Das Nilpferd lässt die Saat reifen. Jeder anwesende Dorfbewohner bringt ein Feld im Umkreis ein.".into(),
+            Rite::Council if region.district_at(c.center).is_some() => "Drei Stimmen gewinnen das Vertrauen der Nachbarn. Mit der Dorfgabe kannst du das Bündnis besiegeln.".into(),
+            Rite::Council => "Frieden bringt Ansehen und schützt das Dorf. Am umkämpften Übergang kann ein Machtruf die Wachen vertreiben.".into(),
+        };
+        text(parent, hud, &detail, 15., MUTED);
+        parent.spawn(row()).with_children(|actions| {
+            styled_button(
+                actions,
+                hud,
+                "Zum Kreis",
+                UiAction::Focus(c.center),
+                false,
+                !c.ready(city),
+                compact,
+            );
+            if c.ready(city) {
+                styled_button(
+                    actions,
+                    hud,
+                    c.kind.finish(),
+                    UiAction::Do(Action::Invoke(false)),
+                    false,
+                    true,
+                    compact,
+                );
+                if c.kind == Rite::Council && city.council_threat(region, c.center) {
+                    styled_button(
+                        actions,
+                        hud,
+                        "Machtruf · −4 Stimmung",
+                        UiAction::Do(Action::Invoke(true)),
+                        false,
+                        false,
+                        compact,
+                    );
+                }
+            }
+            styled_button(
+                actions,
+                hud,
+                "Ruf auflösen",
+                UiAction::Do(Action::DismissCircle),
+                false,
+                false,
+                compact,
+            );
+        });
+    } else {
+        if layout.short {
+            panel_heading(parent, hud, "Ruf dein Dorf zusammen", true);
+        } else {
+            island_heading(
+                parent,
+                hud,
+                region.kind,
+                "Ruf dein Dorf zusammen",
+                &region.name,
+                false,
+            );
+        }
+        if city.gatherings.rest > 0. {
+            text(
+                parent,
+                hud,
+                &format!(
+                    "Dein Dorf erholt sich. In {:.0} Spielsekunden kannst du erneut rufen.",
+                    city.gatherings.rest.ceil()
+                ),
+                16.,
+                INK,
+            );
+            button(parent, hud, "Weiterspielen", UiAction::Resume, false, true);
+            return;
+        }
+        text(
+            parent,
+            hud,
+            "Wirke ab zwei Helfenden für 6 Wunderkraft. Mehr Helfende verstärken den Ruf.",
+            15.,
+            MUTED,
+        );
+        parent.spawn(column_grid(2)).with_children(|grid| {
+            for kind in Rite::ALL {
+                let place = city.gathering_place(region, kind, play.aim);
+                let hint = place.err().unwrap_or_else(|| match kind {
+                    Rite::Harvest => "Bis zu drei Felder auf einmal ernten".into(),
+                    Rite::Timber | Rite::Stone => format!(
+                        "Bis zu 12 {} bergen",
+                        region.kind.material(kind.material().unwrap())
+                    ),
+                    Rite::Council if city.quest == Quest::Districts => {
+                        "Ein Nachbardorf gewinnen oder einschüchtern".into()
+                    }
+                    Rite::Council
+                        if city.quest == Quest::Bridge && city.count(Building::Shrine) > 0 =>
+                    {
+                        "Den Übergang schützen oder die Wachen vertreiben".into()
+                    }
+                    Rite::Council => "Schutz und Ansehen für dein Dorf".into(),
+                });
+                grid.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    min_width: Val::Px(0.),
+                    ..default()
+                })
+                .with_children(|card| {
+                    styled_button(
+                        card,
+                        hud,
+                        kind.name(),
+                        UiAction::Do(Action::Call(kind, play.aim)),
+                        false,
+                        false,
+                        ButtonStyle {
+                            icon: Some(kind.icon()),
+                            ..compact
+                        },
+                    );
+                    text(
+                        card,
+                        hud,
+                        &hint,
+                        if layout.short { 12. } else { 14. },
+                        MUTED,
+                    );
+                });
+            }
+        });
+    }
+}
+
+fn village_log(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: bool) {
+    let city = game.city();
+    island_heading(
+        parent,
+        hud,
+        game.region().kind,
+        "Dorfchronik",
+        &game.region().name,
+        short,
+    );
+    if city.journal.is_empty() {
+        text(
+            parent,
+            hud,
+            "Hier hält das Dorf seine Lieferungen, Bauwerke und Entscheidungen fest.",
+            16.,
+            MUTED,
+        );
+    }
+    for (i, line) in city.journal.iter().enumerate() {
+        text(
+            parent,
+            hud,
+            line,
+            if short { 14. } else { 17. },
+            if i == 0 { INK } else { MUTED },
+        );
+    }
+}
+
 fn departure_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: bool) {
     let region = game.region();
     let city = game.city();
@@ -2034,9 +2364,9 @@ fn departure_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, sh
     );
     for (district, state) in region.districts.iter().zip(&city.districts) {
         let (icon, result) = if state.outcome == Some(Outcome::Alliance) {
-            (2, "Bündnis")
+            (2, "Bündnis · Tauschkurs 4 zu 8")
         } else {
-            (1, "Wachen vertrieben")
+            (1, "Wachen vertrieben · Handel oder Tribut")
         };
         parent.spawn(row()).with_children(|line| {
             glyph(line, hud, icon, 18.);
@@ -2177,6 +2507,17 @@ fn quest_journal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layo
                 ..compact
             },
         );
+        if !region.tutorial {
+            styled_button(
+                actions,
+                hud,
+                "Dorfchronik",
+                UiAction::Panel(Panel::VillageLog),
+                false,
+                false,
+                compact,
+            );
+        }
         if !region.tutorial && (layout.side_quest != SideQuest::Complete || city.local_finished) {
             let name = match layout.side_quest {
                 SideQuest::Available => "Bitte aus dem Dorf",
@@ -3644,6 +3985,8 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 Panel::MainMenu
                     | Panel::Graduation
                     | Panel::Briefing
+                    | Panel::Gathering
+                    | Panel::VillageLog
                     | Panel::SideQuest
                     | Panel::Quests
                     | Panel::Map
@@ -3714,6 +4057,8 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 Panel::Controls => controls_panel(box_node, hud, play.gamepad, layout.short),
                 Panel::Orders(tool) => orders_panel(box_node,hud,play,tool,layout.short),
                 Panel::Spells => spellbook(box_node,hud,play,layout.short),
+                Panel::Gathering => gathering_panel(box_node,hud,game,play,layout),
+                Panel::VillageLog => village_log(box_node,hud,game,layout.short),
                 Panel::Departure => departure_panel(box_node, hud, game, layout.short),
                 Panel::Journey => {
                     box_node.spawn(row()).with_children(|heading| {
@@ -3819,6 +4164,7 @@ pub fn layout(
         },
         mix: (play.panel == Panel::Sound).then_some(play.mix),
         campaign_complete: game.campaign_complete(),
+        circle_active: game.city().gatherings.circle.is_some(),
         talents: if play.panel == Panel::Progress {
             Talent::ALL.map(|talent| game.campaign.gifts.rank(talent))
         } else {
@@ -4210,7 +4556,17 @@ pub(crate) fn update(
             Label::Subtitle => play
                 .story
                 .map_or_else(String::new, |story| story.caption(region).into()),
-            Label::Quest => format!("Zum Ziel · {}", city.objective(region).0),
+            Label::Quest if region.sandbox => "Baue, ernte oder handle".into(),
+            Label::Quest if city.quest == Quest::Complete && !region.tutorial => {
+                "Deine Nachbardörfer".into()
+            }
+            Label::Quest => city.next_task(region),
+            Label::CircleStatus => city
+                .gatherings
+                .circle
+                .as_ref()
+                .map(|c| c.status(city))
+                .unwrap_or_default(),
             Label::Notice => {
                 if notice_active {
                     play.notice.clone()
@@ -4272,6 +4628,18 @@ pub(crate) fn update(
                 stock_text(region.rebuild)
             ),
             Label::Rival => format!("{} · {}", region.rival, city.outcome.unwrap().name()),
+            Label::District(index) | Label::DistrictBrief(index)
+                if city.has_trading_partner(region, *index) =>
+            {
+                let offer = city.trade_offer(region, *index);
+                if city.districts[*index].last_deal.is_some_and(|(day, _)| {
+                    day == (city.weather_time / crate::game::DAY_LENGTH) as u32
+                }) {
+                    "Nächste Lieferung morgen".into()
+                } else {
+                    format!("Handel · {}", offer.terms(region.kind))
+                }
+            }
             Label::District(index) => {
                 let state = city.districts[*index];
                 let district = &region.districts[*index];
@@ -4319,6 +4687,17 @@ pub(crate) fn update(
         let hovered = *interaction != Interaction::None;
         let unavailable = match button.action {
             UiAction::Confirm => !target.legal,
+            UiAction::Do(Action::Call(kind, near)) => {
+                city.gathering_place(region, kind, near).is_err() || city.gatherings.rest > 0.
+            }
+            UiAction::Do(Action::Invoke(_)) => {
+                city.mana < 6.
+                    || !city
+                        .gatherings
+                        .circle
+                        .as_ref()
+                        .is_some_and(|c| c.ready(city))
+            }
             UiAction::Do(Action::Upgrade(tile)) => city.upgrade_plan(region, tile).is_err(),
             UiAction::Do(Action::Travel(index)) => index > game.campaign.unlocked,
             UiAction::Do(Action::Learn(talent)) => gifts.rank(talent) >= 2 || gifts.points == 0,

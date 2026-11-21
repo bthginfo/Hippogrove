@@ -1,3 +1,4 @@
+pub(crate) mod festival;
 use bevy::{
     core_pipeline::{fxaa::Fxaa, tonemapping::Tonemapping},
     pbr::DistanceFog,
@@ -1439,7 +1440,14 @@ pub fn animate(
         meta.phase = (meta.phase + travel.length() * std::f32::consts::TAU / stride)
             .rem_euclid(std::f32::consts::TAU);
         let looking = walker.hippo && city.looking_at_store();
-        let heading = if looking {
+        let in_circle = city.gatherings.circle.as_ref().filter(|c| {
+            c.guests
+                .iter()
+                .any(|(i, t)| *i == meta.index && *t == walker.tile() && walker.route.is_empty())
+        });
+        let heading = if let Some(c) = in_circle {
+            (c.center.world() - walker.world()).with_y(0.)
+        } else if looking {
             (region.depot.world() - pose.translation).with_y(0.)
         } else {
             travel
@@ -1471,7 +1479,21 @@ pub fn animate(
         pose.rotation = meta.facing
             * Quat::from_rotation_x(bow + relax * 0.14 + if looking { 0.16 } else { 0. })
             * Quat::from_rotation_z(relax * 0.10);
-        let bob = meta.phase.sin().abs() * 0.040 * meta.speed;
+        let now = time.elapsed_secs();
+        let celebrating = play
+            .celebration
+            .filter(|(t, _, at, _)| now - *at < 2.3 && walker.tile().within(*t, 4));
+        let bounce = celebrating.map_or(0., |(_, a, at, _)| {
+            let beat = ((now - at) * 7. + meta.index as f32 * 0.5).sin().abs();
+            beat * if walker.hippo {
+                0.35
+            } else if a {
+                0.09
+            } else {
+                0.24
+            }
+        });
+        let bob = meta.phase.sin().abs() * 0.040 * meta.speed + bounce;
         let next = pose.translation + travel;
         let ground = terrain::actor_height(region, next, city.bridge_fixed);
         pose.translation = next.with_y(ground + bob);
@@ -1489,7 +1511,12 @@ pub fn animate(
         let (phase, speed) = motion[limb.walker];
         let swing = phase.sin() * limb.side * speed;
         let carrying = limb.arm && walker.bundle.is_some();
-        let angle = if carrying {
+        let acclaim = play.celebration.is_some_and(|(t, _, at, _)| {
+            time.elapsed_secs() - at < 2.3 && walker.tile().within(t, 4)
+        });
+        let angle = if acclaim && limb.arm && !carrying {
+            -2.05 + (time.elapsed_secs() * 8. + limb.side).sin() * 0.45
+        } else if carrying {
             -0.92
         } else if limb.arm {
             -0.46 * swing

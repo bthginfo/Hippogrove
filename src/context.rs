@@ -97,6 +97,21 @@ impl ObjectMenu {
                     14,
                 ));
             }
+        } else if let Some(c) = city.gatherings.circle.as_ref().filter(|c| c.center == tile) {
+            menu.title = c.kind.name().into();
+            menu.detail = c.status(city);
+            if c.ready(city) {
+                menu.choices.push(Choice::new(
+                    c.kind.finish(),
+                    UiAction::Do(Action::Invoke(false)),
+                    c.kind.icon(),
+                ));
+            }
+            menu.choices.push(Choice::new(
+                "Festkreis ansehen",
+                UiAction::Panel(Panel::Gathering),
+                3,
+            ));
         } else if play.target(game) == Action::Pet {
             menu.title = "Dein Nilpferd".into();
             menu.detail = format!("{} · {:.0} % Kraft", city.creature_status(), city.energy);
@@ -162,6 +177,36 @@ impl ObjectMenu {
         } else if let Some(index) = region.district_at(tile) {
             let district = &region.districts[index];
             menu.title = district.name.clone();
+            if city.has_trading_partner(region, index) {
+                let offer = city.trade_offer(region, index);
+                menu.detail = city
+                    .trade_ready(region, index, false)
+                    .err()
+                    .unwrap_or_else(|| {
+                        format!("Ein Handel pro Spieltag · {}", offer.terms(region.kind))
+                    });
+                if city.trade_ready(region, index, false).is_ok() {
+                    menu.choices.push(Choice::new(
+                        offer.terms(region.kind),
+                        UiAction::Do(Action::Trade(index, false)),
+                        12,
+                    ));
+                }
+                if city.trade_ready(region, index, true).is_ok() {
+                    menu.choices.push(Choice::new(
+                        format!(
+                            "Tribut nehmen · {} {} · −6 Stimmung",
+                            offer.quantity,
+                            region.kind.material(offer.gives)
+                        ),
+                        UiAction::Do(Action::Trade(index, true)),
+                        9,
+                    ));
+                }
+                menu.choices
+                    .push(Choice::new("Landkarte", UiAction::Panel(Panel::Map), 14));
+                return menu;
+            }
             menu.detail = match city.district_plan(region, index) {
                 Ok(outcome) => {
                     menu.choices.push(primary);

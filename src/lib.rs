@@ -122,6 +122,7 @@ pub fn main() {
                     view::animate,
                     view::animate_rival,
                     view::highlight_guide,
+                    view::festival::stage,
                     view::highlight_carry,
                     art::style_creature,
                     art::meadow_detail,
