@@ -303,6 +303,7 @@ pub fn setup(
 
 pub fn camera_fade(
     camera: Res<CameraRig>,
+    play: Res<Play>,
     board: Res<Board>,
     game: Res<Game>,
     mut overlay: Single<
@@ -311,8 +312,10 @@ pub fn camera_fade(
     >,
     mut message: Single<&mut Visibility, (With<LoadingWorld>, Without<CameraFade>)>,
 ) {
-    let loading = board.loading(&game);
-    let opacity = if loading {
+    let loading = !play.at_title() && board.loading(&game);
+    let opacity = if play.at_title() {
+        0.
+    } else if loading {
         1.
     } else {
         camera.cover * camera.cover
@@ -1887,6 +1890,18 @@ fn main_menu(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
         styled_button(
             choices,
             hud,
+            "Spielstände",
+            UiAction::Panel(Panel::SavedGames(0)),
+            false,
+            false,
+            ButtonStyle {
+                icon: Some(12),
+                ..style
+            },
+        );
+        styled_button(
+            choices,
+            hud,
             "Anzeige",
             UiAction::Panel(Panel::Display),
             false,
@@ -1917,6 +1932,83 @@ fn main_menu(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, short: b
             15.,
             MUTED,
         );
+    }
+}
+
+fn saved_games(
+    parent: &mut ChildSpawnerCommands,
+    hud: &Hud,
+    game: &Game,
+    page: usize,
+    short: bool,
+) {
+    let total = game.slots().count();
+    if total == 0 {
+        text(
+            parent,
+            hud,
+            "Noch keine Spielstände. Mit dem Tutorial beginnst du eine neue Partie.",
+            16.,
+            INK,
+        );
+        return;
+    }
+    text(
+        parent,
+        hud,
+        "Welchen Spielstand möchtest du löschen?",
+        16.,
+        INK,
+    );
+    parent.spawn(column_grid(2)).with_children(|grid| {
+        for (mode, campaign) in game
+            .slots()
+            .skip(page * Play::SLOTS_PER_PAGE)
+            .take(Play::SLOTS_PER_PAGE)
+        {
+            let mut name = mode.slot_name();
+            if matches!(mode, Mode::Chronicle | Mode::Campaign(_)) {
+                name.push_str(&format!("\nKapitel {}", campaign.active + 1));
+            }
+            styled_button(
+                grid,
+                hud,
+                &name,
+                UiAction::Panel(Panel::ConfirmDelete(mode)),
+                false,
+                false,
+                ButtonStyle {
+                    compact: short,
+                    ..default()
+                },
+            );
+        }
+    });
+    let pages = total.div_ceil(Play::SLOTS_PER_PAGE);
+    if pages > 1 {
+        parent.spawn(row()).with_children(|nav| {
+            if page > 0 {
+                button(
+                    nav,
+                    hud,
+                    "Vorherige",
+                    UiAction::SavePage(page - 1),
+                    false,
+                    false,
+                );
+            }
+            text(nav, hud, &format!("{} / {pages}", page + 1), 15., MUTED);
+            if page + 1 < pages {
+                button(
+                    nav,
+                    hud,
+                    "Weitere",
+                    UiAction::SavePage(page + 1),
+                    false,
+                    false,
+                );
+            }
+        });
     }
 }
 
@@ -4230,6 +4322,8 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             && matches!(
                 play.panel,
                 Panel::MainMenu
+                    | Panel::SavedGames(_)
+                    | Panel::ConfirmDelete(_)
                     | Panel::Work
                     | Panel::Display
                     | Panel::Dedication
@@ -4267,7 +4361,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             },
             BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
-            if !matches!(play.panel, Panel::MainMenu | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection | Panel::Briefing | Panel::Graduation | Panel::Departure) {
+            if !matches!(play.panel, Panel::MainMenu | Panel::ConfirmDelete(_) | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection | Panel::Briefing | Panel::Graduation | Panel::Departure) {
                 let actions: &[(&str, UiAction, bool)] = if play.at_title() {
                     &[("Zurück", UiAction::Cancel, true)]
                 } else if play.panel == Panel::Menu {
@@ -4294,6 +4388,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     Panel::FirstDelivery => "Wohin mit dem Holz?",
                     Panel::Sound => "Ton",
                     Panel::Display => "Anzeige",
+                    Panel::SavedGames(_) => "Spielstände",
                     _ => "",
                 }, layout.short, actions);
             }
@@ -4322,6 +4417,16 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                     text(box_node, hud, "Im Weidental entscheidest du, welche Familie zuerst ein Dach bekommt.", 16., MUTED);
                     button(box_node, hud, "Ins Weidental", UiAction::SelectMode(Mode::Campaign(Biome::Valley)), false, true);
                     button(box_node, hud, "Andere Insel wählen", UiAction::Panel(Panel::Modes), false, false);
+                }
+                Panel::SavedGames(page) => saved_games(box_node, hud, game, page, layout.short),
+                Panel::ConfirmDelete(mode) => {
+                    panel_heading(box_node, hud, "Spielstand löschen?", layout.short);
+                    text(box_node, hud, &mode.slot_name(), 20., INK);
+                    text(box_node, hud, "Alle Fortschritte in diesem Spielstand gehen dauerhaft verloren.", 16., MUTED);
+                    box_node.spawn(column_grid(2)).with_children(|actions| {
+                        button(actions, hud, "Abbrechen", UiAction::Cancel, false, true);
+                        button(actions, hud, "Endgültig löschen", UiAction::DeleteSave(mode), false, false);
+                    });
                 }
                 Panel::MainMenu => main_menu(box_node, hud, game, layout.short),
                 Panel::Menu => menu_panel(box_node,hud,game,layout),

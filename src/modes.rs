@@ -30,6 +30,15 @@ impl Mode {
         }
     }
 
+    pub fn slot_name(self) -> String {
+        match self {
+            Self::Campaign(_) => format!("Kampagne · {}", self.name()),
+            Self::Sandbox(_) => format!("Freies Bauen · {}", self.name()),
+            Self::Chronicle => format!("Chronik · {}", self.name()),
+            Self::Tutorial => "Tutorial · Übungsinsel".into(),
+        }
+    }
+
     pub fn sandbox(self) -> bool {
         matches!(self, Self::Sandbox(_))
     }

@@ -179,6 +179,9 @@ pub fn update(
     mut play: ResMut<Play>,
     mut view: ResMut<CameraRig>,
 ) {
+    if play.at_title() {
+        return;
+    }
     play.observe_practice(&game, &mut view, time.elapsed_secs());
     play.observe_deliveries(&game, time.elapsed_secs());
     play.observe_quests(&game, &mut view, time.elapsed_secs());

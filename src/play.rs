@@ -88,6 +88,8 @@ pub enum Panel {
     #[default]
     Closed,
     MainMenu,
+    SavedGames(usize),
+    ConfirmDelete(Mode),
     Menu,
     Controls,
     Orders(Tool),
@@ -163,6 +165,8 @@ pub enum UiAction {
     ReplayArrival,
     ModeTab(bool),
     SelectMode(Mode),
+    SavePage(usize),
+    DeleteSave(Mode),
     Sound(Bus),
     TestSound,
     EnableSound,
@@ -216,6 +220,7 @@ pub struct Play {
     previous_side_quest: SideQuest,
     quest_check_at: f32,
     pub free_build_tab: bool,
+    pub(crate) pending_delete: Option<Mode>,
     pub area_material: Material,
     pub option: usize,
     pub rotation: u8,
@@ -276,6 +281,7 @@ impl Play {
             previous_side_quest: game.city().side_quest(game.region()),
             quest_check_at: 0.,
             free_build_tab: game.mode.sandbox(),
+            pending_delete: None,
             area_material: Material::Wood,
             option: 0,
             rotation: 0,
@@ -1128,7 +1134,15 @@ impl Play {
                     | UiAction::Cancel
                     | UiAction::ModeTab(_)
                     | UiAction::SelectMode(_)
-                    | UiAction::Panel(Panel::Sound | Panel::Modes | Panel::Display)
+                    | UiAction::Panel(
+                        Panel::Sound
+                            | Panel::Modes
+                            | Panel::Display
+                            | Panel::SavedGames(0)
+                            | Panel::ConfirmDelete(_)
+                    )
+                    | UiAction::SavePage(_)
+                    | UiAction::DeleteSave(_)
                     | UiAction::Reading(_)
                     | UiAction::Sound(_)
                     | UiAction::TestSound
@@ -1305,6 +1319,9 @@ impl Play {
             UiAction::Cancel => {
                 if self.panel == Panel::MainMenu {
                     return false;
+                } else if matches!(self.panel, Panel::SavedGames(_)) {
+                    self.show_main_menu(game);
+                    self.focus = Some(UiAction::Panel(Panel::SavedGames(0)));
                 } else if let Panel::Area(index) = self.panel {
                     self.back_panel();
                     if self.panel != Panel::Map {
@@ -1598,6 +1615,29 @@ impl Play {
                     });
                 }
             }
+            UiAction::Panel(Panel::ConfirmDelete(mode)) => {
+                if matches!(self.panel, Panel::SavedGames(_))
+                    && game.slots().any(|(slot, _)| slot == mode)
+                {
+                    self.open_panel(Panel::ConfirmDelete(mode));
+                }
+            }
+            UiAction::Panel(Panel::SavedGames(_)) if self.panel != Panel::MainMenu => {}
+            UiAction::SavePage(page) => {
+                if matches!(self.panel, Panel::SavedGames(_)) && page <= Self::last_save_page(game)
+                {
+                    self.panel = Panel::SavedGames(page);
+                    self.focus = game
+                        .slots()
+                        .nth(page * Self::SLOTS_PER_PAGE)
+                        .map(|(mode, _)| UiAction::Panel(Panel::ConfirmDelete(mode)));
+                }
+            }
+            UiAction::DeleteSave(mode) => {
+                if at_title && self.panel == Panel::ConfirmDelete(mode) {
+                    self.pending_delete = Some(mode);
+                }
+            }
             UiAction::Panel(panel) => {
                 self.open_panel(panel);
                 if self.panel == Panel::Catalog && panel == Panel::Catalog {
@@ -1758,6 +1798,42 @@ impl Play {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    pub const SLOTS_PER_PAGE: usize = 4;
+
+    fn last_save_page(game: &Game) -> usize {
+        game.slots().count().saturating_sub(1) / Self::SLOTS_PER_PAGE
+    }
+
+    pub(crate) fn deletion_result(
+        &mut self,
+        result: Result<(), String>,
+        mode: Mode,
+        game: &Game,
+        now: f32,
+    ) {
+        match result {
+            Ok(()) => {
+                self.back_panel();
+                let Panel::SavedGames(page) = self.panel else {
+                    return;
+                };
+                self.panel = Panel::SavedGames(page.min(Self::last_save_page(game)));
+                self.focus = Some(UiAction::Cancel);
+                self.revision = self.revision.wrapping_add(1);
+                self.notify(
+                    format!("{} gelöscht.", mode.slot_name()),
+                    Feedback::Selection,
+                    now + 5.,
+                );
+                self.sound_cues.push(Cue::Choose);
+            }
+            Err(reason) => {
+                self.focus = Some(UiAction::Cancel);
+                self.notify(reason, Feedback::Blocked, now + 5.);
+            }
+        }
+    }
+
     fn open_panel(&mut self, panel: Panel) {
         if panel == self.panel {
             self.back_panel();
@@ -1778,7 +1854,9 @@ impl Play {
         self.panel = panel;
         self.focus = match panel {
             Panel::Menu => Some(UiAction::MainMenu),
-            Panel::Projects(_) => Some(UiAction::Cancel),
+            Panel::Projects(_) | Panel::SavedGames(_) | Panel::ConfirmDelete(_) => {
+                Some(UiAction::Cancel)
+            }
             Panel::Display => Some(UiAction::Reading(self.reading)),
             Panel::Sound => Some(UiAction::TestSound),
             Panel::Wheel(wheel) => Some(

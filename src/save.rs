@@ -116,8 +116,8 @@ fn write_json(path: &std::path::Path, value: &impl serde::Serialize) -> io::Resu
 
 pub fn checkpoint(
     time: Res<Time>,
-    game: Res<Game>,
-    play: Res<crate::play::Play>,
+    mut game: ResMut<Game>,
+    mut play: ResMut<crate::play::Play>,
     mut file: ResMut<SaveFile>,
     mut lifecycle: EventReader<AppLifecycle>,
     mut closing: EventReader<WindowCloseRequested>,
@@ -128,6 +128,17 @@ pub fn checkpoint(
         .any(|state| matches!(state, AppLifecycle::WillSuspend | AppLifecycle::Suspended));
     let closed = closing.read().count() > 0 || exits.read().count() > 0;
     let now = time.elapsed_secs();
+    if let Some(mode) = play.pending_delete.take()
+        && play.panel == crate::play::Panel::ConfirmDelete(mode)
+    {
+        let result = game.delete_slot(mode, |saves| file.write(saves));
+        let saved = result.is_ok();
+        play.deletion_result(result, mode, &game, now);
+        if saved {
+            file.last_saved = now;
+            file.revision = play.revision;
+        }
+    }
     if file.reading != play.reading {
         let path = file.path.with_file_name("anzeige.json");
         match write_json(&path, &play.reading) {

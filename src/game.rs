@@ -4492,6 +4492,7 @@ impl Saves {
 pub struct Game {
     pub mode: Mode,
     archives: Vec<Profile>,
+    active_slot: bool,
     pub regions: Vec<Region>,
     pub campaign: Campaign,
 }
@@ -4504,6 +4505,7 @@ impl Game {
         Self {
             mode: Mode::Chronicle,
             archives: Vec::new(),
+            active_slot: true,
             regions,
             campaign,
         }
@@ -4515,7 +4517,16 @@ impl Game {
         game
     }
 
+    pub fn title_world() -> Self {
+        let mut game = Self::start(Mode::Tutorial);
+        game.active_slot = false;
+        game
+    }
+
     pub fn resume(mut saves: Saves) -> Option<Self> {
+        if saves.profiles.is_empty() && saves.current == Mode::Tutorial {
+            return Some(Self::title_world());
+        }
         if saves.profiles.len() > Biome::ALL.len() * 2 + 2
             || saves.profiles.iter().enumerate().any(|(index, profile)| {
                 saves.profiles[..index]
@@ -4537,6 +4548,7 @@ impl Game {
         Some(Self {
             mode: profile.mode,
             archives: saves.profiles,
+            active_slot: true,
             regions,
             campaign,
         })
@@ -4544,18 +4556,67 @@ impl Game {
 
     pub fn saved_games(&self) -> Saves {
         let mut profiles = self.archives.clone();
-        profiles.push(Profile {
-            mode: self.mode,
-            campaign: self.campaign.clone(),
-        });
+        if self.active_slot {
+            profiles.push(Profile {
+                mode: self.mode,
+                campaign: self.campaign.clone(),
+            });
+        }
         Saves {
             current: self.mode,
             profiles,
         }
     }
 
+    pub fn slots(&self) -> impl Iterator<Item = (Mode, &Campaign)> {
+        self.active_slot
+            .then_some((self.mode, &self.campaign))
+            .into_iter()
+            .chain(self.archives.iter().rev().map(|p| (p.mode, &p.campaign)))
+    }
+
+    pub fn delete_slot(
+        &mut self,
+        mode: Mode,
+        persist: impl FnOnce(&Saves) -> std::io::Result<()>,
+    ) -> Result<(), String> {
+        let mut remaining = self.saved_games();
+        let index = remaining
+            .profiles
+            .iter()
+            .position(|p| p.mode == mode)
+            .ok_or("Diesen Spielstand gibt es nicht mehr.")?;
+        remaining.profiles.remove(index);
+        let replacement = if self.mode == mode {
+            // Keep the last playable profile selected when the current one is removed.
+            let next = remaining
+                .profiles
+                .iter()
+                .rev()
+                .find(|p| p.mode != Mode::Tutorial)
+                .or_else(|| remaining.profiles.last());
+            remaining.current = next.map_or(Mode::Tutorial, |p| p.mode);
+            Some(
+                Self::resume(remaining.clone())
+                    .ok_or("Der nächste Spielstand konnte nicht geöffnet werden.")?,
+            )
+        } else {
+            None
+        };
+        persist(&remaining).map_err(|error| {
+            warn!("Spielstand konnte nicht gelöscht werden: {error}");
+            "Speichern fehlgeschlagen. Dein Spielstand ist noch da.".to_string()
+        })?;
+        if let Some(next) = replacement {
+            *self = next;
+        } else {
+            self.archives.retain(|p| p.mode != mode);
+        }
+        Ok(())
+    }
+
     pub fn has_save(&self, mode: Mode) -> bool {
-        (mode == self.mode && self.campaign.intro_seen)
+        (self.active_slot && mode == self.mode && self.campaign.intro_seen)
             || self.archives.iter().any(|profile| profile.mode == mode)
     }
 
@@ -4587,6 +4648,7 @@ impl Game {
 
     pub fn switch_mode(&mut self, mode: Mode) -> GameResult {
         if self.mode == mode {
+            self.active_slot = true;
             return Ok(mode.name().into());
         }
         if self.practice_required() {
@@ -4998,6 +5060,90 @@ mod tests {
 
     fn fresh() -> Game {
         Game::new(Region::campaign(), None)
+    }
+
+    #[test]
+    fn deleting_a_selected_profile_commits_only_after_a_successful_write() {
+        let first = Mode::Campaign(Biome::Valley);
+        let second = Mode::Sandbox(Biome::Valley);
+        let mut game = Game::start(first);
+        game.campaign.intro_seen = true;
+        game.switch_mode(second).unwrap();
+        game.switch_mode(Mode::Tutorial).unwrap();
+        let original = serde_json::to_value(game.saved_games()).unwrap();
+        let error = game.delete_slot(second, |_| Err(std::io::Error::other("full")));
+        assert!(error.is_err());
+        assert_eq!(serde_json::to_value(game.saved_games()).unwrap(), original);
+        game.delete_slot(first, |_| Ok(())).unwrap();
+        assert_eq!(game.mode, Mode::Tutorial);
+        assert!(!game.has_save(first));
+        game.delete_slot(Mode::Tutorial, |saves| {
+            assert_eq!(saves.current, second);
+            let sandbox = original["profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["mode"] == serde_json::to_value(second).unwrap())
+                .unwrap();
+            assert_eq!(&serde_json::to_value(&saves.profiles[0]).unwrap(), sandbox);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(game.continue_mode(), Some(second));
+        game.delete_slot(second, |saves| {
+            assert!(saves.profiles.is_empty());
+            Ok(())
+        })
+        .unwrap();
+        let mut reopened = Game::resume(game.saved_games()).unwrap();
+        assert_eq!(reopened.slots().count(), 0);
+        assert_eq!(reopened.continue_mode(), None);
+        assert!(reopened.practice_required());
+        assert!(!reopened.has_save(Mode::Tutorial));
+        reopened.switch_mode(Mode::Tutorial).unwrap();
+        assert_eq!(reopened.slots().count(), 1);
+    }
+
+    #[test]
+    fn deleting_from_the_title_requires_the_selected_named_confirmation() {
+        let mut game = Game::start(Mode::Sandbox(Biome::Fjord));
+        let mut play = Play::new(&game);
+        let mut view = CameraRig::new(&game);
+        play.show_main_menu(&game);
+        let slot = game.mode;
+        play.activate(UiAction::DeleteSave(slot), &mut game, &mut view, 0.);
+        assert!(play.pending_delete.is_none());
+        play.activate(
+            UiAction::Panel(Panel::SavedGames(0)),
+            &mut game,
+            &mut view,
+            1.,
+        );
+        let confirm = UiAction::Panel(Panel::ConfirmDelete(slot));
+        play.set_focus(Some(confirm));
+        play.activate(confirm, &mut game, &mut view, 2.);
+        assert_eq!(play.focus, Some(UiAction::Cancel));
+        play.activate(UiAction::Cancel, &mut game, &mut view, 3.);
+        assert_eq!(play.panel, Panel::SavedGames(0));
+        assert_eq!(play.focus, Some(confirm));
+        assert!(play.pending_delete.is_none());
+        play.activate(confirm, &mut game, &mut view, 4.);
+        play.activate(
+            UiAction::DeleteSave(Mode::Tutorial),
+            &mut game,
+            &mut view,
+            5.,
+        );
+        assert!(play.pending_delete.is_none());
+        play.activate(UiAction::DeleteSave(slot), &mut game, &mut view, 6.);
+        assert_eq!(play.pending_delete.take(), Some(slot));
+        let result = game.delete_slot(slot, |_| Ok(()));
+        play.deletion_result(result, slot, &game, 7.);
+        assert_eq!(play.panel, Panel::SavedGames(0));
+        assert_eq!(play.focus, Some(UiAction::Cancel));
+        play.activate(UiAction::Cancel, &mut game, &mut view, 8.);
+        assert_eq!(play.panel, Panel::MainMenu);
+        assert_eq!(game.continue_mode(), None);
     }
 
     #[test]

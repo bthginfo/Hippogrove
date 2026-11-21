@@ -2,9 +2,11 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-**[Hippogrove 1.7.1 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/762d6738e02af275467f049e4033a3ab2595c5db/Hippogrove-1.7.1.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.7.1) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/762d6738e02af275467f049e4033a3ab2595c5db/Hippogrove-1.7.1.apk.sha256)
+**[Hippogrove 1.7.2 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/203398a82eef99e771ca7670a0f35fb7d4c642e6/Hippogrove-1.7.2.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.7.2) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/203398a82eef99e771ca7670a0f35fb7d4c642e6/Hippogrove-1.7.2.apk.sha256)
 
-Mit **1.7.1** stellt sich die Anzeige auf dem Tablet auf deinen Controller ein. Schrift und Auswahlräder wachsen mit der nutzbaren Fläche. Unter **Anzeige** kannst du den Leseabstand selbst wählen.
+Mit **1.7.2** kannst du im Hauptmenü unter **Spielstände** einzelne Kampagnen, freie Bauwelten, die Chronik und das Tutorial löschen. Die Bestätigung nennt den gewählten Spielstand. Am Controller ist **Abbrechen** vorgewählt. Nach dem Löschen des letzten Spielstands kannst du auf der Übungsinsel neu beginnen.
+
+Seit **1.7.1** stellt sich die Anzeige auf dem Tablet auf deinen Controller ein. Schrift und Auswahlräder wachsen mit der nutzbaren Fläche. Unter **Anzeige** kannst du den Leseabstand selbst wählen.
 
 Seit **1.7.0** baust du zusammen mit deinem Nilpferd ein Werk für die Insel. Im Weidental bittet Mira um eine Bachmühle. Du bringst das Holz, dein Nilpferd hebt das Rad in die Mühle und ein Feld am Dorfweg liefert den Anschluss. Bei der Einweihung entscheidest du, ob dein Nilpferd Erfahrung, deine Gottheit einen Talentpunkt oder dein Dorf die doppelte Leistung erhält.
 
@@ -180,6 +182,8 @@ Die Karten reichen bis 178 × 140 Felder. Gebirgsketten, Täler, dichte Haine, F
 Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus Waldwinkel 1.5. Die sechs Originalstücke umfassen „Die kleine Bucht“ für Titel und Tutorial sowie je eine eigene Besetzung und Bearbeitung für die fünf Landschaften. Beim Inselwechsel blendet die Musik über. Zum Rendern nutzt `art/build_music.py` FluidSynth, NumPy, pyFluidSynth, FFmpeg und die Instrumente von GeneralUser GS 2.0.3. Musik, Umgebung und Effekte lassen sich im Spielmenü unter **Ton** einzeln schalten. [Waldwinkel 1.5](https://github.com/bthginfo/waldwinkel/tree/8a98a76a2921690b533015e3f57fadccc2c66b24) · [Instrumentenbank und Lizenz](https://github.com/mrbumpy409/GeneralUser-GS/blob/684543d5e5efaef08d02be50dcda8d552478fa60/documentation/LICENSE.txt)
 
 ## Geprüfter Stand
+
+Für **1.7.2** bestanden 62 Rust-Tests. Im gerenderten Tablet-Menü wurden acht Spielstände über zwei Seiten per Controller verwaltet. Der Test hat Abbrechen, die Einzellöschung, die Rückkehr von der letzten Listenseite und den Neustart des Tutorials nach Löschen des letzten Spielstands geprüft. Auf Android 15 ließ sich die Auswahl mit A abbrechen. Nach erneutem Antippen reichten einmal rechts und A zum Löschen. Der Tutorial-Spielstand blieb erhalten.
 
 Für **1.7.1** bestanden 60 Rust-Tests. Im gerenderten Spiel wurden die Controllerwege bei 1280 × 800 geprüft. Bei 2560 × 1600 mit zweifacher Pixeldichte lagen die Schaltflächen des Baurads auf denselben logischen Positionen. Die komplette R3-Beschriftung lag bei beiden Tablet-Auflösungen und bei 512 × 288 innerhalb des Bildes. Vor und nach Ablauf der Auftragsbestätigung lagen alle vier Ecken der Liefertaste auf denselben Pixeln.
 

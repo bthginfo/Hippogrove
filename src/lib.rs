@@ -34,7 +34,6 @@ use bevy::{
 
 use crate::{
     game::Game,
-    modes::Mode,
     play::{CameraRig, Panel, Play, Target},
     save::SaveFile,
 };
@@ -56,7 +55,7 @@ pub fn main() {
     if saved.is_none() {
         file.preserve_unreadable();
     }
-    let game = saved.unwrap_or_else(|| Game::start(Mode::Tutorial));
+    let game = saved.unwrap_or_else(Game::title_world);
     let mut play = Play::new(&game);
     play.show_main_menu(&game);
     play.mix = file.load_mix();

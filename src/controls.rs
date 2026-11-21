@@ -628,7 +628,7 @@ pub fn collect(
     for event in focus.read().filter(|event| event.window == entity) {
         play.paused = !event.focused;
     }
-    if play.paused || board.loading(&game) {
+    if play.paused || (!play.at_title() && board.loading(&game)) {
         play.grab = None;
         controls.fingers.clear();
         controls.touch = None;
@@ -906,6 +906,11 @@ pub fn collect(
         || pad.zoom.abs() > 0.13
     {
         if !play.gamepad {
+            // A fresh direction after a tap belongs to the currently visible panel.
+            controls.menu_direction = MenuDirection {
+                panel: play.panel,
+                ..default()
+            };
             play.pointer = None;
             play.gamepad = true;
         }
