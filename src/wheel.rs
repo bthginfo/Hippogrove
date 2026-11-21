@@ -10,6 +10,9 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Wheel {
     Tools,
+    VillageTools,
+    VillageBuild,
+    VillageRain,
     Build,
     Miracles,
     Hippo,
@@ -73,17 +76,58 @@ impl Entry {
 impl Wheel {
     pub fn title(self) -> &'static str {
         match self {
-            Self::Tools => "Auswahlrad",
-            Self::Build => "Bauen",
-            Self::Miracles => "Wunder",
+            Self::Tools | Self::VillageTools => "Auswahlrad",
+            Self::Build | Self::VillageBuild => "Bauen",
+            Self::Miracles | Self::VillageRain => "Wunder",
             Self::Hippo => "Nilpferd",
             Self::Helpers => "Gläubige",
             Self::Paths => "Wege",
         }
     }
 
+    pub fn for_village(self) -> Self {
+        match self {
+            Self::Tools => Self::VillageTools,
+            Self::Build => Self::VillageBuild,
+            Self::Miracles => Self::VillageRain,
+            _ => self,
+        }
+    }
+
     pub fn entries(self) -> &'static [Entry] {
         match self {
+            Self::VillageBuild => &Self::Build.entries()[..3],
+            Self::VillageRain => &Self::Miracles.entries()[..1],
+            Self::VillageTools => {
+                const {
+                    &[
+                        slot(
+                            "Pfote",
+                            5,
+                            UiAction::Tool(Tool::Hand),
+                            "Greifen, ablegen und ernten",
+                        ),
+                        slot(
+                            "Bauen",
+                            6,
+                            submenu(Self::VillageBuild),
+                            "Hütte, Lager oder Feld",
+                        ),
+                        slot(
+                            "Regen",
+                            9,
+                            UiAction::Order(Tool::Miracles, Miracle::Rain as usize),
+                            "Ein Feld wässern",
+                        ),
+                        slot(
+                            "Nilpferd",
+                            8,
+                            submenu(Self::Hippo),
+                            "Sammeln, streicheln oder rasten",
+                        ),
+                    ]
+                }
+            }
             Self::Tools => {
                 const {
                     &[

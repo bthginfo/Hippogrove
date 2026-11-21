@@ -3,7 +3,6 @@ use super::*;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Appeal {
     pub village: usize,
-    pub seconds: f32,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pilgrims {
@@ -28,7 +27,7 @@ impl Default for Projects {
             appeal: None,
             pilgrims: None,
             generation: 0,
-            rest: 24.,
+            rest: 40.,
             helped: 0,
         }
     }
@@ -119,7 +118,7 @@ impl Settlement {
             self.contest.towns[i].protection = 60.;
         }
         self.projects.appeal = None;
-        self.projects.rest = 80.;
+        self.projects.rest = 170.;
         self.projects.helped = self.projects.helped.saturating_add(1);
         let gain = (100. - self.contest.towns[i].trust).min(if hippo { 55. } else { 35. });
         self.change_trust(r, i, gain);
@@ -234,54 +233,54 @@ impl Settlement {
             town.pilgrim_rest = (town.pilgrim_rest - dt).max(0.);
         }
         self.march(r, dt);
-        if let Some(a) = &mut self.projects.appeal {
-            a.seconds -= dt;
-            if a.seconds <= 0. {
-                let name = &r.villages[a.village].name;
-                self.projects.appeal = None;
-                self.projects.rest = 70.;
-                self.announce_village(format!("Der Hilferuf aus {name} ist beendet."));
-            }
-        } else if self.contest.count(Allegiance::Ours) > 0
-            || self
-                .walkers
-                .iter()
-                .any(|w| matches!(w.job, Some(Job::Visit(_))))
+        if self.settling_in()
+            || self.projects.appeal.is_some()
+            || self.projects.pilgrims.is_some()
+            || self.raid_warning(r)
         {
-            self.projects.rest -= dt;
-            if self.projects.rest <= 0. {
-                let village = if self.projects.generation == 0 {
-                    self.walkers
-                        .iter()
-                        .find_map(|w| {
-                            if let Some(Job::Visit(i)) = w.job {
-                                Some(i)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0)
-                } else {
-                    (self.projects.generation + r.kind as usize + r.chapter()) % r.villages.len()
-                };
-                self.projects.generation = self.projects.generation.wrapping_add(1);
-                self.projects.appeal = Some(Appeal {
-                    village,
-                    seconds: 100.,
-                });
-                self.announce_village(format!(
-                    "{} bittet um Hilfe · {}",
-                    r.villages[village].name,
-                    Need::on(r.kind).title
-                ));
-            }
+            return;
+        }
+        let neighbors: Vec<_> = (0..r.villages.len())
+            .filter(|&i| {
+                self.contest.towns[i].side == Allegiance::Ours
+                    || self.walkers.iter().any(|w| self.visiting(w, r, i))
+            })
+            .collect();
+        if neighbors.is_empty() {
+            return;
+        }
+        self.projects.rest -= dt;
+        if self.projects.rest <= 0. {
+            let village = neighbors[self.projects.generation % neighbors.len()];
+            self.projects.generation = self.projects.generation.wrapping_add(1);
+            self.projects.appeal = Some(Appeal { village });
+            self.note(format!(
+                "{} bittet um Hilfe bei „{}“.",
+                r.villages[village].name,
+                Need::on(r.kind).title
+            ));
         }
     }
+
+    pub(super) fn defer_appeal(&mut self, i: usize) -> GameResult {
+        if !self
+            .projects
+            .appeal
+            .as_ref()
+            .is_some_and(|a| a.village == i)
+        {
+            return Err("Diese Dorfbitte ist bereits erledigt.".into());
+        }
+        self.projects.appeal = None;
+        self.projects.rest = 170.;
+        Ok("Dorfbitte zurückgestellt. Du kannst in Ruhe weiterspielen.".into())
+    }
+
     pub(super) fn valid_projects(&self, r: &Region) -> bool {
         self.projects
             .appeal
             .as_ref()
-            .is_none_or(|a| a.village < r.villages.len() && a.seconds.is_finite())
+            .is_none_or(|a| a.village < r.villages.len())
             && self.projects.pilgrims.as_ref().is_none_or(|p| {
                 p.from < r.villages.len()
                     && p.to < r.villages.len()
@@ -310,10 +309,7 @@ mod tests {
         let i = 0;
         for hippo in [true, false] {
             let mut city = game.city().clone();
-            city.projects.appeal = Some(Appeal {
-                village: i,
-                seconds: 100.,
-            });
+            city.projects.appeal = Some(Appeal { village: i });
             city.contest.towns[i].side = Allegiance::Ours;
             city.contest.towns[i].trust = 96.;
             city.energy = 17.;
@@ -340,9 +336,12 @@ mod tests {
             assert!(restored.aid(r, i, hippo).is_err());
             assert_eq!(restored.faith, faith + 4);
             assert_eq!(restored.projects.helped, 1);
-            restored.projects_tick(r, 81.);
+            restored.village_start = Some(VillageStart::Acquainted(i));
+            restored.projects_tick(r, 171.);
             let next = restored.projects.appeal.as_ref().unwrap().village;
-            restored.projects_tick(r, 101.);
+            restored.projects_tick(r, 360.);
+            assert_eq!(restored.projects.appeal.as_ref().unwrap().village, next);
+            restored.defer_appeal(next).unwrap();
             assert!(restored.aid(r, next, hippo).is_err());
             assert_eq!(restored.projects.helped, 1);
         }

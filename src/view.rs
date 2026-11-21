@@ -1009,7 +1009,13 @@ pub fn sync_board(
                         ))
                         .with_children(|creature| {
                             contact_shadow(creature, &art, 1.25);
-                            art::rival_creature(creature, &art, region.kind);
+                            art::place_scene(
+                                creature,
+                                &art.rival_models[region.kind as usize],
+                                Vec3::ZERO,
+                                1.,
+                                0.,
+                            );
                             creature.spawn((
                                 RivalWarning,
                                 Mesh3d(art.ring.clone()),
@@ -1606,8 +1612,7 @@ pub fn animate_rival(
 ) {
     let region = game.region();
     let city = game.city();
-    let alert =
-        city.rival_active(region) && city.next_raid(region).is_some_and(|seconds| seconds <= 10.);
+    let alert = city.rival_active(region) && city.raid_warning(region);
     let facing = region.bridge().world() - region.rival_lair().world();
     let phase = time.elapsed_secs();
     for (mut pose, mut visibility) in &mut rivals {
@@ -1623,7 +1628,7 @@ pub fn animate_rival(
         pose.rotation = Quat::from_rotation_y(
             facing.x.atan2(facing.z) + (phase * 4.).sin() * if alert { 0.10 } else { 0.036 },
         );
-        pose.scale = Vec3::splat(1.85 + region.chapter() as f32 * 0.17);
+        pose.scale = Vec3::splat(1.50 + region.chapter() as f32 * 0.17);
         *visibility = if city.rival_resolve > 0 {
             Visibility::Inherited
         } else {

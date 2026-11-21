@@ -190,6 +190,8 @@ pub(super) fn tracker(p: &mut ChildSpawnerCommands, h: &Hud, game: &Game, l: Lay
                     h,
                     if l.work_pinned {
                         crate::game::Blueprint::on(r).title
+                    } else if l.side_pinned {
+                        city.local_quest(r).0
                     } else {
                         city.quest_title(r)
                     },
@@ -201,6 +203,8 @@ pub(super) fn tracker(p: &mut ChildSpawnerCommands, h: &Hud, game: &Game, l: Lay
                     h,
                     if l.work_pinned {
                         Label::WorkHint
+                    } else if l.side_pinned {
+                        Label::SideInstruction
                     } else {
                         Label::Quest
                     },
@@ -224,15 +228,12 @@ pub(super) fn tracker(p: &mut ChildSpawnerCommands, h: &Hud, game: &Game, l: Lay
                     13.,
                     GOLD,
                 );
-            } else {
+            } else if !l.side_pinned {
                 live(line, h, Label::QuestCount, 13., GOLD);
             }
         });
-        meter(card, l.work_pinned);
-        if matches!(l.side_quest, SideQuest::Active | SideQuest::Ready) {
-            let (title, _, _) = city.local_quest(r);
-            left_text(card, h, title, 13., JADE);
-            live(card, h, Label::SideTrack, 12., LIGHT);
+        if !l.side_pinned {
+            meter(card, l.work_pinned);
         }
         card.spawn(row()).with_children(|links| {
             let st = ButtonStyle {
@@ -254,11 +255,15 @@ pub(super) fn tracker(p: &mut ChildSpawnerCommands, h: &Hud, game: &Game, l: Lay
                 h,
                 if l.work_pinned {
                     "Werkbuch"
+                } else if l.side_pinned {
+                    "Nebenauftrag"
                 } else {
                     "Tagebuch"
                 },
                 UiAction::Panel(if l.work_pinned {
                     Panel::Work
+                } else if l.side_pinned {
+                    Panel::SideQuest
                 } else {
                     Panel::Quests
                 }),

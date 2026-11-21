@@ -6,7 +6,7 @@ use crate::{
     civic::{Branch, Civic, Goods, Tech, goods_text},
     game::{
         Action, Building, Crop, FARM_REWARD, FirstDelivery, Game, Miracle, PAW_BUNDLE, PAW_LIMIT,
-        Quest, SideQuest, stock_text,
+        Quest, SideQuest, VillageStart, VillageTask, stock_text,
     },
     modes::Mode,
     practice::Step as PracticeStep,
@@ -88,6 +88,10 @@ pub enum Panel {
     #[default]
     Closed,
     MainMenu,
+    HomeIntro,
+    NeighborIntro,
+    RivalIntro,
+    Raid,
     SavedGames(usize),
     ConfirmDelete(Mode),
     Menu,
@@ -261,13 +265,17 @@ pub struct Play {
 
 impl Play {
     pub fn new(game: &Game) -> Self {
-        let story = (!game.campaign.intro_seen && game.campaign.active == 0)
-            .then(|| Story::new(Self::arrival(game)));
+        let city = game.city();
+        let first_landing = !game.campaign.intro_seen && game.campaign.active == 0;
+        let home_intro = first_landing && city.village_start == Some(VillageStart::Building);
+        let story = (first_landing && !home_intro).then(|| Story::new(Self::arrival(game)));
         let delivery = game.city().first_delivery_ready(game.region());
         Self {
             aim: game.region().sources[0].tile,
             tool: Tool::Hand,
-            panel: if story.is_some() {
+            panel: if home_intro {
+                Panel::HomeIntro
+            } else if story.is_some() {
                 Panel::Story
             } else if delivery {
                 Panel::FirstDelivery
@@ -290,7 +298,11 @@ impl Play {
             catalog_page: 0,
             catalog_preview: Building::House,
             tech: Tech::Foundations,
-            focus: delivery.then_some(UiAction::Focus(game.region().depot)),
+            focus: if home_intro {
+                Some(UiAction::Resume)
+            } else {
+                delivery.then_some(UiAction::Focus(game.region().depot))
+            },
             menu_page: 0,
             reading: Default::default(),
             notice: String::new(),
@@ -424,11 +436,17 @@ impl Play {
                     Action::Repair
                 }
             }
-            Tool::Hand if !region.tutorial && city.held.is_none() && self.aim == region.depot => {
+            Tool::Hand
+                if !region.tutorial
+                    && !city.settling_in()
+                    && city.held.is_none()
+                    && self.aim == region.depot =>
+            {
                 Action::SeeWork
             }
             Tool::Hand
                 if city.held.is_none()
+                    && !city.settling_in()
                     && let Some(i) = region.village_at(self.aim)
                     && (i >= region.districts.len() || city.outcome.is_none()) =>
             {
@@ -1083,6 +1101,7 @@ impl Play {
             return;
         }
         if self.tool == Tool::Hand
+            && !game.city().settling_in()
             && game.city().held.is_none()
             && let Some(i) = game.region().village_at(self.aim)
             && (i >= game.region().districts.len() || game.city().outcome.is_none())
@@ -1160,13 +1179,16 @@ impl Play {
             }
             return false;
         }
+        let early = game.city().village_milestones() < 4 && game.city().settling_in();
+        let local_wheel = |wheel: Wheel| if early { wheel.for_village() } else { wheel };
         match action {
             UiAction::ToggleWheel => match self.panel {
-                Panel::Closed => self.open_panel(Panel::Wheel(Wheel::Tools)),
+                Panel::Closed => self.open_panel(Panel::Wheel(local_wheel(Wheel::Tools))),
                 Panel::Wheel(_) => self.close_panels(),
                 _ => {}
             },
             UiAction::QuickWheel(wheel) => {
+                let wheel = local_wheel(wheel);
                 if matches!(self.panel, Panel::Closed | Panel::Wheel(_)) {
                     let same = self.panel == Panel::Wheel(wheel);
                     self.close_panels();
@@ -1178,6 +1200,14 @@ impl Play {
             UiAction::Tool(Tool::Hand) => {
                 self.tool(Tool::Hand);
                 self.close_panels();
+            }
+            UiAction::Tool(Tool::Build | Tool::Miracles) if early => {
+                let wheel = if action == UiAction::Tool(Tool::Build) {
+                    Wheel::Build
+                } else {
+                    Wheel::Miracles
+                };
+                self.open_panel(Panel::Wheel(local_wheel(wheel)));
             }
             UiAction::Tool(tool) => {
                 self.open_tool(tool);
@@ -1319,6 +1349,8 @@ impl Play {
             UiAction::Cancel => {
                 if self.panel == Panel::MainMenu {
                     return false;
+                } else if self.panel == Panel::HomeIntro {
+                    self.show_main_menu(game);
                 } else if matches!(self.panel, Panel::SavedGames(_)) {
                     self.show_main_menu(game);
                     self.focus = Some(UiAction::Panel(Panel::SavedGames(0)));
@@ -1339,10 +1371,37 @@ impl Play {
                 }
             }
             UiAction::CheckSite => self.open_panel(Panel::Household(self.aim)),
-            UiAction::Panel(Panel::Work) => self.open_work(game),
-            UiAction::WorkGuide => self.guide_work(game, view, now),
-            UiAction::Guide if self.panel == Panel::Closed && game.city().work.pinned => {
+            UiAction::Panel(Panel::Work) if !game.city().settling_in() => self.open_work(game),
+            UiAction::WorkGuide if !game.city().settling_in() => self.guide_work(game, view, now),
+            UiAction::Guide
+                if matches!(self.panel, Panel::Closed | Panel::Quests | Panel::Menu)
+                    && game.city().raid_warning(game.region()) =>
+            {
+                self.open_panel(Panel::Raid);
+                self.focus = Some(UiAction::Focus(game.region().bridge()));
+            }
+            UiAction::Guide
+                if self.panel == Panel::Closed
+                    && game.city().local_tracked
+                    && !game.city().settling_in() =>
+            {
+                self.activate(UiAction::Panel(Panel::SideQuest), game, view, now);
+                if game.city().side_quest(game.region()) == SideQuest::Active {
+                    self.activate(UiAction::Guide, game, view, now);
+                }
+            }
+            UiAction::Guide
+                if self.panel == Panel::Closed
+                    && game.city().work.pinned
+                    && !game.city().settling_in() =>
+            {
                 self.guide_work(game, view, now)
+            }
+            UiAction::Guide
+                if matches!(self.panel, Panel::Closed | Panel::Quests | Panel::Menu)
+                    && let Some(task) = game.city().village_task(game.region()) =>
+            {
+                self.guide_village(task, game, view, now);
             }
             UiAction::Panel(Panel::Talent(t)) if matches!(self.panel, Panel::Talent(_)) => {
                 self.panel = Panel::Talent(t);
@@ -1357,7 +1416,15 @@ impl Play {
             }
             UiAction::MainMenu => self.show_main_menu(game),
             UiAction::Resume => {
+                let arriving = self.panel == Panel::HomeIntro;
                 self.close_panels();
+                if arriving {
+                    game.campaign.intro_seen = true;
+                    self.revision = self.revision.wrapping_add(1);
+                    if let Some(task) = game.city().village_task(game.region()) {
+                        self.guide_village(task, game, view, now);
+                    }
+                }
                 if game.city().first_delivery_ready(game.region()) {
                     self.open_delivery(game);
                 }
@@ -1557,6 +1624,22 @@ impl Play {
                     self.focus = Some(UiAction::AreaMaterial(area.material));
                 }
             }
+            UiAction::WorkGuide
+            | UiAction::Panel(
+                Panel::Council
+                | Panel::Village(_)
+                | Panel::Projects(_)
+                | Panel::Gathering
+                | Panel::Work
+                | Panel::SideQuest,
+            ) if game.city().settling_in() => {
+                self.notify(
+                    "Das kommt nach deiner ersten Ernte und dem Besuch beim Nachbardorf.",
+                    Feedback::Selection,
+                    now + 5.,
+                );
+            }
+            UiAction::WorkGuide => {}
             UiAction::Panel(panel @ (Panel::Council | Panel::Village(_))) => {
                 if game.region().villages.is_empty() {
                     self.notify(
@@ -1639,7 +1722,11 @@ impl Play {
                 }
             }
             UiAction::Panel(panel) => {
-                self.open_panel(panel);
+                self.open_panel(match panel {
+                    Panel::Wheel(wheel) => Panel::Wheel(local_wheel(wheel)),
+                    Panel::Catalog if early => Panel::Wheel(Wheel::VillageBuild),
+                    _ => panel,
+                });
                 if self.panel == Panel::Catalog && panel == Panel::Catalog {
                     self.set_catalog_page(game, self.catalog_page);
                 }
@@ -1869,7 +1956,8 @@ impl Play {
                     ),
             ),
             Panel::Controls | Panel::VillageLog => Some(UiAction::Cancel),
-            Panel::Briefing => Some(UiAction::Resume),
+            Panel::Briefing | Panel::HomeIntro => Some(UiAction::Resume),
+            Panel::NeighborIntro | Panel::RivalIntro | Panel::Raid => Some(UiAction::Cancel),
             Panel::Map => Some(UiAction::Landscape),
             Panel::Orders(tool) => Some(UiAction::Order(
                 tool,
@@ -1926,6 +2014,69 @@ impl Play {
         self.focus = Some(UiAction::Focus(focused.unwrap_or(region.depot)));
     }
 
+    fn guide_village(&mut self, task: VillageTask, game: &Game, view: &mut CameraRig, now: f32) {
+        let region = game.region();
+        let city = game.city();
+        let tile = match task {
+            VillageTask::Explore => {
+                self.open_panel(Panel::NeighborIntro);
+                return;
+            }
+            VillageTask::Acquainted(_) => {
+                self.open_panel(Panel::RivalIntro);
+                return;
+            }
+            VillageTask::Visiting(i) if city.visitor(i, true).is_none() => {
+                self.open_panel(Panel::NeighborIntro);
+                return;
+            }
+            VillageTask::Visiting(i) => {
+                self.tool(Tool::Hand);
+                region.villages[i].center
+            }
+            VillageTask::Build(kind) => {
+                if self.tool != Tool::Build || self.building() != kind {
+                    self.rotation = 0;
+                }
+                self.tool(Tool::Build);
+                self.choose(kind.index());
+                Self::building_tile(game, kind, region.start, true)
+            }
+            VillageTask::Collect(material, _) => {
+                self.tool(Tool::Hand);
+                region
+                    .sources
+                    .iter()
+                    .zip(&city.nodes)
+                    .filter(|(s, count)| {
+                        s.material == material && **count > 0 && city.influence(region, s.tile)
+                    })
+                    .min_by_key(|(s, _)| region.start.distance(s.tile))
+                    .map_or(region.start, |(s, _)| s.tile)
+            }
+            VillageTask::Deposit => {
+                self.tool(Tool::Hand);
+                city.carry_destination(region, self.aim)
+                    .unwrap_or_else(|| city.nearest_store(region, self.aim))
+            }
+            VillageTask::Water(tile) => {
+                self.tool(Tool::Miracles);
+                self.choose(Miracle::Rain as usize);
+                tile
+            }
+            VillageTask::Grow(tile) | VillageTask::Harvest(tile) => {
+                self.tool(Tool::Hand);
+                tile
+            }
+        };
+        self.close_panels();
+        self.aim = tile;
+        self.pointer = None;
+        self.guide_marker = Some((tile, now + 8.));
+        view.focus_action(tile);
+        self.sound_cues.push(Cue::Choose);
+    }
+
     fn focus_tile(&mut self, tile: Tile, view: &mut CameraRig) {
         if self.panel == Panel::FirstDelivery {
             view.focus_action(tile);
@@ -1972,12 +2123,21 @@ impl Play {
             return false;
         }
         if let Action::Audience(i) = action {
+            if game.city().settling_in() {
+                self.notify(
+                    "Du lernst die Nachbardörfer nach deiner ersten Ernte kennen.",
+                    Feedback::Selection,
+                    now + 5.,
+                );
+                return false;
+            }
             self.open_panel(Panel::Village(i));
             self.focus = Some(UiAction::Do(Action::Visit(i, true)));
             return false;
         }
         let previous = game.campaign.active;
         let quest = game.city().quest;
+        let village_task = game.city().village_task(game.region());
         let carried = game.city().held.is_some();
         let opening_choice = game.city().opening_choice();
         let first_island_landing = matches!(action, Action::Travel(4))
@@ -2059,6 +2219,7 @@ impl Play {
                 self.receipt = Some((self.aim, now, changes.join(" · ")));
             }
             if let Action::Visit(i, _)
+            | Action::MeetNeighbor(i)
             | Action::VillageGift(i)
             | Action::Withdraw(i)
             | Action::Aid(i, _)
@@ -2070,6 +2231,10 @@ impl Play {
                     self.celebration = Some((place, false, now, crate::game::Rite::Council));
                     self.hippo_happy_at = Some(now);
                 }
+                self.notice_panel = Panel::Closed;
+            }
+            if matches!(action, Action::BeginRivalry | Action::DeferAppeal(_)) {
+                self.close_panels();
                 self.notice_panel = Panel::Closed;
             }
             if matches!(action, Action::Call(..))
@@ -2120,7 +2285,8 @@ impl Play {
                 | Action::Assign(..)
                 | Action::AssignArea(..)
                 | Action::RecallHelpers => Cue::Order,
-                Action::Visit(..) | Action::Withdraw(_) => Cue::Order,
+                Action::Visit(..) | Action::MeetNeighbor(_) | Action::Withdraw(_) => Cue::Order,
+                Action::BeginRivalry => Cue::Quest,
                 Action::SendPilgrims(_) => Cue::Order,
                 Action::Aid(..)
                 | Action::Charter(_)
@@ -2154,7 +2320,22 @@ impl Play {
             if let Some(gesture) = gesture {
                 self.paw_gesture = Some((gesture, now));
             }
-            if took && game.mode != Mode::Tutorial {
+            let task = game.city().village_task(game.region());
+            if task != village_task
+                && matches!(
+                    task,
+                    Some(
+                        VillageTask::Build(_)
+                            | VillageTask::Collect(..)
+                            | VillageTask::Deposit
+                            | VillageTask::Water(_)
+                            | VillageTask::Grow(_)
+                    )
+                )
+                && self.panel == Panel::Closed
+            {
+                self.guide_village(task.unwrap(), game, view, now);
+            } else if took && game.mode != Mode::Tutorial {
                 self.guide_marker = None;
                 if game.city().first_delivery_ready(game.region()) {
                     self.open_delivery(game);
@@ -2207,6 +2388,9 @@ impl Play {
                     self.celebration = Some((site, false, now, crate::game::Rite::Council));
                     self.hippo_happy_at = Some(now);
                 }
+            }
+            if let Action::TrackLocal(on) = action {
+                self.focus = Some(UiAction::Do(Action::TrackLocal(!on)));
             }
             if action == Action::AcceptLocal {
                 self.focus = Some(match game.city().side_quest(game.region()) {
@@ -2313,8 +2497,10 @@ impl Play {
         self.previous_growth_stage = animal.stage();
         if self.contest_event != city.contest.event {
             self.contest_event = city.contest.event;
-            self.notify(city.contest.news.clone(), Feedback::Quest, now + 6.);
-            self.sound_cues.push(Cue::Quest);
+            if self.panel == Panel::Closed && now >= self.notice_until {
+                self.notify(city.contest.news.clone(), Feedback::Quest, now + 6.);
+                self.sound_cues.push(Cue::Quest);
+            }
         }
         let ready = city
             .gatherings
@@ -2331,6 +2517,7 @@ impl Play {
         }
         self.circle_ready = ready;
         if quest != self.previous_quest
+            && !city.rival_waiting()
             && !region.tutorial
             && (self.notice_kind != Feedback::Quest || now >= self.notice_until)
         {
@@ -2359,6 +2546,7 @@ impl Play {
         if self.story.is_none()
             && game.campaign.active == 0
             && game.city().opening_choice().is_none()
+            && city.village_start.is_none()
             && self.previous_quest == Quest::Shelter
             && quest == Quest::Fields
         {

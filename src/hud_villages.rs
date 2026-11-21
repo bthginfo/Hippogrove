@@ -70,17 +70,16 @@ pub(super) fn council(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game,
     );
     let intent = if let Some(a) = &city.projects.appeal {
         format!(
-            "Hilferuf aus {} · {} · {:.0} s",
+            "{} bittet um Hilfe · {}",
             region.villages[a.village].name,
-            crate::game::Need::on(region.kind).title,
-            a.seconds.ceil()
+            crate::game::Need::on(region.kind).title
         )
-    } else if race.occupation >= 75. {
+    } else if race.occupation >= crate::game::OCCUPATION_GRACE {
         "Der Rivale fordert Tribut. Brich seine Mehrheit.".into()
     } else if race.occupation > 0. {
         format!(
             "Rivalenmehrheit · Noch {:.0} s bis zum Tribut.",
-            (75. - race.occupation).ceil()
+            (crate::game::OCCUPATION_GRACE - race.occupation).ceil()
         )
     } else {
         intent
@@ -166,7 +165,7 @@ pub(super) fn council(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game,
             styled_button(
                 bar,
                 hud,
-                "Zum Hilferuf",
+                "Dorfbitte ansehen",
                 UiAction::Panel(Panel::Projects(a.village)),
                 false,
                 true,
@@ -386,15 +385,14 @@ pub(super) fn projects(
     let city = game.city();
     let r = game.region();
     let style = compact(short);
-    if let Some(a) = city.projects.appeal.as_ref().filter(|a| a.village == i) {
+    if city
+        .projects
+        .appeal
+        .as_ref()
+        .is_some_and(|a| a.village == i)
+    {
         let need = crate::game::Need::on(r.kind);
-        text(
-            parent,
-            hud,
-            &format!("{} · noch {:.0} s", need.title, a.seconds.ceil()),
-            if short { 16. } else { 21. },
-            INK,
-        );
+        text(parent, hud, need.title, if short { 16. } else { 21. }, INK);
         text(
             parent,
             hud,
@@ -458,6 +456,22 @@ pub(super) fn projects(
                 });
             }
         });
+    }
+    if city
+        .projects
+        .appeal
+        .as_ref()
+        .is_some_and(|a| a.village == i)
+    {
+        button(
+            parent,
+            hud,
+            "Später helfen",
+            UiAction::Do(Action::DeferAppeal(i)),
+            false,
+            false,
+        );
+        return;
     }
     if let Some(p) = &city.projects.pilgrims {
         text(

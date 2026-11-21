@@ -23,7 +23,7 @@ mod settlement_models;
 
 pub(crate) use alignment::{city_decor, companion_decor, style_creature};
 pub use landscapes::{ForestPatch, LandscapeProp, forest_mesh, landscape, meadow_detail};
-pub(crate) use rivals::{creature as rival_creature, faction_color, leader as rival_leader};
+pub(crate) use rivals::{faction_color, leader as rival_leader};
 
 pub fn rgb(hex: u32) -> Color {
     Color::srgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -101,6 +101,7 @@ pub struct Art {
     villages: [VillageArt; 5],
     plots: [Handle<Mesh>; 5],
     pub hippo_model: Handle<Scene>,
+    pub rival_models: [Handle<Scene>; 5],
     pub deposits: [[Handle<Mesh>; 6]; 5],
 }
 
@@ -198,6 +199,8 @@ impl Art {
             }),
             plots: Biome::ALL.map(|biome| meshes.add(plot_mesh(biome))),
             hippo_model: assets.load("embedded://models/hippo.glb#Scene0"),
+            rival_models: ["valley", "fjord", "terraces", "lake", "aegean"]
+                .map(|key| assets.load(format!("embedded://models/rivals/{key}.glb#Scene0"))),
             deposits: [
                 Biome::Valley,
                 Biome::Fjord,

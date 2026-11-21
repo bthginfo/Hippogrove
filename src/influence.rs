@@ -1,5 +1,8 @@
 use super::*;
 
+const FIRST_ENVOY_DELAY: f32 = 115.;
+pub const OCCUPATION_GRACE: f32 = 200.;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Allegiance {
     #[default]
@@ -53,7 +56,7 @@ impl Default for Contest {
             rival_tile: None,
             destination: None,
             path: VecDeque::new(),
-            delay: 32.,
+            delay: FIRST_ENVOY_DELAY,
             stride: 0.,
             effort: 0.,
             supplies: 40.,
@@ -65,6 +68,14 @@ impl Default for Contest {
     }
 }
 impl Contest {
+    pub(super) fn let_village_settle(&mut self) {
+        self.destination = None;
+        self.rival_tile = None;
+        self.path.clear();
+        self.delay = FIRST_ENVOY_DELAY;
+        self.occupation = 0.;
+    }
+
     pub fn count(&self, side: Allegiance) -> usize {
         self.towns.iter().filter(|t| t.side == side).count()
     }
@@ -116,6 +127,18 @@ impl Settlement {
             .map_or(0, |(i, _)| i)
     }
     pub fn send_visitor(&mut self, region: &Region, i: usize, hippo: bool) -> GameResult {
+        if self.settling_in() {
+            return Err("Baue zuerst dein Dorf auf oder begleite deinen ersten Besuch.".into());
+        }
+        self.dispatch_visitor(region, i, hippo)
+    }
+
+    pub(super) fn dispatch_visitor(
+        &mut self,
+        region: &Region,
+        i: usize,
+        hippo: bool,
+    ) -> GameResult {
         let village = region
             .villages
             .get(i)
@@ -294,7 +317,7 @@ impl Settlement {
         ));
     }
     fn rival_mission(&mut self, region: &Region, dt: f32) {
-        if region.sandbox || self.contest.pact || self.rival_resolve == 0 {
+        if region.sandbox || self.rival_waiting() || self.contest.pact || self.rival_resolve == 0 {
             self.contest.destination = None;
             self.contest.path.clear();
             return;
@@ -305,6 +328,9 @@ impl Settlement {
             return;
         }
         if self.contest.destination.is_none() {
+            if self.raid_warning(region) {
+                return;
+            }
             let mut choices: Vec<_> = region
                 .villages
                 .iter()
@@ -324,8 +350,8 @@ impl Settlement {
                 self.contest.destination = Some(i);
                 self.contest.path = path;
                 self.contest.effort = 0.;
-                self.announce_village(format!(
-                    "Gesandte des Rivalen ziehen nach {}.",
+                self.note(format!(
+                    "Ein Gesandter des Rivalen reist nach {}.",
                     region.villages[i].name
                 ));
             } else {
@@ -339,7 +365,7 @@ impl Settlement {
             {
                 if self.walkable(region, next) || region.ford(next) {
                     self.contest.rival_tile = Some(next);
-                    self.contest.stride = 0.48;
+                    self.contest.stride = 0.68;
                 } else {
                     self.contest.path.clear();
                     self.contest.destination = None;
@@ -351,7 +377,7 @@ impl Settlement {
             if self.contest.towns[i].side == Allegiance::Rival || self.contest.effort > 95. {
                 self.contest.destination = None;
                 self.contest.path.clear();
-                self.contest.delay = 14.;
+                self.contest.delay = 62.;
             }
         }
     }
@@ -372,26 +398,27 @@ impl Settlement {
                     .is_some_and(|p| p.distance(v.center) <= 1)
             {
                 rate -= if self.contest.towns[i].protection > 0. {
-                    2.
+                    0.8
                 } else {
-                    4.
+                    1.7
                 };
             }
             if rate != 0. {
                 self.change_trust(region, i, rate * dt);
             }
         }
-        let was_occupied = self.contest.occupation >= 75.;
+        let was_occupied = self.contest.occupation >= OCCUPATION_GRACE;
         if !region.sandbox
+            && !self.rival_waiting()
             && self.rival_resolve > 0
             && !self.contest.pact
             && self.contest.count(Allegiance::Rival) >= self.contest.majority()
         {
-            self.contest.occupation = (self.contest.occupation + dt).min(75.);
+            self.contest.occupation = (self.contest.occupation + dt).min(OCCUPATION_GRACE);
         } else {
             self.contest.occupation = 0.;
         }
-        if !was_occupied && self.contest.occupation >= 75. {
+        if !was_occupied && self.contest.occupation >= OCCUPATION_GRACE {
             self.announce_village(
                 "Der Rivale kontrolliert die Mehrheit und fordert Tribut. Gewinne ein Dorf zurück."
                     .into(),
@@ -418,7 +445,7 @@ impl Settlement {
             if shipment != [0; 3] {
                 self.note(format!("Lieferung der Dörfer · {}", stock_text(shipment)));
             }
-            if self.contest.occupation >= 75.
+            if self.contest.occupation >= OCCUPATION_GRACE
                 && let Some(m) = Material::ALL
                     .into_iter()
                     .max_by_key(|m| self.stock[m.index()])
@@ -450,10 +477,11 @@ mod tests {
             t.side = Allegiance::Rival;
             t.trust = -100.;
         }
+        city.village_start = Some(VillageStart::Open);
         city.contest.delay = 1000.;
         city.stock = [12, 6, 4];
-        city.contest.supplies = 75.;
-        city.visit_tick(r, 74.);
+        city.contest.supplies = OCCUPATION_GRACE;
+        city.visit_tick(r, OCCUPATION_GRACE - 1.);
         assert_eq!(city.stock, [12, 6, 4]);
         city.visit_tick(r, 1.);
         assert_eq!(city.stock, [10, 6, 4]);
@@ -523,6 +551,7 @@ mod tests {
     #[test]
     fn a_visit_must_arrive_then_a_gift_and_two_visitors_can_win_the_village() {
         let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        game.campaign.settlements[0].as_mut().unwrap().village_start = Some(VillageStart::Open);
         let i = game.city().nearest_village(game.region());
         let v = game.region().villages[i].clone();
         assert!(!game.city().influence(game.region(), v.center));
@@ -551,11 +580,12 @@ mod tests {
     #[test]
     fn rival_takes_neutral_land_and_players_can_win_it_back_and_secure_a_chapter() {
         let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        game.campaign.settlements[0].as_mut().unwrap().village_start = Some(VillageStart::Open);
         for _ in 0..240 {
             game.step(1. / 12.);
         }
         assert!(game.city().contest.destination.is_none());
-        run_until(&mut game, 150, |c| c.contest.count(Allegiance::Rival) > 0);
+        run_until(&mut game, 260, |c| c.contest.count(Allegiance::Rival) > 0);
         let index = game
             .city()
             .contest

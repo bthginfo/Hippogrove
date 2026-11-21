@@ -2,6 +2,8 @@
 mod quests_ui;
 #[path = "hud_neighborhood.rs"]
 mod town_ui;
+#[path = "hud_village_start.rs"]
+mod village_start_ui;
 #[path = "hud_work.rs"]
 mod works;
 pub(crate) use quests_ui::update_meter;
@@ -75,10 +77,9 @@ pub(crate) enum Label {
     Objective,
     CampaignHint,
     CircleStatus,
-    VillageWatch,
     Quest,
     QuestCount,
-    SideTrack,
+    SideInstruction,
     WorkHint,
     Notice,
     Confirm,
@@ -155,12 +156,15 @@ struct Layout {
     unlocked: usize,
     quest: Quest,
     side_quest: SideQuest,
+    side_pinned: bool,
     folded: bool,
     work_stage: crate::game::WorkStage,
     work_pinned: bool,
     reading: crate::display::ReadingSize,
     work_paid: u16,
     appeal: Option<usize>,
+    village_task: Option<crate::game::VillageTask>,
+    raid_alert: bool,
     mix: Option<Mix>,
     campaign_complete: bool,
     circle_active: bool,
@@ -893,6 +897,11 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                                 (3, Label::Faith),
                                 (4, Label::Mana),
                             ] {
+                                if layout.village_task.is_some()
+                                    && matches!(value, Label::Faith | Label::Mana)
+                                {
+                                    continue;
+                                }
                                 stats
                                     .spawn(Node {
                                         align_items: AlignItems::Center,
@@ -925,26 +934,28 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                             ..default()
                         })
                         .with_children(|links| {
-                            styled_button(
-                                links,
-                                hud,
-                                if game.region().tutorial {
-                                    "Karte"
-                                } else {
-                                    "Dörfer"
-                                },
-                                UiAction::Panel(if game.region().tutorial {
-                                    Panel::Map
-                                } else {
-                                    Panel::Council
-                                }),
-                                false,
-                                false,
-                                ButtonStyle {
-                                    icon: Some(10),
-                                    ..quick
-                                },
-                            );
+                            if !game.city().settling_in() {
+                                styled_button(
+                                    links,
+                                    hud,
+                                    if game.region().tutorial {
+                                        "Karte"
+                                    } else {
+                                        "Dörfer"
+                                    },
+                                    UiAction::Panel(if game.region().tutorial {
+                                        Panel::Map
+                                    } else {
+                                        Panel::Council
+                                    }),
+                                    false,
+                                    false,
+                                    ButtonStyle {
+                                        icon: Some(10),
+                                        ..quick
+                                    },
+                                );
+                            }
                             styled_button(
                                 links,
                                 hud,
@@ -969,6 +980,16 @@ fn top(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout: Layout
                 });
         });
 
+    if layout.raid_alert {
+        village_start_ui::raid_card(parent, hud, layout);
+        return;
+    }
+    if let Some(task) = layout.village_task
+        && (!(layout.work_pinned || layout.side_pinned) || game.city().settling_in())
+    {
+        village_start_ui::tracker(parent, hud, game, layout, task);
+        return;
+    }
     if game.mode != Mode::Tutorial {
         island_agenda(parent, hud, game, layout);
         return;
@@ -1008,9 +1029,8 @@ fn island_agenda(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layo
         })
         .with_children(|bar| {
             if layout.work_pinned
-                || (!game.region().sandbox
-                    && (game.city().quest != Quest::Complete
-                        || matches!(layout.side_quest, SideQuest::Active | SideQuest::Ready)))
+                || layout.side_pinned
+                || (!game.region().sandbox && game.city().quest != Quest::Complete)
             {
                 quests_ui::tracker(bar, hud, game, layout);
             } else {
@@ -1095,67 +1115,41 @@ fn island_agenda(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layo
                 });
             }
             bar.spawn(Node {
-                max_width: Val::Percent(40.),
+                max_width: Val::Percent(37.),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::End,
+                row_gap: Val::Px(4.),
                 ..default()
             })
             .with_children(|right| {
-                styled_button(
-                    right,
-                    hud,
-                    if layout.circle_active {
-                        "Zum Festkreis"
-                    } else {
-                        "Dorfruf"
-                    },
-                    UiAction::Panel(Panel::Gathering),
-                    false,
-                    layout.circle_active,
-                    ButtonStyle {
-                        icon: Some(3),
-                        ..quick
-                    },
-                );
-                if let Some(i) = layout.appeal {
-                    styled_button(
-                        right,
-                        hud,
-                        "Zum Hilferuf",
-                        UiAction::Panel(Panel::Projects(i)),
-                        false,
-                        true,
-                        ButtonStyle {
-                            icon: Some(11),
-                            ..quick
-                        },
-                    );
-                }
-                if !layout.circle_active && !game.region().sandbox {
-                    right
-                        .spawn((
-                            Node {
-                                max_width: Val::Px(if layout.short { 188. } else { 275. }),
-                                padding: UiRect::axes(Val::Px(4.), Val::Px(2.)),
-                                ..default()
-                            },
-                            BackgroundColor(rgb(DARK)),
-                        ))
-                        .with_children(|chip| label(chip, hud, Label::VillageWatch, 12., LIGHT));
-                }
-                if layout.circle_active {
-                    right
-                        .spawn((
-                            Node {
-                                padding: UiRect::axes(Val::Px(4.), Val::Px(2.)),
-                                ..default()
-                            },
-                            BackgroundColor(rgb(DARK)),
-                        ))
-                        .with_children(|chip| label(chip, hud, Label::CircleStatus, 12., LIGHT));
-                }
-                if game.region().has_rival_creature() && layout.quest == Quest::Bridge {
-                    label(right, hud, Label::RaidAlert, 13., GOLD);
+                let highlight = if layout.circle_active {
+                    Some((
+                        "Zum Festkreis",
+                        UiAction::Panel(Panel::Gathering),
+                        Label::CircleStatus,
+                    ))
+                } else {
+                    layout.appeal.map(|i| {
+                        (
+                            "Dorfbitte",
+                            UiAction::Panel(Panel::Projects(i)),
+                            Label::DistrictBrief(i),
+                        )
+                    })
+                };
+                if let Some((name, action, status)) = highlight {
+                    styled_button(right, hud, name, action, false, layout.raid_alert, quick);
+                    if !matches!(action, UiAction::Panel(Panel::Projects(_))) {
+                        right
+                            .spawn((
+                                Node {
+                                    padding: UiRect::all(Val::Px(4.)),
+                                    ..default()
+                                },
+                                BackgroundColor(rgb(DARK)),
+                            ))
+                            .with_children(|chip| label(chip, hud, status, 13., LIGHT));
+                    }
                 }
             });
         });
@@ -1401,7 +1395,10 @@ fn placement_bar(
                                         GOLD,
                                     );
                                 });
-                            if kind == Building::House && layout.mode != Mode::Tutorial {
+                            if kind == Building::House
+                                && layout.mode != Mode::Tutorial
+                                && layout.village_task.is_none()
+                            {
                                 styled_button(
                                     preview,
                                     hud,
@@ -1439,36 +1436,38 @@ fn placement_bar(
                                     ..default()
                                 })
                                 .with_children(|tools| {
-                                    styled_button(
-                                        tools,
-                                        hud,
-                                        if layout.gamepad { "X Drehen" } else { "Drehen" },
-                                        UiAction::Rotate,
-                                        false,
-                                        false,
-                                        ButtonStyle {
-                                            icon: Some(29),
-                                            ..compact
-                                        },
-                                    );
-                                    styled_button(
-                                        tools,
-                                        hud,
-                                        if layout.gamepad && layout.short {
-                                            "RB/R1 Platz"
-                                        } else if layout.gamepad {
-                                            "RB/R1 Freier Platz"
-                                        } else {
-                                            "Freier Platz"
-                                        },
-                                        UiAction::ToolTarget,
-                                        false,
-                                        false,
-                                        ButtonStyle {
-                                            icon: Some(14),
-                                            ..compact
-                                        },
-                                    );
+                                    if layout.village_task.is_none() {
+                                        styled_button(
+                                            tools,
+                                            hud,
+                                            if layout.gamepad { "X Drehen" } else { "Drehen" },
+                                            UiAction::Rotate,
+                                            false,
+                                            false,
+                                            ButtonStyle {
+                                                icon: Some(29),
+                                                ..compact
+                                            },
+                                        );
+                                        styled_button(
+                                            tools,
+                                            hud,
+                                            if layout.gamepad && layout.short {
+                                                "RB/R1 Platz"
+                                            } else if layout.gamepad {
+                                                "RB/R1 Freier Platz"
+                                            } else {
+                                                "Freier Platz"
+                                            },
+                                            UiAction::ToolTarget,
+                                            false,
+                                            false,
+                                            ButtonStyle {
+                                                icon: Some(14),
+                                                ..compact
+                                            },
+                                        );
+                                    }
                                     styled_button(
                                         tools,
                                         hud,
@@ -1488,7 +1487,9 @@ fn placement_bar(
                             text(
                                 actions,
                                 hud,
-                                if layout.gamepad && layout.short {
+                                if layout.gamepad && layout.village_task.is_some() {
+                                    "Stick bewegt den Bauplatz · L3 zeigt einen Platz"
+                                } else if layout.gamepad && layout.short {
                                     "Kreuz versetzt\nL3 zum Ziel"
                                 } else if layout.gamepad {
                                     "Steuerkreuz versetzt · L3 zum Ziel"
@@ -1646,27 +1647,41 @@ fn bottom(parent: &mut ChildSpawnerCommands, hud: &Hud, play: &Play, layout: Lay
                     });
             }
             if layout.gamepad {
-                gamepad_legend(
-                    hud_root,
-                    hud,
-                    layout,
-                    &[
-                        ("LB/L1", None, "Auswahlrad"),
-                        ("X", Some(PAD_SQUARE), "Bauen"),
-                        ("Y", Some(PAD_TRIANGLE), "Wunder"),
-                        (
-                            "RB/R1",
-                            None,
-                            if play.tool == Tool::Hand {
-                                "Nilpferd"
-                            } else {
-                                "Werkzeugziel"
-                            },
-                        ),
-                        ("L3", None, "Ziel"),
-                        ("R3", None, "Objekt"),
-                    ],
-                );
+                if layout.village_task.is_some() {
+                    gamepad_legend(
+                        hud_root,
+                        hud,
+                        layout,
+                        &[
+                            ("X", Some(PAD_SQUARE), "Bauen"),
+                            ("Y", Some(PAD_TRIANGLE), "Regen"),
+                            ("L3", None, "Nächster Schritt"),
+                            ("Start", None, "Menü"),
+                        ],
+                    );
+                } else {
+                    gamepad_legend(
+                        hud_root,
+                        hud,
+                        layout,
+                        &[
+                            ("LB/L1", None, "Auswahlrad"),
+                            ("X", Some(PAD_SQUARE), "Bauen"),
+                            ("Y", Some(PAD_TRIANGLE), "Wunder"),
+                            (
+                                "RB/R1",
+                                None,
+                                if play.tool == Tool::Hand {
+                                    "Nilpferd"
+                                } else {
+                                    "Werkzeugziel"
+                                },
+                            ),
+                            ("L3", None, "Ziel"),
+                            ("R3", None, "Objekt"),
+                        ],
+                    );
+                }
             }
         });
 }
@@ -1684,7 +1699,11 @@ fn gamepad_legend(
             display: Display::Grid,
             grid_template_columns: vec![
                 GridTrack::auto();
-                if layout.narrow_legend { 3 } else { 6 }
+                if layout.narrow_legend {
+                    3.min(bindings.len())
+                } else {
+                    bindings.len()
+                }
             ],
             justify_items: JustifyItems::Center,
             justify_content: JustifyContent::Center,
@@ -2019,7 +2038,7 @@ fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
         ..default()
     };
     parent.spawn(column_grid(3)).with_children(|tabs| {
-        for (i, name) in ["Insel", "Dorf & Kreatur", "Spiel"].into_iter().enumerate() {
+        for (i, name) in ["Dorf", "Insel", "Spiel"].into_iter().enumerate() {
             styled_button(
                 tabs,
                 hud,
@@ -2058,37 +2077,85 @@ fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
     if layout.menu_page == 2 {
         label(parent, hud, Label::Calendar, 14., MUTED);
     }
-    let items: &[(&str, Panel, usize)] = match layout.menu_page {
-        1 => &[
-            ("Inselwerk", Panel::Work, 12),
-            ("Stadtplanung", Panel::Town(0), 6),
-            ("Gebäude", Panel::Catalog, 6),
-            ("Forschung", Panel::Research, 13),
-            ("Vorräte", Panel::Inventory, 12),
-            ("Kreatur & Talente", Panel::Progress, 8),
-            ("Dorfruf", Panel::Gathering, 3),
-            ("Wunder", Panel::Spells, 9),
-        ],
-        2 => &[
+    let city = game.city();
+    let mut items: Vec<(&str, Panel, usize)> = match layout.menu_page {
+        2 => vec![
             ("Anzeige", Panel::Display, 10),
             ("Steuerung", Panel::Controls, 14),
             ("Ton", Panel::Sound, 28),
             ("Spielmodi", Panel::Modes, 10),
         ],
-        _ => &[
-            ("Inselwerk", Panel::Work, 12),
-            ("Stadtplanung", Panel::Town(0), 6),
+        1 if city.settling_in() => {
+            text(
+                parent,
+                hud,
+                "Die Nachbardörfer kommen nach deiner ersten Ernte.",
+                15.,
+                MUTED,
+            );
+            vec![("Landkarte", Panel::Map, 10)]
+        }
+        1 => vec![
             ("Nachbardörfer", Panel::Council, 7),
             ("Landkarte", Panel::Map, 10),
             ("Aufträge", Panel::Quests, 11),
             ("Reisebuch", Panel::Journey, 14),
             ("Dorfchronik", Panel::VillageLog, 12),
         ],
+        _ => vec![
+            ("Gebäude", Panel::Catalog, 6),
+            ("Vorräte", Panel::Inventory, 12),
+            ("Stadtplanung", Panel::Town(0), 6),
+            ("Kreatur & Talente", Panel::Progress, 8),
+        ],
     };
+    if layout.menu_page == 0 && (!city.settling_in() || city.village_milestones() >= 4) {
+        items.push(("Forschung", Panel::Research, 13));
+    }
+    if layout.menu_page == 0 && !city.settling_in() {
+        items.extend([
+            ("Inselwerk", Panel::Work, 12),
+            ("Dorfruf", Panel::Gathering, 3),
+            ("Wunder", Panel::Spells, 9),
+        ]);
+    }
+    if layout.raid_alert && layout.menu_page != 2 {
+        button(
+            parent,
+            hud,
+            "Angriff am Übergang",
+            UiAction::Guide,
+            false,
+            true,
+        );
+    } else if layout.menu_page != 2 && layout.village_task.is_some() {
+        button(
+            parent,
+            hud,
+            "Nächster Schritt",
+            UiAction::Guide,
+            false,
+            true,
+        );
+    }
+    if layout.menu_page == 1
+        && !layout.raid_alert
+        && !city.settling_in()
+        && let Some(i) = layout.appeal
+    {
+        button(
+            parent,
+            hud,
+            "Dorfbitte ansehen",
+            UiAction::Panel(Panel::Projects(i)),
+            false,
+            false,
+        );
+    }
     let mut grid = column_grid(if layout.short { 3 } else { 2 });
     grid.row_gap = Val::Px(5.);
     parent.spawn(grid).with_children(|links| {
-        for &(name, panel, icon) in items {
+        for (name, panel, icon) in items {
             if game.region().tutorial
                 && matches!(
                     panel,
@@ -2914,13 +2981,22 @@ fn side_quest_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, l
             MUTED,
         );
         button(parent, hud, name, UiAction::Do(action), false, true);
-    } else {
-        if layout.side_quest == SideQuest::Active {
-            button(parent, hud, "Zum Ziel", UiAction::Guide, false, true);
-        }
-        if game.city().next_raid(game.region()).is_some() {
-            label(parent, hud, Label::Raid, 15., MUTED);
-        }
+    } else if layout.side_quest == SideQuest::Active {
+        button(parent, hud, "Zum Ziel", UiAction::Guide, false, true);
+    }
+    if matches!(layout.side_quest, SideQuest::Active | SideQuest::Ready) {
+        button(
+            parent,
+            hud,
+            if layout.side_pinned {
+                "Inselauftrag verfolgen"
+            } else {
+                "Diese Aufgabe verfolgen"
+            },
+            UiAction::Do(Action::TrackLocal(!layout.side_pinned)),
+            false,
+            false,
+        );
     }
 }
 
@@ -4322,6 +4398,10 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             && matches!(
                 play.panel,
                 Panel::MainMenu
+                    | Panel::HomeIntro
+                    | Panel::NeighborIntro
+                    | Panel::RivalIntro
+                    | Panel::Raid
                     | Panel::SavedGames(_)
                     | Panel::ConfirmDelete(_)
                     | Panel::Work
@@ -4361,7 +4441,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             },
             BackgroundColor(rgb(PAPER)),BorderColor(rgb(BRASS)),BorderRadius::all(Val::Px(18.)),
         )).with_children(|box_node| {
-            if !matches!(play.panel, Panel::MainMenu | Panel::ConfirmDelete(_) | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection | Panel::Briefing | Panel::Graduation | Panel::Departure) {
+            if !matches!(play.panel, Panel::MainMenu | Panel::HomeIntro | Panel::NeighborIntro | Panel::RivalIntro | Panel::Raid | Panel::ConfirmDelete(_) | Panel::Inventory | Panel::Modes | Panel::Area(_) | Panel::Catalog | Panel::Inspection | Panel::Briefing | Panel::Graduation | Panel::Departure) {
                 let actions: &[(&str, UiAction, bool)] = if play.at_title() {
                     &[("Zurück", UiAction::Cancel, true)]
                 } else if play.panel == Panel::Menu {
@@ -4428,6 +4508,10 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                         button(actions, hud, "Endgültig löschen", UiAction::DeleteSave(mode), false, false);
                     });
                 }
+                Panel::HomeIntro => village_start_ui::briefing(box_node, hud, game, layout.short),
+                Panel::NeighborIntro => village_start_ui::neighbor(box_node, hud, game, layout.short),
+                Panel::RivalIntro => village_start_ui::rivalry(box_node, hud, game, layout.short),
+                Panel::Raid => village_start_ui::raid(box_node, hud, game, layout.short),
                 Panel::MainMenu => main_menu(box_node, hud, game, layout.short),
                 Panel::Menu => menu_panel(box_node,hud,game,layout),
                 Panel::Controls => controls_panel(box_node, hud, play.gamepad, layout.short),
@@ -4489,6 +4573,10 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 Panel::Dedication=>works::dedication(box_node,hud,game,layout.short),
                 Panel::Town(page) => town_ui::atlas(box_node,hud,game,page,play.aim,layout.short),
                 Panel::Household(tile) => town_ui::home(box_node,hud,game,tile,layout.short),
+                Panel::Quests if layout.village_task.is_some() => {
+                    text(box_node, hud, "Dein nächster Schritt steht im Dorf. So findest du auch das passende Werkzeug.", 16., INK);
+                    button(box_node, hud, "Zum nächsten Schritt", UiAction::Guide, false, true);
+                }
                 Panel::Quests => quest_journal(box_node, hud, game, layout),
                 Panel::FirstDelivery => first_delivery_panel(box_node, hud, game, layout.short),
                 Panel::Closed | Panel::Context | Panel::Story | Panel::Wheel(_) => {}
@@ -4559,6 +4647,8 @@ pub fn layout(
         reading: play.reading,
         work_paid: game.city().work.delivered,
         appeal: game.city().projects.appeal.as_ref().map(|a| a.village),
+        village_task: game.city().village_task(game.region()),
+        raid_alert: game.city().raid_warning(game.region()),
         side_quest: if matches!(
             play.panel,
             Panel::Closed | Panel::Map | Panel::Quests | Panel::SideQuest
@@ -4567,6 +4657,7 @@ pub fn layout(
         } else {
             SideQuest::Complete
         },
+        side_pinned: game.city().local_tracked,
         mix: (play.panel == Panel::Sound).then_some(play.mix),
         campaign_complete: game.campaign_complete(),
         circle_active: game.city().gatherings.circle.is_some(),
@@ -4761,16 +4852,9 @@ pub(crate) fn update(
                     )
                 }
             }),
-            Label::RaidAlert => city
-                .next_raid(region)
-                .filter(|&seconds| seconds <= 10. && city.rival_active(region))
-                .map_or_else(String::new, |seconds| {
-                    format!(
-                        "{} · Angriff in {:.0} s",
-                        crate::rivals::Rival::for_biome(region.kind).creature,
-                        seconds.ceil()
-                    )
-                }),
+            Label::RaidAlert => city.next_raid(region).map_or_else(String::new, |seconds| {
+                format!("Angriff in {} s", seconds.ceil() as u16)
+            }),
             Label::Objective => city.objective(region).1,
             Label::PracticeStatus => game
                 .practice_city()
@@ -4969,50 +5053,17 @@ pub(crate) fn update(
                 .map_or_else(String::new, |story| story.caption(region).into()),
             Label::WorkHint => city.work_hint(region),
             Label::QuestCount => quests_ui::counter(&game),
-            Label::SideTrack => {
-                if city.side_quest(region) == SideQuest::Ready {
-                    "Erfüllt · Belohnung im Tagebuch".into()
-                } else {
-                    city.local_next(region)
-                        .map_or_else(|| "Zur Dorfbitte".into(), |g| g.progress(city, region))
-                }
-            }
             Label::Quest if region.sandbox => "Baue, ernte oder handle".into(),
             Label::Quest if city.quest == Quest::Complete && !region.tutorial => {
                 "Deine Nachbardörfer".into()
             }
             Label::Quest => city.next_task(region),
-            Label::VillageWatch => {
-                let c = &city.contest;
-                if let Some(a) = &city.projects.appeal {
-                    format!(
-                        "{} · Noch {:.0} s für Hilfe",
-                        region.villages[a.village].name,
-                        a.seconds.ceil()
-                    )
-                } else if c.occupation > 0. {
-                    if c.occupation >= 75. {
-                        "Rivale fordert Tribut".into()
-                    } else {
-                        format!(
-                            "Rivalenmehrheit · Tribut in {:.0} s",
-                            (75. - c.occupation).ceil()
-                        )
-                    }
-                } else if let Some((i, v)) = region.villages.iter().enumerate().find(|(i, _)| {
-                    city.visitor(*i, true).is_some() || city.visitor(*i, false).is_some()
-                }) {
-                    format!("{} · {}", v.name, c.status(i))
-                } else if let Some(i) = c.destination {
-                    format!("Rivale → {}", region.villages[i].name)
-                } else {
-                    format!(
-                        "Inselbund · {}/{} Dörfer",
-                        c.count(crate::game::Allegiance::Ours),
-                        c.majority()
-                    )
-                }
+            Label::SideInstruction if city.side_quest(region) == SideQuest::Ready => {
+                "Belohnung abholen".into()
             }
+            Label::SideInstruction => city
+                .local_next(region)
+                .map_or_else(String::new, |goal| goal.progress(city, region)),
             Label::CircleStatus => city
                 .gatherings
                 .circle

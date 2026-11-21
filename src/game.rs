@@ -7,9 +7,12 @@ pub use neighborhood::SERVICES;
 #[path = "village_projects.rs"]
 mod village_projects;
 pub use village_projects::{Need, Projects};
+#[path = "village_start.rs"]
+mod village_start;
+pub use village_start::{VillageStart, VillageTask};
 #[path = "influence.rs"]
 mod influence;
-pub use influence::{Allegiance, Contest};
+pub use influence::{Allegiance, Contest, OCCUPATION_GRACE};
 #[path = "district_trade.rs"]
 mod district_trade;
 #[path = "gathering.rs"]
@@ -34,7 +37,8 @@ use crate::region::{
 use crate::rivals::Rival;
 use crate::terrain;
 
-pub const SAVE_VERSION: u32 = 5;
+pub const SAVE_VERSION: u32 = 6;
+pub const RAID_NOTICE: f32 = 30.;
 pub const PAW_BUNDLE: u16 = 6;
 pub const PAW_LIMIT: u16 = 18;
 pub const FARM_REWARD: Stock = [0, 5, 8];
@@ -549,10 +553,14 @@ pub enum Action {
     RaiseWork,
     Dedicate(Dedication),
     TrackWork(bool),
+    TrackLocal(bool),
     Research(Tech),
     Muster(Tile),
     Patrol(Tile),
     Settle(usize),
+    MeetNeighbor(usize),
+    BeginRivalry,
+    DeferAppeal(usize),
     Visit(usize, bool),
     Audience(usize),
     Withdraw(usize),
@@ -733,6 +741,8 @@ pub struct Settlement {
     #[serde(default)]
     pub projects: Projects,
     #[serde(default)]
+    pub village_start: Option<VillageStart>,
+    #[serde(default)]
     pub work: IslandWork,
     #[serde(default)]
     pub citizens: Vec<Tile>,
@@ -792,6 +802,8 @@ pub struct Settlement {
     pub local_finished: bool,
     #[serde(default)]
     pub local_accepted: bool,
+    #[serde(default)]
+    pub local_tracked: bool,
     pub shield: f32,
     pub rainfall: f32,
     pub weather_time: f32,
@@ -819,6 +831,10 @@ impl Settlement {
     }
 
     pub fn new(region: &Region) -> Self {
+        Self::with_village_start(region, Self::has_village_start(region))
+    }
+
+    fn with_village_start(region: &Region, guided: bool) -> Self {
         let mut city = Self {
             world_layout: region.world_layout(),
             stock: region.initial,
@@ -829,6 +845,7 @@ impl Settlement {
             gatherings: Gatherings::default(),
             contest: Contest::default(),
             projects: Projects::default(),
+            village_start: guided.then_some(VillageStart::Building),
             work: IslandWork::default(),
             citizens: Vec::new(),
             journal: VecDeque::new(),
@@ -844,7 +861,10 @@ impl Settlement {
                 Walker::new(region.depot.offset(-1, 0), false),
             ],
             held: None,
-            opening: region.opening_farm().map(|_| Opening::default()),
+            opening: region
+                .opening_farm()
+                .filter(|_| !guided)
+                .map(|_| Opening::default()),
             quest: Quest::Shelter,
             outcome: None,
             bridge_fixed: false,
@@ -870,6 +890,7 @@ impl Settlement {
             cooldowns: [0.; Miracle::ALL.len()],
             local_finished: false,
             local_accepted: false,
+            local_tracked: false,
             shield: 0.,
             rainfall: 0.,
             weather_time: 0.,
@@ -878,7 +899,7 @@ impl Settlement {
             next_worker: 0,
         };
         // The first chapter teaches carrying and building. Later chapters start with a village.
-        for (index, &tile) in region.starter_plots.iter().enumerate() {
+        for (index, &tile) in region.starter_plots.iter().enumerate().filter(|_| !guided) {
             let kind = [Building::House, Building::Store, Building::Field][index];
             city.buildings.push(BuildingSite {
                 kind,
@@ -1929,13 +1950,19 @@ impl Settlement {
     }
 
     fn raids_active(&self, region: &Region) -> bool {
-        self.quest == Quest::Bridge
+        !self.rival_waiting()
+            && self.quest == Quest::Bridge
             && self.count(Building::Shrine) > 0
             && (self.guards.iter().any(|&spirit| spirit > 0) || self.rival_active(region))
     }
 
     pub fn next_raid(&self, region: &Region) -> Option<f32> {
         (self.raids_active(region) && self.raid_clock > 0.).then_some(self.raid_clock)
+    }
+
+    pub fn raid_warning(&self, region: &Region) -> bool {
+        self.next_raid(region)
+            .is_some_and(|seconds| seconds <= RAID_NOTICE)
     }
 
     pub fn rival_active(&self, region: &Region) -> bool {
@@ -1946,7 +1973,7 @@ impl Settlement {
         let home = region.rival_lair().world();
         let approach =
             if self.raids_active(region) && self.raid_clock > 0. && self.rival_active(region) {
-                1. - terrain::smooth(self.raid_clock / 10.)
+                1. - terrain::smooth(self.raid_clock / RAID_NOTICE)
             } else {
                 0.
             };
@@ -2467,6 +2494,7 @@ impl Settlement {
             self.advance_walker(walker, region, gifts, dt, index);
         }
         self.walkers = walkers;
+        self.check_first_visit(region);
         self.visit_tick(region, dt);
         self.projects_tick(region, dt);
 
@@ -2503,12 +2531,18 @@ impl Settlement {
             let interval = if rival {
                 Rival::for_biome(region.kind).interval
             } else {
-                29.
+                90.
             };
             if self.raid_clock <= 0. {
-                self.raid_clock = interval + 5.;
+                self.raid_clock = interval + 30.;
             }
+            let previous = self.raid_clock;
             self.raid_clock -= dt;
+            if previous > RAID_NOTICE && self.raid_warning(region) {
+                self.note(
+                    "Am Übergang sammelt sich ein Angriff. Öffne die Warnung für Hilfe.".into(),
+                );
+            }
             if self.raid_clock <= 0. {
                 self.raid_clock = interval;
                 let watch = |walker: &Walker| {
@@ -2526,15 +2560,15 @@ impl Settlement {
                 if hippo_protects {
                     self.hippo_watches = self.hippo_watches.saturating_add(1);
                 }
-                if !protected {
-                    if rival {
-                        if !self.rival_warded(region) {
-                            self.rival_strike(region);
-                        }
-                    } else {
-                        let food = &mut self.stock[Material::Food.index()];
-                        *food -= food.saturating_sub(4).min(2);
-                    }
+                if protected || (rival && self.rival_warded(region)) {
+                    self.announce_village("Dein Dorf hat den Angriff abgewehrt.".into());
+                } else if rival {
+                    self.rival_strike(region);
+                    self.announce_village(Rival::for_biome(region.kind).impact.into());
+                } else {
+                    let food = &mut self.stock[Material::Food.index()];
+                    *food -= food.saturating_sub(4).min(2);
+                    self.announce_village("Die Wachen haben bis zu 2 Nahrung genommen.".into());
                 }
             }
         }
@@ -3414,6 +3448,9 @@ impl Settlement {
     ) -> Option<&'static str> {
         match spell {
             _ if region.sandbox && spell.offensive() => Some("Nur in Kampagnen"),
+            _ if self.rival_waiting() && spell.offensive() => {
+                Some("Verfügbar, wenn du die Rivalität beginnst.")
+            }
             Miracle::Thunder if gifts.storm == 0 => Some("Talent Stimme des Donners"),
             Miracle::Ward if self.city_rank() < 3 => Some("Benötigt Werkstatt"),
             Miracle::Bloom if gifts.growth == 0 => Some("Talent Hände der Blüte"),
@@ -3707,9 +3744,20 @@ impl Settlement {
             return false;
         }
         if self.contest.pact && self.quest != Quest::Complete {
+            if self.village_start.is_some() {
+                self.village_start = Some(VillageStart::Open);
+            }
             self.quest = Quest::Complete;
             self.faith = self.faith.saturating_add(12);
             return true;
+        }
+        if self.rival_waiting() {
+            if self.quest == Quest::Shelter && self.village_milestones() == 4 {
+                self.quest = Quest::Fields;
+                self.faith = self.faith.saturating_add(4);
+                return true;
+            }
+            return false;
         }
         match self.quest {
             Quest::Shelter
@@ -4295,7 +4343,8 @@ impl Campaign {
         self.gifts.creature.work = total;
     }
 
-    pub fn restore(mut self, regions: &[Region]) -> Option<Self> {
+    fn restore(mut self, regions: &[Region]) -> Option<Self> {
+        let add_village_start = (1..SAVE_VERSION).contains(&self.version);
         if (1..=3).contains(&self.version) {
             for (city, region) in self.settlements.iter_mut().zip(regions) {
                 if let Some(city) = city {
@@ -4363,11 +4412,17 @@ impl Campaign {
             self.version = SAVE_VERSION;
             self.intro_seen = true;
         }
+        if self.version == 5 {
+            self.version = SAVE_VERSION;
+        }
         for (entry, region) in self.settlements.iter_mut().zip(regions) {
             let Some(city) = entry else {
                 continue;
             };
             city.populate_villages(region);
+            if add_village_start {
+                city.migrate_village_start(region);
+            }
             city.journal.truncate(5);
         }
         self.sync_creature_work();
@@ -4407,6 +4462,7 @@ impl Campaign {
                                     s.tile == *t && s.kind == Building::House && s.upgraded
                                 })
                         }) && city.valid_projects(region)
+                            && city.valid_village_start(region)
                             && city.work.valid(region)
                             && city.contest.towns.len() == region.villages.len()
                             && city
@@ -4736,7 +4792,26 @@ impl Game {
             Action::SummonBuilder => settlement.summon_builder(region),
             Action::RaiseWork => settlement.raise_work(region, gifts),
             Action::Dedicate(choice) => settlement.dedicate_work(region, gifts, choice),
+            Action::TrackLocal(on) => {
+                settlement.local_tracked = on
+                    && matches!(
+                        settlement.side_quest(region),
+                        SideQuest::Active | SideQuest::Ready
+                    );
+                if settlement.local_tracked {
+                    settlement.work.pinned = false;
+                }
+                Ok(if settlement.local_tracked {
+                    "Nebenauftrag im Tracker"
+                } else {
+                    "Inselauftrag im Tracker"
+                }
+                .into())
+            }
             Action::TrackWork(on) => {
+                if on {
+                    settlement.local_tracked = false;
+                }
                 settlement.work.pinned = on
                     && matches!(
                         settlement.work.stage,
@@ -4763,6 +4838,9 @@ impl Game {
                     .map(|v| v.name.clone())
                     .ok_or_else(|| "Unbekanntes Dorf.".into());
             }
+            Action::MeetNeighbor(i) => settlement.meet_neighbor(region, i),
+            Action::BeginRivalry => settlement.begin_rivalry(region),
+            Action::DeferAppeal(i) => settlement.defer_appeal(i),
             Action::Visit(i, hippo) => settlement.send_visitor(region, i, hippo),
             Action::SendPilgrims(i) => settlement.procession(region, i),
             Action::Aid(i, h) => settlement.aid(region, i, h),
@@ -4809,6 +4887,7 @@ impl Game {
                     return Err("Erfülle zuerst die Ziele des Nebenauftrags.".into());
                 }
                 settlement.local_finished = true;
+                settlement.local_tracked = false;
                 settlement.faith = settlement.faith.saturating_add(6);
                 gifts.earn();
                 research.earn(2);
@@ -5060,6 +5139,12 @@ mod tests {
 
     fn fresh() -> Game {
         Game::new(Region::campaign(), None)
+    }
+
+    fn legacy_campaign(biome: Biome) -> Game {
+        let mut game = Game::start(Mode::Campaign(biome));
+        game.campaign.settlements[0] = Some(Settlement::with_village_start(game.region(), false));
+        game
     }
 
     #[test]
@@ -5347,6 +5432,7 @@ mod tests {
             let fixture = || {
                 let mut city = game.city().clone();
                 city.quest = Quest::Bridge;
+                city.village_start = Some(VillageStart::Open);
                 city.stock = [24, 22, 21];
                 city.buildings.push(BuildingSite {
                     kind: Building::Shrine,
@@ -5398,7 +5484,7 @@ mod tests {
         assert_eq!(game.city().quest, Quest::Bridge);
         for _ in 0..RIVAL_RESOLVE {
             let mut target = None;
-            for _ in 0..45 {
+            for _ in 0..240 {
                 target = game
                     .city()
                     .rival_target(game.region(), Miracle::Wind.radius(game.campaign.gifts));
@@ -5613,7 +5699,7 @@ mod tests {
 
     #[test]
     fn the_fjord_guide_assigns_the_hippo_and_both_winter_goals_survive_a_reload() {
-        let mut game = Game::start(Mode::Campaign(Biome::Fjord));
+        let mut game = legacy_campaign(Biome::Fjord);
         game.campaign.intro_seen = true;
         let mut play = Play::new(&game);
         let mut view = CameraRig::new(&game);
@@ -5645,7 +5731,7 @@ mod tests {
 
     #[test]
     fn the_first_village_delivery_builds_a_home_and_the_guide_selects_the_store() {
-        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        let mut game = legacy_campaign(Biome::Valley);
         game.campaign.intro_seen = true;
         let depot = game.region().depot;
         let morale = game.city().society.morale;
@@ -5675,7 +5761,7 @@ mod tests {
 
     #[test]
     fn the_farm_delivery_preserves_excess_wood_and_cannot_be_repeated_after_reload() {
-        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        let mut game = legacy_campaign(Biome::Valley);
         game.campaign.intro_seen = true;
         let region = game.region().clone();
         let farm = game.city().opening_farm(&region).unwrap();
@@ -5720,7 +5806,7 @@ mod tests {
 
     #[test]
     fn a_wood_lesson_only_prompts_a_new_trip_when_the_stock_is_low() {
-        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        let mut game = legacy_campaign(Biome::Valley);
         let wood = game.region().sources[0].tile;
         let depot = game.region().depot;
         game.act(Action::Hand(wood)).unwrap();
@@ -6125,7 +6211,125 @@ mod tests {
         assert!(met(game), "{} · {goal:?}", game.region().name);
     }
 
+    fn complete_village_start(game: &mut Game) {
+        game.campaign.intro_seen = true;
+        let mut play = Play::new(game);
+        let mut camera = CameraRig::new(game);
+        for step in 0..24 {
+            let task = game.city().village_task(game.region()).unwrap();
+            match task {
+                VillageTask::Explore => break,
+                VillageTask::Grow(_) => game.step(11.),
+                _ => {
+                    play.activate(UiAction::Guide, game, &mut camera, step as f32);
+                    assert!(
+                        play.activate(UiAction::Confirm, game, &mut camera, step as f32),
+                        "{} · {task:?} · {} · {:?}",
+                        game.region().name,
+                        play.notice,
+                        play.target(game)
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            game.city().village_task(game.region()),
+            Some(VillageTask::Explore)
+        );
+        let i = game
+            .city()
+            .reachable_neighbor(game.region())
+            .expect("A reachable village");
+        game.act(Action::MeetNeighbor(i)).unwrap();
+        for _ in 0..900 {
+            if game.city().village_start == Some(VillageStart::Acquainted(i)) {
+                return;
+            }
+            game.step(1. / 12.);
+        }
+        panic!("{} · The first visitor must arrive", game.region().name);
+    }
+
+    #[test]
+    fn the_five_openings_stay_calm_until_the_player_starts_rivalry() {
+        for biome in Biome::ALL {
+            let mut game = Game::start(Mode::Campaign(biome));
+            assert_eq!(
+                game.city().village_task(game.region()),
+                Some(VillageTask::Build(Building::House))
+            );
+            for _ in 0..6 {
+                game.step(60.);
+            }
+            assert!(game.city().next_raid(game.region()).is_none());
+            assert!(game.city().projects.appeal.is_none());
+            assert!(game.city().contest.destination.is_none());
+            assert_eq!(
+                game.city().contest.count(Allegiance::Neutral),
+                game.region().villages.len()
+            );
+            assert!(game.act(Action::BeginRivalry).is_err());
+            assert!(game.act(Action::Visit(0, true)).is_err());
+
+            complete_village_start(&mut game);
+            let recently_met = game.city().village_start;
+            let mut game = Game::resume(game.saved_games()).unwrap();
+            assert_eq!(game.city().village_start, recently_met);
+            game.step(60.);
+            let appeal = game
+                .city()
+                .projects
+                .appeal
+                .as_ref()
+                .expect("Known neighbor can ask for help")
+                .village;
+            game.step(230.);
+            assert_eq!(
+                game.city().projects.appeal.as_ref().unwrap().village,
+                appeal
+            );
+            assert!(game.city().contest.destination.is_none());
+            game.act(Action::DeferAppeal(appeal)).unwrap();
+            assert!(game.city().projects.appeal.is_none());
+
+            game.act(Action::BeginRivalry).unwrap();
+            assert_eq!(game.city().village_start, Some(VillageStart::Open));
+            game.step(112.);
+            assert!(game.city().contest.destination.is_none());
+            for _ in 0..8 {
+                game.step(1.);
+            }
+            assert!(game.city().contest.destination.is_some(), "{biome:?}");
+        }
+    }
+
+    #[test]
+    fn an_early_saved_village_keeps_its_buildings_and_gets_the_calm_start() {
+        let mut old = legacy_campaign(Biome::Valley);
+        let tile = old.region().sources[0].tile;
+        old.act(Action::Grab(tile, 9)).unwrap();
+        old.act(Action::Hand(old.region().depot)).unwrap();
+        assert_eq!(old.city().opening_choice(), Some(FirstDelivery::Village));
+        old.campaign.version = 5;
+        let homes = old.city().count(Building::House);
+        let stock = old.city().stock;
+        let mut resumed = Game::resume(old.saved_games()).unwrap();
+        assert_eq!(resumed.city().count(Building::House), homes);
+        assert_eq!(resumed.city().stock, stock);
+        assert!(resumed.city().rival_waiting());
+        assert_eq!(
+            resumed.city().opening_choice(),
+            Some(FirstDelivery::Village)
+        );
+        resumed.step(220.);
+        assert!(resumed.city().contest.destination.is_none());
+    }
+
     fn prepare_bridge(game: &mut Game) {
+        if game.city().village_start == Some(VillageStart::Building) {
+            complete_village_start(game);
+            game.act(Action::BeginRivalry).unwrap();
+        }
         if game.city().quest == Quest::Shelter {
             let first = game.region().sources[0].tile;
             let stone = game.region().sources[2].tile;
@@ -6143,25 +6347,27 @@ mod tests {
             build(game, Building::House);
             build(game, Building::Store);
         }
-        assert_eq!(game.city().quest, Quest::Fields);
-        if let Some(step) = game.city().quest_step(game.region()) {
-            for &goal in &step.goals {
-                fulfill_goal(game, goal);
+        if game.city().quest != Quest::Bridge {
+            assert_eq!(game.city().quest, Quest::Fields);
+            if let Some(step) = game.city().quest_step(game.region()) {
+                for &goal in &step.goals {
+                    fulfill_goal(game, goal);
+                }
+            } else {
+                let starter_field = game
+                    .city()
+                    .buildings
+                    .iter()
+                    .find(|site| site.kind == Building::Field)
+                    .map(|site| site.tile);
+                let field = starter_field.unwrap_or_else(|| build(game, Building::Field));
+                game.act(Action::Cast(Miracle::Rain, field)).unwrap();
+                assert!(game.act(Action::Hand(field)).is_err());
+                for _ in 0..480 {
+                    game.step(1. / 24.);
+                }
+                game.act(Action::Hand(field)).unwrap();
             }
-        } else {
-            let starter_field = game
-                .city()
-                .buildings
-                .iter()
-                .find(|site| site.kind == Building::Field)
-                .map(|site| site.tile);
-            let field = starter_field.unwrap_or_else(|| build(game, Building::Field));
-            game.act(Action::Cast(Miracle::Rain, field)).unwrap();
-            assert!(game.act(Action::Hand(field)).is_err());
-            for _ in 0..480 {
-                game.step(1. / 24.);
-            }
-            game.act(Action::Hand(field)).unwrap();
         }
         assert_eq!(game.city().quest, Quest::Bridge, "{}", game.region().name);
         let guard = game.region().guards[0];
@@ -6385,7 +6591,7 @@ mod tests {
 
     #[test]
     fn chapter_supplies_reflect_both_villages_and_arrive_only_on_first_landing() {
-        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        let mut game = legacy_campaign(Biome::Valley);
         game.campaign.intro_seen = true;
         let city = game.campaign.settlements[0].as_mut().unwrap();
         city.quest = Quest::Complete;
@@ -6457,7 +6663,7 @@ mod tests {
 
     #[test]
     fn lake_road_guidance_previews_a_connected_run_and_aegean_guidance_opens_research() {
-        let mut game = Game::start(Mode::Campaign(Biome::Lake));
+        let mut game = legacy_campaign(Biome::Lake);
         game.campaign.intro_seen = true;
         let mut play = Play::new(&game);
         let mut view = CameraRig::new(&game);
@@ -6478,7 +6684,7 @@ mod tests {
         assert!(play.activate(UiAction::Confirm, &mut game, &mut view, 0.));
         assert!(game.city().roads.len() >= 3);
 
-        let mut game = Game::start(Mode::Campaign(Biome::Aegean));
+        let mut game = legacy_campaign(Biome::Aegean);
         game.campaign.unlocked = 1;
         game.act(Action::Travel(1)).unwrap();
         game.campaign.intro_seen = true;

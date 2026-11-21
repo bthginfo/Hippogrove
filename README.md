@@ -2,9 +2,11 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-**[Hippogrove 1.7.2 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/203398a82eef99e771ca7670a0f35fb7d4c642e6/Hippogrove-1.7.2.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.7.2) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/203398a82eef99e771ca7670a0f35fb7d4c642e6/Hippogrove-1.7.2.apk.sha256)
+**[Hippogrove 1.8.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/a757cde055954ee278bc38339002bdb016756461/Hippogrove-1.8.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.8.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/a757cde055954ee278bc38339002bdb016756461/Hippogrove-1.8.0.apk.sha256)
 
-Mit **1.7.2** kannst du im Hauptmenü unter **Spielstände** einzelne Kampagnen, freie Bauwelten, die Chronik und das Tutorial löschen. Die Bestätigung nennt den gewählten Spielstand. Am Controller ist **Abbrechen** vorgewählt. Nach dem Löschen des letzten Spielstands kannst du auf der Übungsinsel neu beginnen.
+Mit **1.8.0** beginnt jede Themenkampagne mit deinem eigenen Dorf. Du baust in deinem Tempo, lernst danach ein Nachbardorf kennen und entscheidest, wann die Rivalität beginnt. Jede Landschaft hat eine neu modellierte Rivalenkreatur.
+
+Seit **1.7.2** kannst du im Hauptmenü unter **Spielstände** einzelne Kampagnen, freie Bauwelten, die Chronik und das Tutorial löschen. Die Bestätigung nennt den gewählten Spielstand. Am Controller ist **Abbrechen** vorgewählt. Nach dem Löschen des letzten Spielstands kannst du auf der Übungsinsel neu beginnen.
 
 Seit **1.7.1** stellt sich die Anzeige auf dem Tablet auf deinen Controller ein. Schrift und Auswahlräder wachsen mit der nutzbaren Fläche. Unter **Anzeige** kannst du den Leseabstand selbst wählen.
 
@@ -20,7 +22,13 @@ Hippogrove spielt sich im Querformat per Touch oder mit angeschlossenem Controll
 
 Öffne die heruntergeladene APK auf deinem Android-Gerät und installiere sie. In der App-Übersicht findest du das Spiel unter **Hippogrove**. [Alle Veröffentlichungen](https://github.com/bthginfo/Hippogrove/releases)
 
-Wähle im Hauptmenü **Tutorial**. Auf der Übungsinsel führen acht Etappen vom ersten Holzbündel bis zur Ernte und zur Pflege deines Nilpferds. Ein Marker bleibt an deinem Ziel. Du öffnest das Baurad, wählst selbst eine Hütte und bestätigst erst danach den Bau. Nach der Übung kannst du direkt ins Weidental reisen oder eine andere Kampagne wählen. Der erste Auftrag wartet, bis du **Zum ersten Ziel** wählst. Über **Menü → Hauptmenü** kannst du die Partie verlassen und später mit **Spiel fortsetzen** wieder einsteigen.
+Wähle im Hauptmenü **Tutorial**. Auf der Übungsinsel führen acht Etappen vom ersten Holzbündel bis zur Ernte und zur Pflege deines Nilpferds. Danach kannst du direkt ins Weidental reisen oder eine andere Kampagne wählen.
+
+In der Kampagne zeigt **Dorf ansehen** den ersten Bauplatz. Du baust eine Hütte, sammelst bei Bedarf Rohstoffe für Lager und Feld und holst die erste Ernte ein. **L3** am Controller oder der Knopf unter dem aktuellen Ziel zeigt den nächsten Ort und wählt das passende Werkzeug. Bauplatz, Rohstoffquelle und Feld werden markiert. Bis zur Ernte enthält das Baurad die drei Gebäude für den Dorfaufbau.
+
+Nach der Ernte kannst du weiterbauen oder dein Nilpferd zur Begrüßung ins Nachbardorf schicken. Der Besuch ist friedlich. Erst wenn du danach **Rivalität beginnen** auswählst, startet der Wettbewerb. Der Inselbund lässt sich auch aus der friedlichen Phase heraus schließen.
+
+![Die erste Hütte im Tablet-Querformat mit markiertem Bauplatz](docs/dorfaufbau-tablet.jpg)
 
 Tippe in der Welt auf ein Objekt oder drücke am Controller **R3**. Am Holzstoß kannst du ein Bündel greifen, dein Nilpferd losschicken oder einen freien Dorfbewohner einteilen. Ein fast volles Lager nimmt an, was hineinpasst. Der Rest bleibt in deiner Pfote. Halte direkt auf dem Holz oder auf **Greifen**, um bis zu 18 Einheiten zu nehmen. Ein trockenes Feld bietet Regen an, ein reifes Feld die Ernte. Bei einer Familie oder Hütte kannst du einmal pro Spieltag drei Nahrung teilen. Das bringt zwei Glauben und hebt die Stimmung des Dorfes für diesen Tag. Kosten und Erträge erscheinen am Ort der Aktion.
 
@@ -38,9 +46,7 @@ Im Pausenmenü blättern **LB/L1** und **RB/R1** durch die drei Seiten. Im Spiel
 
 ### Aufträge verfolgen und Rohstoffe erkennen
 
-Im **Questtracker** stehen dein Inselauftrag, der nächste Schritt und die erfüllten Teilziele. Nimmst du im **Tagebuch** eine Dorfbitte an, erscheint sie mit ihrem eigenen Fortschritt darunter. **Zum Ziel** beziehungsweise **L3** führt zum Hauptziel. Für das Ziel der Dorfbitte öffnest du ihren Eintrag im Tagebuch. Hilferufe öffnen sich über die Schaltfläche neben der Restzeit. Du kannst den Tracker direkt einklappen oder mit dem Gamepad unter **Start → Spiel** umschalten. [Auftragsbuch im Spiel](docs/auftragsbuch.jpg)
-
-![Laufender Hauptauftrag und angenommene Dorfbitte im Questtracker des Weidentals](docs/tracker-mit-dorfbitte.jpg)
+Der **Questtracker** zeigt eine Aufgabe zur Zeit. Verfolge im **Tagebuch** einen angenommenen Nebenauftrag oder wähle im **Werkbuch** dein Inselwerk. **L3** führt zur gewählten Aufgabe. Über **Inselauftrag verfolgen** wechselst du zurück. Du kannst den Tracker direkt einklappen oder mit dem Gamepad unter **Start → Spiel** umschalten.
 
 Frei stehende Bäume und Felsblöcke auf der begehbaren Spielinsel geben Holz und Stein. Tippe auf Krone, Stamm oder Fels. Das Objektmenü zeigt Material und Restmenge. Im Einflussgebiet kann die Pfote bis zu 18 Einheiten auf einmal greifen. Außerhalb kannst du bei offenem Weg einen Sammler schicken. Das Gelände selbst und die Steine im Pflaster sind Landschaft. Abgeerntete Quellen verschwinden und erholen sich mit der Zeit.
 
@@ -83,12 +89,12 @@ Mit **L3** verfolgst du den nächsten Werkschritt. Über **Inselauftrag verfolge
 
 ### Um die Nachbardörfer spielen
 
-Öffne **Dörfer** und wähle ein neutrales Dorf. Am Controller erreichst du die Übersicht mit **RB/R1 → Dörfer**, wenn die Hand aktiv ist, oder über **Start → Nachbardörfer**. Die Karte zeigt deine Heimat, die Dorfplätze und den Sitz des Rivalen. Im ersten, zweiten und dritten Kapitel jeder Themenkampagne beginnen vier, fünf und sechs Dörfer neutral.
+Öffne **Dörfer** und wähle ein neutrales Dorf. Am Controller erreichst du die Übersicht mit **RB/R1 → Dörfer**, wenn die Hand aktiv ist, oder über **Start → Insel → Nachbardörfer**. Die Karte zeigt deine Heimat, die Dorfplätze und den Sitz des Rivalen. Im ersten, zweiten und dritten Kapitel jeder Themenkampagne beginnen vier, fünf und sechs Dörfer neutral.
 
 ![Dorfübersicht im Weidental mit Karte, vier anwählbaren Dorfplätzen und dem Ziel von drei Verbündeten](docs/dorfkarte.jpg)
 
 - **Besuchen.** Schicke dein Nilpferd, einen Gläubigen oder beide. Sie können die Furten vor der Brückenreparatur überqueren. Am Platz gewinnt dein Nilpferd pro Spielsekunde fünf Vertrauen, ein Gläubiger dreieinhalb. Ein gegnerischer Gesandter gewinnt dort vier für seine Seite. Du kannst beide Besucher zusammen einsetzen oder zwei Dörfer gleichzeitig umwerben.
-- **Helfen.** Ein Hilferuf bleibt 100 Spielsekunden offen. Über **Zum Hilferuf** siehst du, wer vor Ort gebraucht wird und was der Einsatz kostet. Im Weidental kann dein Nilpferd etwa für 18 Kraft Familien vor dem Hochwasser retten. Ein Gläubiger kann stattdessen vier Einheiten des angezeigten Materials einsetzen. Beide Wege bringen vier Glauben. Die Rettung mit der Kreatur bringt bis zu 55 Vertrauen, die Hilfe durch einen Gläubigen bis zu 35 und halbiert den Einfluss des Gesandten für 60 Sekunden.
+- **Helfen.** Nach einem Besuch kann ein bekanntes Dorf um Hilfe bitten. Die Dorfbitte bleibt offen, bis du hilfst oder **Später helfen** wählst. Im Weidental trägt das Nilpferd für 18 Kraft Familien vor dem Hochwasser ans Ufer. Ein Gläubiger kann für vier passende Rohstoffe einen Reparaturtrupp bilden.
 - **Pilger empfangen.** Wähle ein fremdes oder neutrales Dorf und öffne **Pilgerzüge**. Ein eigenes Dorf mit mindestens 50 Prozent Bindung kann den Zug entsenden. Es gibt 20 Bindung ab und braucht danach 55 Sekunden Ruhe. Vier Nahrung finanzieren den Weg. Die Ankunft bringt bis zu 30 Vertrauen. Empfängt dein Nilpferd oder ein Gläubiger die Pilger am Ziel, sind es bis zu 55.
 - **Gebiet gewinnen und halten.** Bei 100 Vertrauen schließt sich das Dorf deiner Seite an. Du kannst in seiner Umgebung bauen und bekommst bei freiem Lagerplatz alle 40 Spielsekunden zwei Einheiten seiner Ware. Sinkt die Bindung auf null, wird es wieder neutral. Hast du die Mehrheit, kannst du selbst **Inselbund schließen** wählen und das nächste Kapitel freischalten. Hält der Rivale die Mehrheit 75 Sekunden, fordert er bei Lieferungen bis zu zwei Einheiten Tribut. Sobald du ihm die Mehrheit nimmst, endet der Tribut.
 
@@ -118,7 +124,11 @@ Die fünf Kampagnen haben je drei Inselkarten mit eigenen Küsten, Höhenzügen,
 
 Das Nilpferd wächst durch Lieferungen, Ernten und erfolgreiche Wachen. Wähle es mit der Pfote, um es zu streicheln. Lobe es nach einer Lieferung von Holz, Stein oder Nahrung. Jeden Rohstoff lernt es einzeln. Sobald es frei ist und ein erlernter Vorrat auf acht Einheiten oder weniger fällt, holt es selbst Nachschub. Es versorgt zuerst den knappsten erreichbaren Rohstoff. **Pause** unterbricht die Hilfe. **Sammeln** oder ein neues Lob setzt sie fort. Unter **Fortschritt** siehst du seine nächste Wachstumsstufe. Hilfe und Bündnisse bringen der Stadt mehr Glauben und Stimmung. Einschüchterung stärkt den Schutz durch Wachtürme und kostet Stimmung. Stadt und Kreatur zeigen ihre Ausrichtung auch im Spielbild.
 
-Auf den neuen Inseln bringen Rivale und Kreatur eine eigene Bedrohung mit. Ivens Mooshirsch beansprucht Holz, Sigruns Runenwolf bringt Frost, Lins Wolkendrache verzögert die Ernte, Nurus Schilfschlange vertreibt Sammler und Nereas Windgreif zerstreut Wunderkraft. Die Aufträge zeigen den nächsten Angriff und mögliche Gegenmaßnahmen. Du kannst die Nachbarn mit einem Bündnis gewinnen oder ihre Wachen und Kreatur mit Wundern zurückdrängen.
+Nach dem Beginn der Rivalität schwärmen die Gesandten mit Abstand aus. Der erste bricht frühestens nach 115 Spielsekunden auf. Ein Grenzschrein startet die Phase mit möglichen Angriffen am Übergang. Eine Warnung erscheint 30 Spielsekunden vorher. **L3** oder **Abwehr ansehen** zeigt bei pausierter Simulation, was droht und welche Abwehr hilft.
+
+Ivens Mooshirsch bedroht den Holzvorrat, Sigruns Runenwolf bringt Frost, Lins Wolkendrache verzögert die Ernte, Nurus Schilfschlange hält Sammler auf und Nereas Windgreif zerstreut Wunderkraft.
+
+![Die fünf neu modellierten Rivalenkreaturen. Oben Mooshirsch, Runenwolf und Wolkendrache. Unten Schilfschlange und Windgreif.](docs/rivalenkreaturen.jpg)
 
 Nach dem Bau des Grenzschreins kannst du passende Bündel **direkt zur Brücke** tragen. Später nimmt das Dorf dort auch seine Gabe entgegen. Teillieferungen bleiben beim Speichern erhalten. Am Übergang kannst du die offene Menge aus dem Lager bezahlen. Unter **Aufträge** führen **Bündnis vorbereiten** und **Wachen anvisieren** zu den beiden Wegen durch den Konflikt.
 
@@ -182,6 +192,8 @@ Die Karten reichen bis 178 × 140 Felder. Gebirgsketten, Täler, dichte Haine, F
 Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus Waldwinkel 1.5. Die sechs Originalstücke umfassen „Die kleine Bucht“ für Titel und Tutorial sowie je eine eigene Besetzung und Bearbeitung für die fünf Landschaften. Beim Inselwechsel blendet die Musik über. Zum Rendern nutzt `art/build_music.py` FluidSynth, NumPy, pyFluidSynth, FFmpeg und die Instrumente von GeneralUser GS 2.0.3. Musik, Umgebung und Effekte lassen sich im Spielmenü unter **Ton** einzeln schalten. [Waldwinkel 1.5](https://github.com/bthginfo/waldwinkel/tree/8a98a76a2921690b533015e3f57fadccc2c66b24) · [Instrumentenbank und Lizenz](https://github.com/mrbumpy409/GeneralUser-GS/blob/684543d5e5efaef08d02be50dcda8d552478fa60/documentation/LICENSE.txt)
 
 ## Geprüfter Stand
+
+Für **1.8.0** bestanden 64 Rust-Tests. Ein Controller-Durchlauf im gerenderten Spiel bei 1280 × 800 begann ohne Spielstand und führte vom Tutorial über Hütte, Lager und Feld bis zum Besuch und zur freiwilligen Rivalität. Die Angriffswarnung öffnete die Abwehr bei pausiertem Spieltimer. Alle fünf neuen Kreaturen erschienen in ihren Kampagnen.
 
 Für **1.7.2** bestanden 62 Rust-Tests. Im gerenderten Tablet-Menü wurden acht Spielstände über zwei Seiten per Controller verwaltet. Der Test hat Abbrechen, die Einzellöschung, die Rückkehr von der letzten Listenseite und den Neustart des Tutorials nach Löschen des letzten Spielstands geprüft. Auf Android 15 ließ sich die Auswahl mit A abbrechen. Nach erneutem Antippen reichten einmal rechts und A zum Löschen. Der Tutorial-Spielstand blieb erhalten.
 
