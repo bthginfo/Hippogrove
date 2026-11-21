@@ -105,7 +105,7 @@ impl Story {
                 [
                     (bridge.offset(-4, 3), 23.),
                     (bridge.offset(0, 0), 21.),
-                    (region.rival_shrine.offset(0, 1), 24.),
+                    (region.rival_home().offset(0, 1), 30.),
                 ],
                 [
                     match region.kind {

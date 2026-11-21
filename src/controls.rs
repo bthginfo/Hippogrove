@@ -363,10 +363,27 @@ fn select(
         if play.tool == Tool::Hand
             || (matches!(play.tool, Tool::Helpers | Tool::Hippo) && play.option == 0)
         {
-            for (index, source) in region.sources.iter().enumerate() {
-                consider(source.tile, source.tile.world() + Vec3::Y * 0.35);
-                if index >= region.original_sources && source.material == Material::Wood {
-                    consider(source.tile, source.tile.world() + Vec3::Y * 1.54);
+            let ground = Tile::from_world(point);
+            for z in -4..=4 {
+                for x in -4..=4 {
+                    let t = ground.offset(x, z);
+                    let Some(i) = city.harvest_at(region, t) else {
+                        continue;
+                    };
+                    let source = &region.sources[i];
+                    let mut at = t.world();
+                    if i >= region.managed_sources {
+                        if city.nodes[i] == 0 {
+                            continue;
+                        }
+                        if let Some(land) = terrain::wild_land(region, t) {
+                            at = land.position.with_y(0.);
+                        }
+                    }
+                    consider(t, at + Vec3::Y * 0.35);
+                    if i >= region.original_sources && source.material == Material::Wood {
+                        consider(t, at + Vec3::Y * 1.54);
+                    }
                 }
             }
         }

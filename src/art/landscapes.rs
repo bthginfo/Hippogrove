@@ -157,8 +157,10 @@ pub fn landscape(
                 ));
             }
             let patch = ForestPatch(patch_bounds);
-            let forest = forest_geometry(region, patch, &occupied);
-            if !forest.positions.is_empty() {
+            let forest = forest_geometry(region, patch, &occupied, city);
+            if !forest.positions.is_empty()
+                || patch_bounds.tiles().any(|t| region.wild_index(t).is_some())
+            {
                 parent.spawn((
                     patch,
                     Mesh3d(meshes.add(forest.render_mesh())),
@@ -241,67 +243,41 @@ fn occupied_land(city: &Settlement, region: &Region) -> BTreeSet<Tile> {
 }
 
 pub fn forest_mesh(region: &Region, patch: ForestPatch, city: &Settlement) -> Mesh {
-    forest_geometry(region, patch, &occupied_land(city, region)).render_mesh()
+    forest_geometry(region, patch, &occupied_land(city, region), city).render_mesh()
 }
 
-fn forest_geometry(region: &Region, patch: ForestPatch, occupied: &BTreeSet<Tile>) -> Geometry {
+fn forest_geometry(
+    region: &Region,
+    patch: ForestPatch,
+    occupied: &BTreeSet<Tile>,
+    city: &Settlement,
+) -> Geometry {
     let mut mesh = Geometry::default();
     let palette = Palette::for_biome(region.kind);
     let cliff = rgb(palette.cliff);
     for tile in patch.0.tiles() {
-        let Tile(x, z) = tile;
-        if region.water(tile)
-            || region.road(tile)
-            || region.fixed_structure(tile)
-            || region.source_at(tile).is_some()
-            || occupied.contains(&tile)
+        if occupied.contains(&tile) {
+            continue;
+        }
+        let Some(land) = terrain::wild_land(region, tile) else {
+            continue;
+        };
+        if land.kind.is_some()
+            && region.bounds.contains(tile)
+            && region.wild_index(tile).is_none_or(|i| city.nodes[i] == 0)
         {
             continue;
         }
-        let key = hash(x, z, 171);
-        let where_ = tile.local()
-            + Vec2::new(
-                ((key & 15) as f32 - 7.) * 0.051,
-                (((key >> 4) & 15) as f32 - 7.) * 0.051,
-            );
-        let point = Tile::world_point(where_);
-        let coast = terrain::shore(region, where_);
-        if coast < 0.24 {
-            continue;
-        }
-        let p = point.with_y(terrain::surface_height(region, where_, coast).max(WATER));
-        let clearing = tile.within(region.start, 5)
-            || tile.within(region.frontier, 4)
-            || tile.within(region.rival_shrine, 4)
-            || region
-                .districts
-                .iter()
-                .any(|district| tile.within(district.center, 5));
-        let stand = region
-            .areas
-            .iter()
-            .any(|area| area.material == Material::Wood && tile.within(area.center, 12));
-        let grove =
-            smooth((noise(where_, 8.3, 154) * 0.79 + noise(where_, 3., 241) * 0.21 - 0.25) / 0.57);
-        let high = match region.kind {
-            Biome::Fjord => 13.,
-            Biome::Terraces => 19.,
-            _ => 18.,
-        };
-        let growth = (grove * 0.39 + if stand { 0.23 } else { 0.035 })
-            * (1. - smooth((p.y - high * 0.58) / high));
-        if !clearing && p.y <= high && coast > 0.81 && (key % 1000) as f32 / 1000. < growth {
+        let (key, p, grove) = (land.key, land.position, land.grove);
+        if land.kind == Some(Material::Wood) {
             let scale = 0.53 + ((key >> 16) % 39) as f32 * 0.021;
             nature::tree(&mut mesh, p - Vec3::Y * 0.055, scale, region.kind, key >> 9);
-        } else if !clearing
-            && (region.rocky(tile) || coast < 0.9 || grove < 0.34)
-            && (key % 100) < if region.rocky(tile) { 35 } else { 22 }
-        {
+        } else if land.kind == Some(Material::Stone) {
             let scale = if p.y > 2.0 { 0.93 } else { 0.54 } + ((key >> 8) % 19) as f32 * 0.036;
             let size = Vec3::new(scale, scale * (0.67 + grove * 0.31), scale * 0.84);
             nature::stone(&mut mesh, p - Vec3::Y * 0.07, size, cliff, key >> 12);
             if key % 3 == 0 {
-                let small = Tile::world_point(where_) + Vec3::new(scale * 0.78, 0., scale * 0.31);
+                let small = p + Vec3::new(scale * 0.78, 0., scale * 0.31);
                 nature::stone(
                     &mut mesh,
                     terrain::on_ground(region, small),
@@ -310,7 +286,7 @@ fn forest_geometry(region: &Region, patch: ForestPatch, occupied: &BTreeSet<Tile
                     key >> 10,
                 );
             }
-        } else if (clearing || coast < 1.6) && !region.rocky(tile) && key % 100 < 21 {
+        } else if land.flowers {
             wildflowers(&mut mesh, region, &palette, p, key);
         }
     }

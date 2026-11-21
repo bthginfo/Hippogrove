@@ -240,6 +240,12 @@ impl Wheel {
                             UiAction::Order(Tool::Hippo, 2),
                             "Ein Feld wählen",
                         ),
+                        slot(
+                            "Dörfer",
+                            7,
+                            UiAction::Panel(Panel::Council),
+                            "Besucher entsenden und um Vertrauen werben",
+                        ),
                     ]
                 }
             }
@@ -269,6 +275,12 @@ impl Wheel {
                             14,
                             UiAction::Do(Action::RecallHelpers),
                             "Sammelaufträge beenden",
+                        ),
+                        slot(
+                            "Dörfer",
+                            7,
+                            UiAction::Panel(Panel::Council),
+                            "Besucher entsenden und um Vertrauen werben",
                         ),
                     ]
                 }

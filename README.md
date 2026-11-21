@@ -2,9 +2,9 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-**[Hippogrove 1.5.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/35256bac5fe0290bae4dff8ca26ebc78ee7d9d39/Hippogrove-1.5.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.5.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/35256bac5fe0290bae4dff8ca26ebc78ee7d9d39/Hippogrove-1.5.0.apk.sha256)
+**[Hippogrove 1.6.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/aaafca9f5cc5ecd0dbe0685863b0c04d5a9d80e8/Hippogrove-1.6.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.6.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/aaafca9f5cc5ecd0dbe0685863b0c04d5a9d80e8/Hippogrove-1.6.0.apk.sha256)
 
-In Version 1.5.0 kannst du dein Nilpferd und die Bewohner zur Ernte, zur Bergung oder zum Inselrat rufen. Gewonnene Dörfer bleiben Handelspartner. Deine Entscheidung am Übergang bestimmt, was sie dir an späteren Spieltagen anbieten.
+In Version 1.6.0 konkurrierst du mit einem entfernten Rivalen um die Dörfer zwischen euren Schreinen. Dein Nilpferd kann jenseits deiner Baugrenze Familien retten und Pilger empfangen. Gläubige können zur selben Zeit ein anderes Dorf besuchen oder deine Kreatur am Dorfplatz unterstützen.
 
 Die signierte Standalone-App braucht Android 8 oder neuer und Vulkan. Die APK unterstützt ARM64 und x86_64. Die frühere Playtest-App und die Standalone-App haben eigene Spielstände.
 
@@ -21,6 +21,39 @@ Wähle im Hauptmenü **Tutorial**. Auf der Übungsinsel führen acht Etappen vom
 Tippe in der Welt auf ein Objekt oder drücke am Controller **R3**. Am Holzstoß kannst du ein Bündel greifen, dein Nilpferd losschicken oder einen freien Dorfbewohner einteilen. Ein fast volles Lager nimmt an, was hineinpasst. Der Rest bleibt in deiner Pfote. Halte direkt auf dem Holz oder auf **Greifen**, um bis zu 18 Einheiten zu nehmen. Ein trockenes Feld bietet Regen an, ein reifes Feld die Ernte. Bei einer Familie oder Hütte kannst du einmal pro Spieltag drei Nahrung teilen. Das bringt zwei Glauben und hebt die Stimmung des Dorfes für diesen Tag. Kosten und Erträge erscheinen am Ort der Aktion.
 
 ![Objektmenü am Holzstoß mit den Aktionen Bündel greifen und Nilpferd sammeln lassen](docs/objektmenue-weidental.jpg)
+
+### Aufträge verfolgen und Rohstoffe erkennen
+
+Im **Questtracker** stehen dein Inselauftrag, der nächste Schritt und die erfüllten Teilziele. Nimmst du im **Tagebuch** eine Dorfbitte an, erscheint sie mit ihrem eigenen Fortschritt darunter. **Zum Ziel** beziehungsweise **L3** führt zum Hauptziel. Für das Ziel der Dorfbitte öffnest du ihren Eintrag im Tagebuch. Hilferufe öffnen sich über die Schaltfläche neben der Restzeit. Du kannst den Tracker direkt einklappen oder mit dem Gamepad unter **Start → Spiel** umschalten. [Auftragsbuch im Spiel](docs/auftragsbuch.jpg)
+
+![Laufender Hauptauftrag und angenommene Dorfbitte im Questtracker des Weidentals](docs/tracker-mit-dorfbitte.jpg)
+
+Frei stehende Bäume und Felsblöcke auf der begehbaren Spielinsel geben Holz und Stein. Tippe auf Krone, Stamm oder Fels. Das Objektmenü zeigt Material und Restmenge. Im Einflussgebiet kann die Pfote bis zu 18 Einheiten auf einmal greifen. Außerhalb kannst du bei offenem Weg einen Sammler schicken. Das Gelände selbst und die Steine im Pflaster sind Landschaft. Abgeerntete Quellen verschwinden und erholen sich mit der Zeit.
+
+### Ein Wohnviertel planen
+
+Öffne **Menü → Stadtplanung**. Du kannst ein bestehendes Haus ansehen oder am Zielpunkt einen Standort prüfen. Beim Platzieren einer Hütte öffnet **Versorgung** dieselbe Vorschau. Dienste erreichen Häuser über höchstens zwölf zusammenhängende Wegfelder. Eine Lücke in der Straße unterbricht die Versorgung.
+
+| Bedürfnis | Gebäude und Voraussetzung |
+| --- | --- |
+| Trinkwasser | Brunnen oder Badehaus am verbundenen Weg |
+| Lebensmittel | Markt oder Bäckerei am Weg und mindestens vier Nahrung im Insellager |
+| Gemeinschaft | Schrein, Tempel, Theater, Halle oder Schenke am Weg |
+
+![Wohnviertel mit drei Bedürfnissen, den fehlenden Gebäuden und passenden Bauplänen](docs/hausversorgung.jpg)
+
+**Bauplan** öffnet ein passendes Gebäude. **Zeigen** führt zum bestehenden Dienstgebäude. Eine ausgebaute Hütte mit allen drei Leistungen kann für sechs Holz, vier Stein und vier Nahrung das **Bürgerrecht** erhalten. Das schafft einen Wohnplatz. Ein vollständig versorgtes Bürgerhaus verbraucht anschließend je Versorgungsrunde eine Nahrung und bringt zwei Glauben. Knappheit oder eine unterbrochene Straße setzen diese Einnahme aus. Im freien Bauen ist das Verleihen des Bürgerrechts kostenlos.
+
+### Um die Nachbardörfer spielen
+
+Öffne **Dörfer** und wähle ein neutrales Dorf. Am Controller erreichst du die Übersicht mit **RB/R1 → Dörfer**, wenn die Hand aktiv ist, oder über **Start → Nachbardörfer**. Die Karte zeigt deine Heimat, die Dorfplätze und den Sitz des Rivalen. Im ersten, zweiten und dritten Kapitel jeder Themenkampagne beginnen vier, fünf und sechs Dörfer neutral.
+
+![Dorfübersicht im Weidental mit Karte, vier anwählbaren Dorfplätzen und dem Ziel von drei Verbündeten](docs/dorfkarte.jpg)
+
+- **Besuchen.** Schicke dein Nilpferd, einen Gläubigen oder beide. Sie können die Furten vor der Brückenreparatur überqueren. Am Platz gewinnt dein Nilpferd pro Spielsekunde fünf Vertrauen, ein Gläubiger dreieinhalb. Ein gegnerischer Gesandter gewinnt dort vier für seine Seite. Du kannst beide Besucher zusammen einsetzen oder zwei Dörfer gleichzeitig umwerben.
+- **Helfen.** Ein Hilferuf bleibt 100 Spielsekunden offen. Über **Zum Hilferuf** siehst du, wer vor Ort gebraucht wird und was der Einsatz kostet. Im Weidental kann dein Nilpferd etwa für 18 Kraft Familien vor dem Hochwasser retten. Ein Gläubiger kann stattdessen vier Einheiten des angezeigten Materials einsetzen. Beide Wege bringen vier Glauben. Die Rettung mit der Kreatur bringt bis zu 55 Vertrauen, die Hilfe durch einen Gläubigen bis zu 35 und halbiert den Einfluss des Gesandten für 60 Sekunden.
+- **Pilger empfangen.** Wähle ein fremdes oder neutrales Dorf und öffne **Pilgerzüge**. Ein eigenes Dorf mit mindestens 50 Prozent Bindung kann den Zug entsenden. Es gibt 20 Bindung ab und braucht danach 55 Sekunden Ruhe. Vier Nahrung finanzieren den Weg. Die Ankunft bringt bis zu 30 Vertrauen. Empfängt dein Nilpferd oder ein Gläubiger die Pilger am Ziel, sind es bis zu 55.
+- **Gebiet gewinnen und halten.** Bei 100 Vertrauen schließt sich das Dorf deiner Seite an. Du kannst in seiner Umgebung bauen und bekommst bei freiem Lagerplatz alle 40 Spielsekunden zwei Einheiten seiner Ware. Sinkt die Bindung auf null, wird es wieder neutral. Hast du die Mehrheit, kannst du selbst **Inselbund schließen** wählen und das nächste Kapitel freischalten. Hält der Rivale die Mehrheit 75 Sekunden, fordert er bei Lieferungen bis zu zwei Einheiten Tribut. Sobald du ihm die Mehrheit nimmst, endet der Tribut.
 
 ### Mit dem Dorf spielen
 
@@ -113,10 +146,10 @@ Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus W
 
 ## Geprüfter Stand
 
-Die 47 Rust-Tests für 1.5.0 waren erfolgreich. Sie prüfen unter anderem den Dorfruf in allen fünf Themenkampagnen, die Abrechnung bei knappem Lagerplatz, den Handel nach dem Laden eines Spielstands und die Entscheidung zwischen Vertrauen und Einschüchterung.
+Für Version 1.6.0 bestanden 55 Rust-Tests. In allen 15 Themenkapiteln wurden die Entfernung der Startsitze und die erreichbaren Wege zu jedem Nachbardorf vor dem Brückenbau geprüft. Weitere Tests spielen Rückeroberung, Inselbund, Tribut, beide Hilfswege sowie einen gespeicherten Pilgerzug mit und ohne persönlichen Empfang durch.
 
-Mit virtuellem Gamepad wurden ein Holzzug am Eichenpass, ein Machtruf im Grenzkonflikt der Chronik und eine Ernte im abgeschlossenen Weidental gespielt. In Weidenhain ließen sich vier Flussstein gegen acht Waldbeeren tauschen. Die Dorfchronik hielt den Tausch fest. In einem weiteren Durchlauf ließen sich Hausbau, Ernte, Übergang, beide Bündnisse und die Überfahrt zum Eichenpass mit dem virtuellen Gamepad abschließen.
+Im gerenderten Spiel mit virtuellem Gamepad besuchten Nilpferd und Gläubiger Lindenau. Der Rivale gewann währenddessen Hirschquell. In einem weiteren Durchlauf rettete das Nilpferd Familien beim Hochwasser. Anschließend empfing es den Pilgerzug aus Lindenau in Weidenhain und gewann dort 55 Vertrauen. Der Questtracker zeigte nach der Annahme der Dorfbitte den fehlenden Brunnen am Weg. Die Stadtplanung führte vom ersten Haus zu den passenden Bauplänen.
 
-Auf Android 15 wurde die signierte Standalone-App über Version 1.4.0 installiert. Die vorhandene Speicherdatei blieb bytegleich. Im Emulator kamen auf der abgeschlossenen Insel per Touch vier Figuren zum Erntetanz zusammen und brachten zehn Nahrung ein. Ein Test auf einem physischen Galaxy Tab S9 FE+ mit angeschlossenem Controller steht aus.
+Auf dem Android-15-Emulator wurde die signierte APK über die Standalone-Version 1.5.0 installiert. Die bestehende Speicherdatei blieb beim Update bytegleich. Ein älteres Weidental ließ sich fortsetzen. Ein Vorher-nachher-Vergleich desselben Dorfrats zeigt, dass die Abdunklung jetzt auch den unteren Android-Gestenbereich erreicht. Tagebuch und Wohnviertel ließen sich im gerenderten Spiel bei 640 × 360 und 512 × 288 Pixeln mit virtuellem Controller bedienen. Ein Test auf einem physischen Galaxy Tab S9 FE+ mit angeschlossenem Controller steht aus.
 
 Die Rust-Tests spielen den Friedensweg durch die 15 Themenkapitel sowie die fünf Kapitel der Chronik und den Kampfweg im Weidental. Sie prüfen auch die Forschungs- und Produktionsketten, Geburten, Patrouillen, Wunder, die Menüführung und die Übernahme älterer Spielstände. [Spielaufnahmen und Prüfungen für 1.0](docs/V1.md) · [Stadtentwicklung](docs/Stadtentwicklung.md)

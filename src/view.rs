@@ -1,4 +1,5 @@
 pub(crate) mod festival;
+pub(crate) mod visits;
 use bevy::{
     core_pipeline::{fxaa::Fxaa, tonemapping::Tonemapping},
     pbr::DistanceFog,
@@ -29,6 +30,8 @@ pub struct Board {
     boundary: Option<([bool; 5], Entity)>,
     boundary_anchors: usize,
     boundary_camps: [bool; AREA_COUNT],
+    village_mask: u16,
+    empty_wild: Vec<Tile>,
     roads: Option<(usize, Entity)>,
     city_decor: Option<(Tone, usize, Entity)>,
     opening_farm: Option<(bool, Entity)>,
@@ -75,6 +78,7 @@ pub struct RivalWarning;
 pub enum Banner {
     Rival(Option<usize>),
     Camp(usize),
+    Village(usize),
 }
 
 #[derive(Component)]
@@ -795,7 +799,7 @@ pub fn sync_board(
             .with_children(|parent| {
                 art::landscape(parent, &mut meshes, &art, region, city);
                 crate::life::spawn(parent, &art, region);
-                for (index, source) in region.sources.iter().enumerate() {
+                for (index, source) in region.sources[..region.managed_sources].iter().enumerate() {
                     let p = grounded(source.tile);
                     let yaw =
                         (terrain::hash(source.tile.0, source.tile.1, 115) % 69) as f32 * 0.092;
@@ -857,7 +861,8 @@ pub fn sync_board(
                             camp.commands().entity(flag).insert(Banner::Camp(index));
                         });
                 }
-                let neighbors = std::iter::once(region.rival_shrine)
+                visits::populate(parent, &art, region, city);
+                let neighbors = std::iter::once(region.rival_home())
                     .chain(region.districts.iter().map(|district| district.center))
                     .filter(|_| !region.tutorial);
                 for p in std::iter::once(region.start).chain(neighbors) {
@@ -924,9 +929,10 @@ pub fn sync_board(
                         }
                         art::parcel(p, &art, Material::Food, Vec3::new(0., 0.25, 0.), 0.8);
                     });
-                for tile in region
-                    .rival_buildings()
+                let seat = region.rival_home();
+                for tile in [seat.offset(-3, -1), seat.offset(3, 1)]
                     .into_iter()
+                    .filter(|&p| !region.water(p) && !region.rocky(p))
                     .filter(|_| !region.tutorial)
                 {
                     parent
@@ -969,9 +975,9 @@ pub fn sync_board(
                 if region.has_rival_creature() {
                     let lair = region.rival_lair();
                     let leader = [
-                        region.rival_shrine.offset(-1, 0),
-                        region.rival_shrine.offset(1, 0),
-                        region.rival_shrine.offset(0, -1),
+                        region.rival_home().offset(-1, 0),
+                        region.rival_home().offset(1, 0),
+                        region.rival_home().offset(0, -1),
                     ]
                     .into_iter()
                     .find(|&tile| {
@@ -980,7 +986,7 @@ pub fn sync_board(
                             && !region.rocky(tile)
                             && !region.fixed_structure(tile)
                     })
-                    .unwrap_or(region.rival_shrine.offset(0, 1));
+                    .unwrap_or(region.rival_home().offset(0, 1));
                     parent
                         .spawn((
                             Transform::from_translation(grounded(leader))
@@ -1087,8 +1093,17 @@ pub fn sync_board(
         city.districts[0].outcome.is_some(),
         city.districts[1].outcome.is_some(),
     ];
+    let mask = city
+        .contest
+        .towns
+        .iter()
+        .enumerate()
+        .fold(0u16, |bits, (i, t)| {
+            bits | (u16::from(t.side == crate::game::Allegiance::Ours) << i)
+        });
     if board.boundary.as_ref().is_none_or(|(previous, _)| {
         *previous != flags
+            || board.village_mask != mask
             || board.boundary_anchors != city.count(Building::Waystone)
             || board.boundary_camps != city.camps
     }) {
@@ -1105,6 +1120,7 @@ pub fn sync_board(
                 bevy::pbr::NotShadowCaster,
             ))
             .id();
+        board.village_mask = mask;
         board.boundary = Some((flags, entity));
         board.boundary_anchors = city.count(Building::Waystone);
         board.boundary_camps = city.camps;
@@ -1123,13 +1139,35 @@ pub fn sync_board(
             .with_children(|parent| {
                 art::bridge(parent, &art, region, region.cross_x, city.bridge_fixed);
                 for column in region.crossings {
-                    art::bridge(parent, &art, region, column, city.bridge_fixed);
+                    if !city.bridge_fixed && column != region.cross_x {
+                        let bank = region.river_at(column);
+                        for z in bank..bank + region.river_span(column) {
+                            let at = Tile(column, z).world();
+                            block(
+                                parent,
+                                &art,
+                                &art.limestone,
+                                at.with_y(0.04),
+                                Vec3::new(0.90, 0.20, 0.8),
+                            );
+                        }
+                    } else {
+                        art::bridge(parent, &art, region, column, city.bridge_fixed);
+                    }
                 }
             })
             .id();
         board.bridge = Some((city.bridge_fixed, entity));
     }
-    if board.buildings != city.buildings.len()
+    let empty_wild: Vec<_> = city.nodes[region.managed_sources..]
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| **n == 0)
+        .map(|(i, _)| region.sources[region.managed_sources + i].tile)
+        .collect();
+    let wild_changed = empty_wild != board.empty_wild;
+    if wild_changed
+        || board.buildings != city.buildings.len()
         || board.roads.map_or(0, |(count, _)| count) != city.roads.len()
     {
         let previous_roads = board.roads.map_or(0, |(count, _)| count);
@@ -1144,11 +1182,18 @@ pub fn sync_board(
                         .tiles(site.tile)
                         .any(|tile| patch.0.contains(tile))
                 });
-            if changed {
+            if changed
+                || (wild_changed
+                    && empty_wild
+                        .iter()
+                        .chain(&board.empty_wild)
+                        .any(|&t| patch.0.contains(t)))
+            {
                 mesh.0 = meshes.add(art::forest_mesh(region, *patch, city));
             }
         }
     }
+    board.empty_wild = empty_wild;
     if !city.roads.is_empty()
         && board
             .roads
@@ -1362,7 +1407,8 @@ pub fn props(
                 }
                 pose.translation = location;
             }
-            city.guards.get(guard.0).is_some_and(|&spirit| spirit > 0)
+            city.quest == Quest::Bridge
+                && city.guards.get(guard.0).is_some_and(|&spirit| spirit > 0)
         } else if let Some(crop) = crop {
             let scale = match city.buildings.get(crop.0).map(|site| site.crop) {
                 Some(Crop::Growing(remaining)) => (1. - remaining / 11.).clamp(0.24, 0.98),
@@ -1399,6 +1445,8 @@ pub fn props(
         surface.0 = match *flag {
             Banner::Camp(index) if city.camps[index] => art.gold.clone(),
             Banner::Camp(_) => art.blue.clone(),
+            Banner::Village(i) => visits::color(&art, city.contest.towns[i].side),
+            Banner::Rival(Some(i)) => visits::color(&art, city.contest.towns[i].side),
             Banner::Rival(district) => {
                 let outcome = district.map_or(city.outcome, |i| city.districts[i].outcome);
                 match outcome {
@@ -1445,7 +1493,17 @@ pub fn animate(
                 .iter()
                 .any(|(i, t)| *i == meta.index && *t == walker.tile() && walker.route.is_empty())
         });
-        let heading = if let Some(c) = in_circle {
+        let visiting = if let Some(crate::game::Job::Visit(i)) = walker.job {
+            region
+                .villages
+                .get(i)
+                .filter(|_| city.visiting(walker, region, i))
+        } else {
+            None
+        };
+        let heading = if let Some(v) = visiting {
+            (v.center.world() - walker.world()).with_y(0.)
+        } else if let Some(c) = in_circle {
             (c.center.world() - walker.world()).with_y(0.)
         } else if looking {
             (region.depot.world() - pose.translation).with_y(0.)
@@ -1477,7 +1535,14 @@ pub fn animate(
             0.
         };
         pose.rotation = meta.facing
-            * Quat::from_rotation_x(bow + relax * 0.14 + if looking { 0.16 } else { 0. })
+            * Quat::from_rotation_x(
+                bow + if visiting.is_some() {
+                    0.11 * (1. + (time.elapsed_secs() * 3.2).sin())
+                } else {
+                    0.
+                } + relax * 0.14
+                    + if looking { 0.16 } else { 0. },
+            )
             * Quat::from_rotation_z(relax * 0.10);
         let now = time.elapsed_secs();
         let celebrating = play

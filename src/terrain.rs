@@ -138,6 +138,9 @@ pub fn bridge_height(region: &Region, column: i16, z: f32) -> f32 {
 pub fn actor_height(region: &Region, world: Vec3, bridge_fixed: bool) -> f32 {
     let ground = height(region, world);
     let tile = Tile::from_world(world);
+    if region.ford(tile) && !bridge_fixed {
+        return ground.max(0.08);
+    }
     if bridge_fixed && region.crossing(tile) {
         let coordinates = Tile::coordinates(world);
         let bank = f32::from(region.river_at(tile.0)) - 0.5;
@@ -222,4 +225,76 @@ mod tests {
             assert!((ray_contact(&region, ray, true).unwrap().y - walking).abs() < 0.0005);
         }
     }
+}
+
+/// One deterministic placement is shared by picking, saving and the batched landscape mesh.
+pub struct WildLand {
+    pub key: u32,
+    pub position: Vec3,
+    pub grove: f32,
+    pub kind: Option<crate::region::Material>,
+    pub flowers: bool,
+}
+pub fn wild_land(region: &Region, tile: Tile) -> Option<WildLand> {
+    use crate::region::{Biome, Material};
+    if region.water(tile)
+        || region.road(tile)
+        || region.fixed_structure(tile)
+        || region.source_at(tile).is_some()
+        || region
+            .villages
+            .iter()
+            .any(|v| v.center == tile || v.houses.contains(&tile))
+    {
+        return None;
+    }
+    let key = hash(tile.0, tile.1, 171);
+    let where_ = tile.local()
+        + Vec2::new(
+            ((key & 15) as f32 - 7.) * 0.051,
+            (((key >> 4) & 15) as f32 - 7.) * 0.051,
+        );
+    let point = Tile::world_point(where_);
+    let coast = shore(region, where_);
+    if coast < 0.24 {
+        return None;
+    }
+    let p = point.with_y(surface_height(region, where_, coast).max(WATER));
+    let clearing = tile.within(region.start, 5)
+        || tile.within(region.frontier, 4)
+        || tile.within(region.rival_shrine, 4)
+        || region
+            .districts
+            .iter()
+            .any(|district| tile.within(district.center, 5));
+    let stand = region
+        .areas
+        .iter()
+        .any(|area| area.material == Material::Wood && tile.within(area.center, 12));
+    let grove =
+        smooth((noise(where_, 8.3, 154) * 0.79 + noise(where_, 3., 241) * 0.21 - 0.25) / 0.57);
+    let high = match region.kind {
+        Biome::Fjord => 13.,
+        Biome::Terraces => 19.,
+        _ => 18.,
+    };
+    let growth = (grove * 0.39 + if stand { 0.23 } else { 0.035 })
+        * (1. - smooth((p.y - high * 0.58) / high));
+    let kind = if !clearing && p.y <= high && coast > 0.81 && (key % 1000) as f32 / 1000. < growth {
+        Some(Material::Wood)
+    } else if !clearing
+        && (region.rocky(tile) || coast < 0.9 || grove < 0.34)
+        && key % 100 < if region.rocky(tile) { 35 } else { 22 }
+    {
+        Some(Material::Stone)
+    } else {
+        None
+    };
+    Some(WildLand {
+        key,
+        position: p,
+        grove,
+        kind,
+        flowers: (clearing || coast < 1.6) && !region.rocky(tile) && key % 100 < 21,
+    })
 }

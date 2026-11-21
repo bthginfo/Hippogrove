@@ -1,3 +1,4 @@
+use crate::region::Material;
 use crate::{
     game::{Action, Building, Crop, Game, Miracle},
     play::{Panel, Play, Target, Tool, UiAction},
@@ -40,7 +41,7 @@ impl ObjectMenu {
         };
         let guide = Choice::new("Auftragsziel zeigen", UiAction::Guide, 14);
         let primary = Choice::new(target.label, UiAction::Confirm, 5);
-        let source = region.source_at(tile);
+        let source = city.harvest_at(region, tile);
         let site = city.building_at(tile);
         let family = city
             .walkers
@@ -136,7 +137,25 @@ impl ObjectMenu {
             ));
         } else if let Some(i) = source {
             let material = region.sources[i].material;
-            menu.title = region.kind.material(material).into();
+            let raw = region.kind.material(material);
+            menu.title = if i >= region.managed_sources {
+                format!(
+                    "{} · {raw}",
+                    if material == Material::Wood {
+                        "Baum"
+                    } else {
+                        "Felsblock"
+                    }
+                )
+            } else {
+                raw.into()
+            };
+            if !city.influence(region, tile) && city.nodes[i] > 0 {
+                menu.detail = format!(
+                    "{} verfügbar · außerhalb der Pfote. Schicke einen Sammler.",
+                    city.nodes[i]
+                );
+            }
             if target.legal {
                 menu.detail = format!("{} verfügbar · Halten greift bis zu 18", city.nodes[i]);
             }
@@ -146,13 +165,15 @@ impl ObjectMenu {
                     UiAction::Do(Action::Hand(tile)),
                     material.index(),
                 ));
+            }
+            if city.nodes[i] > 0 {
                 menu.choices.push(Choice::new(
                     "Nilpferd sammeln lassen",
                     UiAction::Do(Action::Assign(tile, true)),
                     8,
                 ));
             }
-            if city.idle_helper() && city.influence(region, tile) && city.nodes[i] > 0 {
+            if city.idle_helper() && city.nodes[i] > 0 {
                 menu.choices.push(Choice::new(
                     "Dorfbewohner einteilen",
                     UiAction::Do(Action::Assign(tile, false)),
@@ -177,6 +198,11 @@ impl ObjectMenu {
         } else if let Some(index) = region.district_at(tile) {
             let district = &region.districts[index];
             menu.title = district.name.clone();
+            menu.choices.push(Choice::new(
+                "Dorfrat und Besucher",
+                UiAction::Panel(Panel::Village(index)),
+                7,
+            ));
             if city.has_trading_partner(region, index) {
                 let offer = city.trade_offer(region, index);
                 menu.detail = city

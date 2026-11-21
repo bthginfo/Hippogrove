@@ -112,7 +112,10 @@ impl Settlement {
                 .iter()
                 .enumerate()
                 .filter(|(i, s)| {
-                    s.material == mat && self.nodes[*i] > 0 && self.influence(region, s.tile)
+                    s.material == mat
+                        && self.nodes[*i] > 0
+                        && self.influence(region, s.tile)
+                        && self.harvest_at(region, s.tile) == Some(*i)
                 })
                 .min_by_key(|(_, s)| s.tile.distance(near))
                 .map(|(_, s)| s.tile)
@@ -253,8 +256,8 @@ impl Settlement {
         let result = if let Some(material) = kind.material() {
             let i = material.index();
             let limit = (3 * power).min(self.storage_cap().saturating_sub(self.stock[i]));
-            let source = region
-                .source_at(center)
+            let source = self
+                .harvest_at(region, center)
                 .filter(|&n| region.sources[n].material == material)
                 .ok_or("An diesem Platz gibt es keine passende Quelle.")?;
             let total = limit.min(self.nodes[source]);
@@ -374,7 +377,7 @@ mod tests {
             let saved = serde_json::to_vec(&game.saved_games()).unwrap();
             let mut game = Game::resume(serde_json::from_slice(&saved).unwrap()).unwrap();
             let center = game.city().gatherings.circle.as_ref().unwrap().center;
-            let source = game.region().source_at(center).unwrap();
+            let source = game.city().harvest_at(game.region(), center).unwrap();
             let city = game.city();
             let mut nodes = city.nodes.clone();
             let stock = city.stock[0];

@@ -7,9 +7,11 @@ use crate::{modes::Layout, quests::CampaignQuests, terrain};
 
 mod geography;
 mod islands;
+mod villages;
 use geography::Geography;
 pub use geography::WorldLayout;
 use islands::Islands;
+pub use villages::Village;
 
 const ORIGIN: Vec2 = Vec2::new(17., 13.);
 pub const CELL: f32 = 1.65;
@@ -17,6 +19,7 @@ const WET: u8 = 1;
 const ROCK: u8 = 2;
 const CROSSING: u8 = 4;
 const OCCUPIED: u8 = 8;
+const FORD: u8 = 16;
 pub const AREA_COUNT: usize = 3;
 pub const AREA_RADIUS: i16 = 8;
 
@@ -291,9 +294,17 @@ pub struct Region {
     pub sources: Vec<Source>,
     pub districts: [District; 2],
     #[serde(skip)]
+    pub villages: Vec<Village>,
+    #[serde(skip)]
+    rival_seat: Option<Tile>,
+    #[serde(skip)]
     original_bounds: Option<Bounds>,
     #[serde(skip)]
     pub original_sources: usize,
+    #[serde(skip)]
+    pub managed_sources: usize,
+    #[serde(skip)]
+    wild_grid: Vec<u16>,
     #[serde(skip)]
     pub ridges: Vec<Ridgeline>,
     #[serde(skip)]
@@ -333,6 +344,7 @@ impl Region {
         assert_eq!(regions.len(), frontiers.len());
         for (region, frontier) in regions.iter_mut().zip(frontiers) {
             region.extend(frontier, WorldLayout::Classic);
+            region.index_wild_land();
         }
         regions
     }
@@ -370,6 +382,7 @@ impl Region {
         .collect();
         region.original_sources = region.sources.len();
         region.cache_terrain();
+        region.index_wild_land();
         region
     }
 
@@ -429,6 +442,7 @@ impl Region {
         if stage > 0 || world_layout != WorldLayout::Classic {
             region.keep_starter_plots_clear();
         }
+        region.index_wild_land();
         region
     }
 
@@ -512,9 +526,9 @@ impl Region {
         let offset = if self.layout.mirror { -1 } else { 1 };
         [(2, -1), (-2, 1), (1, -2), (-1, 0), (0, 2)]
             .into_iter()
-            .map(|(x, z)| self.rival_shrine.offset(x * offset, z))
+            .map(|(x, z)| self.rival_home().offset(x * offset, z))
             .find(|&tile| !self.water(tile) && !self.rocky(tile) && !self.fixed_structure(tile))
-            .unwrap_or(self.rival_shrine)
+            .unwrap_or(self.rival_home())
     }
 
     fn extend(&mut self, frontier: Frontier, world_layout: WorldLayout) {
@@ -602,6 +616,63 @@ impl Region {
                 self.add_source(tile, material);
             }
         }
+        self.lay_out_villages(&accessible);
+    }
+
+    fn index_wild_land(&mut self) {
+        self.managed_sources = self.sources.len();
+        self.wild_grid = vec![0; self.bounds.len()];
+        let mut walk = self.walk_grid(true);
+        if let Some(i) = self.opening_farm().and_then(|t| self.bounds.index(t)) {
+            walk[i] = false;
+        }
+        for (&site, kind) in self.starter_plots.iter().zip([
+            crate::game::Building::House,
+            crate::game::Building::Store,
+            crate::game::Building::Field,
+        ]) {
+            for t in kind.tiles(site) {
+                if let Some(i) = self.bounds.index(t) {
+                    walk[i] = false;
+                }
+            }
+        }
+        let mut reach = vec![false; self.bounds.len()];
+        let mut queue = VecDeque::from([self.depot.offset(0, 1)]);
+        while let Some(t) = queue.pop_front() {
+            let Some(i) = self.bounds.index(t) else {
+                continue;
+            };
+            if reach[i] || !walk[i] {
+                continue;
+            }
+            reach[i] = true;
+            queue.extend(t.neighbors());
+        }
+        for (cell, tile) in self.bounds.tiles().enumerate() {
+            if !tile
+                .neighbors()
+                .into_iter()
+                .any(|t| self.bounds.index(t).is_some_and(|i| reach[i]))
+            {
+                continue;
+            }
+            let Some(material) = terrain::wild_land(self, tile).and_then(|w| w.kind) else {
+                continue;
+            };
+            let stock = 12 + (terrain::hash(tile.0, tile.1, 805) % 13) as u16;
+            self.sources.push(Source {
+                tile,
+                material,
+                stock,
+            });
+            self.wild_grid[cell] =
+                u16::try_from(self.sources.len()).expect("Island fits the source index");
+        }
+    }
+    pub fn wild_index(&self, tile: Tile) -> Option<usize> {
+        let cell = self.bounds.index(tile)?;
+        self.wild_grid.get(cell)?.checked_sub(1).map(usize::from)
     }
 
     fn cache_terrain(&mut self) {
@@ -612,6 +683,7 @@ impl Region {
                 let wet = self.sample_water(tile);
                 u8::from(wet) * WET
                     | u8::from(self.sample_rock(tile)) * ROCK
+                    | u8::from(wet && self.ford(tile)) * FORD
                     | u8::from(wet && self.bridge_cell(tile)) * CROSSING
                     | u8::from(self.fixed_structure(tile)) * OCCUPIED
             })
@@ -664,15 +736,19 @@ impl Region {
     }
 
     pub fn walk_grid(&self, bridge_fixed: bool) -> Vec<bool> {
+        self.route_grid(bridge_fixed, false)
+    }
+    pub fn route_grid(&self, bridge_fixed: bool, pilgrims: bool) -> Vec<bool> {
         self.cells
             .iter()
-            .map(|&cell| {
-                cell & (ROCK | OCCUPIED) == 0
-                    && (cell & WET == 0 || (bridge_fixed && cell & CROSSING != 0))
+            .map(|&c| {
+                c & (ROCK | OCCUPIED) == 0
+                    && (c & WET == 0
+                        || (pilgrims && c & FORD != 0)
+                        || (bridge_fixed && c & CROSSING != 0))
             })
             .collect()
     }
-
     pub fn area_at(&self, tile: Tile) -> Option<usize> {
         self.areas.iter().position(|area| area.center == tile)
     }
@@ -683,10 +759,13 @@ impl Region {
         material: Material,
     ) -> impl Iterator<Item = (usize, &Source)> {
         let center = self.areas.get(area).map(|area| area.center);
-        self.sources.iter().enumerate().filter(move |(_, source)| {
-            source.material == material
-                && center.is_some_and(|center| source.tile.within(center, AREA_RADIUS))
-        })
+        self.sources[..self.managed_sources]
+            .iter()
+            .enumerate()
+            .filter(move |(_, source)| {
+                source.material == material
+                    && center.is_some_and(|center| source.tile.within(center, AREA_RADIUS))
+            })
     }
 
     pub fn weather(&self, time: f32) -> Weather {
@@ -854,6 +933,12 @@ impl Region {
         !self.tutorial && (tile.0 == self.cross_x || self.crossings.contains(&tile.0))
     }
 
+    pub fn ford(&self, tile: Tile) -> bool {
+        !self.tutorial
+            && tile.0 != self.cross_x
+            && self.crossings.contains(&tile.0)
+            && self.in_channel(tile)
+    }
     pub fn bridge_cell(&self, tile: Tile) -> bool {
         self.crossing(tile) && self.in_channel(tile)
     }
