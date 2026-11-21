@@ -2,6 +2,8 @@
 mod quests_ui;
 #[path = "hud_neighborhood.rs"]
 mod town_ui;
+#[path = "hud_work.rs"]
+mod works;
 pub(crate) use quests_ui::update_meter;
 #[path = "hud_villages.rs"]
 mod villages;
@@ -77,10 +79,10 @@ pub(crate) enum Label {
     Quest,
     QuestCount,
     SideTrack,
+    WorkHint,
     Notice,
     Confirm,
     Detail,
-    Progress,
     Rival,
     District(usize),
     DistrictBrief(usize),
@@ -154,6 +156,9 @@ struct Layout {
     quest: Quest,
     side_quest: SideQuest,
     folded: bool,
+    work_stage: crate::game::WorkStage,
+    work_pinned: bool,
+    work_paid: u16,
     appeal: Option<usize>,
     mix: Option<Mix>,
     campaign_complete: bool,
@@ -187,6 +192,7 @@ pub struct Hud {
     atlas: Handle<TextureAtlasLayout>,
     map: Option<((Mode, usize), Handle<Image>)>,
     world_art: Handle<Image>,
+    work_art: [Handle<Image>; 5],
     world_cards: Handle<TextureAtlasLayout>,
     building_art: [Handle<Image>; Biome::ALL.len()],
     building_cards: Handle<TextureAtlasLayout>,
@@ -198,6 +204,8 @@ pub fn setup(
     assets: Res<AssetServer>,
     mut atlases: ResMut<Assets<TextureAtlasLayout>>,
 ) {
+    hud.work_art = ["valley", "fjord", "terraces", "lake", "aegean"]
+        .map(|s| assets.load(format!("embedded://ui/works/{s}.png")));
     hud.regular = assets.load("embedded://fonts/DMSans-Medium.ttf");
     hud.bold = assets.load("embedded://fonts/DMSans-Bold.ttf");
     commands.spawn((
@@ -994,9 +1002,10 @@ fn island_agenda(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layo
             ..default()
         })
         .with_children(|bar| {
-            if !game.region().sandbox
-                && (game.city().quest != Quest::Complete
-                    || matches!(layout.side_quest, SideQuest::Active | SideQuest::Ready))
+            if layout.work_pinned
+                || (!game.region().sandbox
+                    && (game.city().quest != Quest::Complete
+                        || matches!(layout.side_quest, SideQuest::Active | SideQuest::Ready)))
             {
                 quests_ui::tracker(bar, hud, game, layout);
             } else {
@@ -1927,6 +1936,7 @@ fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
     }
     let items: &[(&str, Panel, usize)] = match layout.menu_page {
         1 => &[
+            ("Inselwerk", Panel::Work, 12),
             ("Stadtplanung", Panel::Town(0), 6),
             ("Gebäude", Panel::Catalog, 6),
             ("Forschung", Panel::Research, 13),
@@ -1941,6 +1951,7 @@ fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
             ("Spielmodi", Panel::Modes, 10),
         ],
         _ => &[
+            ("Inselwerk", Panel::Work, 12),
             ("Stadtplanung", Panel::Town(0), 6),
             ("Nachbardörfer", Panel::Council, 7),
             ("Landkarte", Panel::Map, 10),
@@ -1954,7 +1965,10 @@ fn menu_panel(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layout:
     parent.spawn(grid).with_children(|links| {
         for &(name, panel, icon) in items {
             if game.region().tutorial
-                && matches!(panel, Panel::Council | Panel::Gathering | Panel::VillageLog)
+                && matches!(
+                    panel,
+                    Panel::Council | Panel::Gathering | Panel::VillageLog | Panel::Work
+                )
             {
                 continue;
             }
@@ -2676,6 +2690,24 @@ fn quest_journal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, layo
                 ..compact
             },
         );
+        if !region.tutorial {
+            styled_button(
+                actions,
+                hud,
+                if city.work.pinned {
+                    "Mein Inselwerk"
+                } else {
+                    "Inselwerk"
+                },
+                UiAction::Panel(Panel::Work),
+                false,
+                false,
+                ButtonStyle {
+                    icon: Some(12),
+                    ..compact
+                },
+            );
+        }
         if !region.tutorial {
             styled_button(
                 actions,
@@ -4165,6 +4197,10 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             && matches!(
                 play.panel,
                 Panel::MainMenu
+                    | Panel::Work
+                    | Panel::Dedication
+                    | Panel::Talent(_)
+                    | Panel::Progress
                     | Panel::Graduation
                     | Panel::Briefing
                     | Panel::Gathering
@@ -4206,6 +4242,10 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 modal_header(box_node, hud, match play.panel {
                     Panel::Town(_) => "Stadtplanung",
                     Panel::Household(t) => if city.building_at(t).is_some_and(|s|s.kind==Building::House) {"Wohnviertel"} else {"Standortprüfung"},
+                    Panel::Work=>"Inselwerk",
+                    Panel::Dedication=>"Das Werk widmen",
+                    Panel::Talent(_)=> "Zauberschule",
+                    Panel::Progress=>"Dein Fortschritt",
                     Panel::Council => "Dörfer der Insel",
                     Panel::Village(i) | Panel::Projects(i) => &region.villages[i].name,
                     Panel::Map => "Landkarte",
@@ -4287,17 +4327,10 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
                 Panel::Inspection => inspection_panel(box_node,hud,game,play,layout.short),
                 Panel::Inventory => inventory_panel(box_node, hud, layout, region.kind),
                 Panel::Modes => mode_panel(box_node, hud, game, layout),
-                Panel::Progress => {
-                    text(box_node,hud,"Gott, Siedlung und Kreatur",31.,INK);
-                    label(box_node,hud,Label::Progress,17.,MUTED);
-                    box_node.spawn(row()).with_children(|talents| {
-                        for talent in Talent::ALL {
-                            button(talents,hud,&format!("{} {}/2",talent.name(),game.campaign.gifts.rank(talent)),UiAction::Do(Action::Learn(talent)),false,false);
-                        }
-                        button(talents,hud,"Forschung",UiAction::Panel(Panel::Research),false,false);
-                    });
-                    text(box_node,hud,"Aufträge geben Talentpunkte. Das Nilpferd lernt mit Lob nach erledigter Arbeit. Wache auf Rang 2, Feldpflege auf Rang 3.",17.,INK);
-                }
+                Panel::Progress=>works::progress(box_node,hud,game,layout.short),
+                Panel::Talent(t)=>works::talents(box_node,hud,game,t,layout.short),
+                Panel::Work=>works::panel(box_node,hud,game,layout.short),
+                Panel::Dedication=>works::dedication(box_node,hud,game,layout.short),
                 Panel::Town(page) => town_ui::atlas(box_node,hud,game,page,play.aim,layout.short),
                 Panel::Household(tile) => town_ui::home(box_node,hud,game,tile,layout.short),
                 Panel::Quests => quest_journal(box_node, hud, game, layout),
@@ -4308,7 +4341,7 @@ fn modal(parent: &mut ChildSpawnerCommands, hud: &Hud, game: &Game, play: &Play,
             if !matches!(play.panel, Panel::MainMenu | Panel::Controls | Panel::Map | Panel::FirstDelivery | Panel::Modes | Panel::Catalog | Panel::Inspection) && !layout.narrow_modal {
                 feedback_toast(box_node, hud, Node::default(), false);
             }
-            if layout.gamepad && !layout.narrow_modal && !matches!(play.panel, Panel::Controls | Panel::Catalog | Panel::Inspection | Panel::Quests | Panel::SideQuest | Panel::Graduation | Panel::Departure | Panel::Briefing | Panel::Village(_) | Panel::Projects(_) | Panel::Town(_) | Panel::Household(_) | Panel::Council) {
+            if layout.gamepad && !layout.narrow_modal && !matches!(play.panel, Panel::Work | Panel::Progress|Panel::Talent(_)|Panel::Dedication|Panel::Controls | Panel::Catalog | Panel::Inspection | Panel::Quests | Panel::SideQuest | Panel::Graduation | Panel::Departure | Panel::Briefing | Panel::Village(_) | Panel::Projects(_) | Panel::Town(_) | Panel::Household(_) | Panel::Council) {
                 text(box_node, hud, "Stick oder Steuerkreuz · A wählen · B zurück", 12., MUTED);
             }
         });
@@ -4365,6 +4398,9 @@ pub fn layout(
         unlocked: game.campaign.unlocked,
         quest: game.city().quest,
         folded: play.tracker_folded,
+        work_stage: game.city().work.stage,
+        work_pinned: game.city().work.pinned,
+        work_paid: game.city().work.delivered,
         appeal: game.city().projects.appeal.as_ref().map(|a| a.village),
         side_quest: if matches!(
             play.panel,
@@ -4377,7 +4413,7 @@ pub fn layout(
         mix: (play.panel == Panel::Sound).then_some(play.mix),
         campaign_complete: game.campaign_complete(),
         circle_active: game.city().gatherings.circle.is_some(),
-        talents: if play.panel == Panel::Progress {
+        talents: if matches!(play.panel, Panel::Progress | Panel::Talent(_)) {
             Talent::ALL.map(|talent| game.campaign.gifts.rank(talent))
         } else {
             [0; Talent::ALL.len()]
@@ -4773,6 +4809,7 @@ pub(crate) fn update(
             Label::Subtitle => play
                 .story
                 .map_or_else(String::new, |story| story.caption(region).into()),
+            Label::WorkHint => city.work_hint(region),
             Label::QuestCount => quests_ui::counter(&game),
             Label::SideTrack => {
                 if city.side_quest(region) == SideQuest::Ready {
@@ -4842,30 +4879,6 @@ pub(crate) fn update(
             Label::Confirm if play.gamepad => format!("A  {}", target.label),
             Label::Confirm => target.label.clone(),
             Label::Detail => target.detail.clone(),
-            Label::Progress => format!(
-                "{} Talentpunkte · {} Erkenntnis · Dorfstufe {}\n{} von {} Wohnplätzen · {} Geburten · Stimmung {}%\n{} Wachen · {} Wege · Lagerplatz {}\nStadt · {} ({:+})\nNilpferd · {} · {}\n{} · Rang {} · {} · {:.0}% Kraft",
-                gifts.points,
-                game.campaign.research.insight,
-                city.city_rank(),
-                city.inhabitants(),
-                city.housing(),
-                city.society.births,
-                city.society.morale,
-                city.garrison(),
-                city.roads.len(),
-                city.storage_cap(),
-                city.reputation.tone().name(),
-                city.reputation.score(),
-                growth.description(),
-                growth.nature.tone().name(),
-                growth.next_stage().map_or_else(
-                    || format!("{} Erfahrung", growth.experience()),
-                    |next| format!("{}/{next} Erfahrung", growth.experience())
-                ),
-                gifts.training,
-                city.creature_status(),
-                city.energy
-            ),
             Label::Rival if city.outcome.is_none() => format!(
                 "{}{} · {} · {} {} · Ansehen {}/{}\n{} für den Übergang",
                 region.rival,

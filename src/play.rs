@@ -1,3 +1,5 @@
+#[path = "play_work.rs"]
+mod work_guidance;
 use bevy::prelude::*;
 
 use crate::{
@@ -100,6 +102,9 @@ pub enum Panel {
     Map,
     Area(usize),
     Progress,
+    Work,
+    Dedication,
+    Talent(crate::game::Talent),
     Quests,
     SideQuest,
     Sound,
@@ -122,6 +127,7 @@ pub enum Panel {
 pub enum UiAction {
     MenuPage(u8),
     FoldTracker,
+    WorkGuide,
     CheckSite,
     Tool(Tool),
     Order(Tool, usize),
@@ -203,6 +209,7 @@ pub struct Play {
     pub panel: Panel,
     panel_history: Vec<(Panel, Option<UiAction>)>,
     pub story: Option<Story>,
+    previous_growth_stage: usize,
     previous_quest: Quest,
     previous_side_quest: SideQuest,
     quest_check_at: f32,
@@ -261,6 +268,7 @@ impl Play {
             },
             panel_history: Vec::new(),
             story,
+            previous_growth_stage: game.campaign.gifts.creature.stage(),
             previous_quest: game.city().quest,
             previous_side_quest: game.city().side_quest(game.region()),
             quest_check_at: 0.,
@@ -405,6 +413,9 @@ impl Play {
                 } else {
                     Action::Repair
                 }
+            }
+            Tool::Hand if !region.tutorial && city.held.is_none() && self.aim == region.depot => {
+                Action::SeeWork
             }
             Tool::Hand
                 if city.held.is_none()
@@ -1306,6 +1317,15 @@ impl Play {
                 }
             }
             UiAction::CheckSite => self.open_panel(Panel::Household(self.aim)),
+            UiAction::Panel(Panel::Work) => self.open_work(game),
+            UiAction::WorkGuide => self.guide_work(game, view, now),
+            UiAction::Guide if self.panel == Panel::Closed && game.city().work.pinned => {
+                self.guide_work(game, view, now)
+            }
+            UiAction::Panel(Panel::Talent(t)) if matches!(self.panel, Panel::Talent(_)) => {
+                self.panel = Panel::Talent(t);
+                self.focus = Some(UiAction::Panel(Panel::Talent(t)));
+            }
             UiAction::FoldTracker => {
                 self.tracker_folded = !self.tracker_folded;
             }
@@ -1480,7 +1500,11 @@ impl Play {
                 if self.panel == Panel::FirstDelivery {
                     self.notice_until = now;
                 }
+                let show_work = self.panel == Panel::Work && tile == game.region().depot;
                 self.focus_tile(tile, view);
+                if show_work {
+                    view.frame_work(tile);
+                }
             }
             UiAction::AreaMaterial(material) => {
                 self.area_material = material;
@@ -1773,7 +1797,11 @@ impl Play {
             )),
             Panel::Quests => Some(UiAction::Guide),
             Panel::Research => Some(UiAction::SelectTech(self.tech)),
-            Panel::Progress => Some(UiAction::Do(Action::Learn(crate::game::Talent::Rain))),
+            Panel::Progress => Some(UiAction::Panel(Panel::Talent(crate::game::Talent::Rain))),
+            Panel::Talent(t) => Some(UiAction::Panel(Panel::Talent(t))),
+            Panel::Dedication => Some(UiAction::Do(Action::Dedicate(
+                crate::game::Dedication::Companion,
+            ))),
             _ => None,
         };
     }
@@ -1849,6 +1877,10 @@ impl Play {
     }
 
     fn execute(&mut self, action: Action, game: &mut Game, view: &mut CameraRig, now: f32) -> bool {
+        if action == Action::SeeWork {
+            self.open_work(game);
+            return false;
+        }
         if let Action::Audience(i) = action {
             self.open_panel(Panel::Village(i));
             self.focus = Some(UiAction::Do(Action::Visit(i, true)));
@@ -1890,6 +1922,12 @@ impl Play {
         };
         self.notify(result.unwrap_or_else(|message| message), kind, now + 5.);
         if success {
+            if let Action::Learn(talent) = action
+                && self.panel == Panel::Talent(talent)
+                && (game.campaign.gifts.points == 0 || game.campaign.gifts.rank(talent) == 2)
+            {
+                self.focus = Some(UiAction::Panel(Panel::Talent(talent)));
+            }
             if shows_world_receipt(action) && previous == game.campaign.active {
                 let city = game.city();
                 let mut changes = Vec::new();
@@ -2001,7 +2039,8 @@ impl Play {
                 Action::Call(..) => Cue::Quest,
                 Action::Invoke(true) => Cue::Cast(Miracle::Thunder),
                 Action::Invoke(false) => Cue::Reward,
-                Action::AcceptLocal => Cue::Quest,
+                Action::AcceptWork | Action::AcceptLocal => Cue::Quest,
+                Action::Dedicate(_) | Action::RaiseWork => Cue::Reward,
                 Action::FinishLocal | Action::Research(_) | Action::Learn(_) => Cue::Reward,
                 Action::Give => Cue::Drop,
                 _ => Cue::Choose,
@@ -2054,6 +2093,30 @@ impl Play {
             }
             if matches!(action, Action::Upgrade(_)) {
                 self.focus = Some(UiAction::Cancel);
+            }
+            if matches!(
+                action,
+                Action::AcceptWork | Action::SupplyWork | Action::TrackWork(_)
+            ) {
+                self.open_work_after_action(game);
+            }
+            if matches!(
+                action,
+                Action::RaiseWork | Action::Dedicate(_) | Action::SummonBuilder
+            ) {
+                let site = game.region().depot;
+                self.focus_tile(site, view);
+                if action != Action::SummonBuilder {
+                    view.frame_work(site);
+                } else {
+                    view.focus_action(site);
+                }
+                self.guide_marker = Some((site, now + 8.));
+                self.notice_panel = Panel::Closed;
+                if action != Action::SummonBuilder {
+                    self.celebration = Some((site, false, now, crate::game::Rite::Council));
+                    self.hippo_happy_at = Some(now);
+                }
             }
             if action == Action::AcceptLocal {
                 self.focus = Some(match game.city().side_quest(game.region()) {
@@ -2143,6 +2206,21 @@ impl Play {
         let city = game.city();
         let region = game.region();
         let quest = city.quest;
+        let animal = game.campaign.gifts.creature;
+        if animal.stage() > self.previous_growth_stage {
+            self.hippo_happy_at = Some(now);
+            let message = format!(
+                "Dein Nilpferd ist gewachsen · {} · {} Erfahrung",
+                animal.description(),
+                animal.experience()
+            );
+            self.receipt = Some((city.walkers[0].tile(), now, message.clone()));
+            if self.notice_kind != Feedback::Quest || now >= self.notice_until {
+                self.notify(message, Feedback::Action, now + 6.);
+            }
+            self.sound_cues.push(Cue::Reward);
+        }
+        self.previous_growth_stage = animal.stage();
         if self.contest_event != city.contest.event {
             self.contest_event = city.contest.event;
             self.notify(city.contest.news.clone(), Feedback::Quest, now + 6.);
@@ -2333,6 +2411,12 @@ impl CameraRig {
         self.target = (self.target + Vec3::new(1.9, 0., 5.1)).clamp(self.min, self.max);
     }
 
+    fn frame_work(&mut self, site: Tile) {
+        self.focus(site);
+        self.target = (self.target + Vec3::new(0.8, 0., 2.0)).clamp(self.min, self.max);
+        self.height = 15.;
+    }
+
     pub fn landscape(&mut self) {
         self.jump = true;
         self.target = self.landscape_center;
@@ -2443,6 +2527,16 @@ impl Target {
                 }
                 "Weg bauen".into()
             }
+            Action::SeeWork => {
+                self.detail = game.city().work_hint(region);
+                "Inselwerk öffnen".into()
+            }
+            Action::AcceptWork
+            | Action::SupplyWork
+            | Action::RaiseWork
+            | Action::SummonBuilder
+            | Action::Dedicate(_)
+            | Action::TrackWork(_) => "Inselwerk".into(),
             Action::Charter(_) => "Bürgerrecht verleihen".into(),
             Action::Upgrade(tile) => {
                 self.detail = match city.upgrade_plan(region, tile) {

@@ -1,4 +1,5 @@
 pub(crate) mod festival;
+pub(crate) mod island_work;
 pub(crate) mod visits;
 use bevy::{
     core_pipeline::{fxaa::Fxaa, tonemapping::Tonemapping},
@@ -907,6 +908,7 @@ pub fn sync_board(
                 }
                 parent
                     .spawn((
+                        island_work::OriginalDepot,
                         Transform::from_translation(grounded(region.depot)),
                         Visibility::Visible,
                     ))

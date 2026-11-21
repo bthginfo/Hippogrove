@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Component)]
-pub(crate) struct QuestMeter;
+pub(crate) struct QuestMeter(bool);
 
 fn milestones(game: &Game) -> (usize, usize) {
     let city = game.city();
@@ -52,7 +52,7 @@ pub(super) fn counter(game: &Game) -> String {
     format!("{n}/{total}")
 }
 
-fn meter(parent: &mut ChildSpawnerCommands) {
+fn meter(parent: &mut ChildSpawnerCommands, work: bool) {
     parent
         .spawn((
             Node {
@@ -65,7 +65,7 @@ fn meter(parent: &mut ChildSpawnerCommands) {
         ))
         .with_children(|track| {
             track.spawn((
-                QuestMeter,
+                QuestMeter(work),
                 Node {
                     height: Val::Percent(100.),
                     ..default()
@@ -76,13 +76,28 @@ fn meter(parent: &mut ChildSpawnerCommands) {
         });
 }
 
-pub(crate) fn update_meter(game: Res<Game>, mut bars: Query<&mut Node, With<QuestMeter>>) {
+pub(crate) fn update_meter(game: Res<Game>, mut bars: Query<(&QuestMeter, &mut Node)>) {
     if bars.is_empty() {
         return;
     }
     let (n, total) = milestones(&game);
     let width = Val::Percent(100. * n as f32 / total as f32);
-    for mut node in &mut bars {
+    for (meter, mut node) in &mut bars {
+        let width = if meter.0 {
+            let w = &game.city().work;
+            let done = match w.stage {
+                crate::game::WorkStage::Offered => 0.,
+                crate::game::WorkStage::Supplies => {
+                    w.delivered as f32 / crate::game::Blueprint::on(game.region()).amount as f32
+                }
+                crate::game::WorkStage::Raising => 1.,
+                crate::game::WorkStage::Opening => 2.,
+                crate::game::WorkStage::Running => 3.,
+            };
+            Val::Percent(100. * done / 3.)
+        } else {
+            width
+        };
         if node.width != width {
             node.width = width;
         }
@@ -173,15 +188,47 @@ pub(super) fn tracker(p: &mut ChildSpawnerCommands, h: &Hud, game: &Game, l: Lay
                 left_text(
                     copy,
                     h,
-                    city.quest_title(r),
+                    if l.work_pinned {
+                        crate::game::Blueprint::on(r).title
+                    } else {
+                        city.quest_title(r)
+                    },
                     if small { 13. } else { 16. },
                     GOLD,
                 );
-                live(copy, h, Label::Quest, if small { 13. } else { 15. }, LIGHT);
+                live(
+                    copy,
+                    h,
+                    if l.work_pinned {
+                        Label::WorkHint
+                    } else {
+                        Label::Quest
+                    },
+                    if small { 13. } else { 15. },
+                    LIGHT,
+                );
             });
-            live(line, h, Label::QuestCount, 13., GOLD);
+            if l.work_pinned {
+                text(
+                    line,
+                    h,
+                    &format!(
+                        "{}/3",
+                        match l.work_stage {
+                            crate::game::WorkStage::Supplies => 0,
+                            crate::game::WorkStage::Raising => 1,
+                            crate::game::WorkStage::Opening => 2,
+                            _ => 3,
+                        }
+                    ),
+                    13.,
+                    GOLD,
+                );
+            } else {
+                live(line, h, Label::QuestCount, 13., GOLD);
+            }
         });
-        meter(card);
+        meter(card, l.work_pinned);
         if matches!(l.side_quest, SideQuest::Active | SideQuest::Ready) {
             let (title, _, _) = city.local_quest(r);
             left_text(card, h, title, 13., JADE);
@@ -205,8 +252,16 @@ pub(super) fn tracker(p: &mut ChildSpawnerCommands, h: &Hud, game: &Game, l: Lay
             styled_button(
                 links,
                 h,
-                "Tagebuch",
-                UiAction::Panel(Panel::Quests),
+                if l.work_pinned {
+                    "Werkbuch"
+                } else {
+                    "Tagebuch"
+                },
+                UiAction::Panel(if l.work_pinned {
+                    Panel::Work
+                } else {
+                    Panel::Quests
+                }),
                 false,
                 false,
                 st,
@@ -243,7 +298,7 @@ pub(super) fn journal_goals(p: &mut ChildSpawnerCommands, h: &Hud, game: &Game, 
             live(line, h, Label::QuestCount, 13., GOLD);
         });
         live(card, h, Label::Quest, if short { 16. } else { 19. }, LIGHT);
-        meter(card);
+        meter(card, false);
         if let Some(step) = city.quest_step(r) {
             let lines: Vec<_> = step.goals.iter().map(|g| g.progress(city, r)).collect();
             left_text(

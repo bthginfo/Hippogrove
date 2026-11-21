@@ -1,3 +1,6 @@
+#[path = "island_work.rs"]
+mod island_work;
+pub use island_work::{Blueprint, Dedication, IslandWork, WorkStage};
 #[path = "neighborhood.rs"]
 mod neighborhood;
 pub use neighborhood::SERVICES;
@@ -539,6 +542,13 @@ pub enum Action {
     Road(Tile, Tile),
     Upgrade(Tile),
     Charter(Tile),
+    SeeWork,
+    AcceptWork,
+    SupplyWork,
+    SummonBuilder,
+    RaiseWork,
+    Dedicate(Dedication),
+    TrackWork(bool),
     Research(Tech),
     Muster(Tile),
     Patrol(Tile),
@@ -723,6 +733,8 @@ pub struct Settlement {
     #[serde(default)]
     pub projects: Projects,
     #[serde(default)]
+    pub work: IslandWork,
+    #[serde(default)]
     pub citizens: Vec<Tile>,
     #[serde(default)]
     pub journal: VecDeque<String>,
@@ -817,6 +829,7 @@ impl Settlement {
             gatherings: Gatherings::default(),
             contest: Contest::default(),
             projects: Projects::default(),
+            work: IslandWork::default(),
             citizens: Vec::new(),
             journal: VecDeque::new(),
             roads: Vec::new(),
@@ -2481,6 +2494,7 @@ impl Settlement {
             }
             self.trade(region);
             self.supply_homes(region);
+            self.operate_work(region, gifts);
             insight = self.civic_life(region, weather);
         }
 
@@ -4393,6 +4407,7 @@ impl Campaign {
                                     s.tile == *t && s.kind == Building::House && s.upgraded
                                 })
                         }) && city.valid_projects(region)
+                            && city.work.valid(region)
                             && city.contest.towns.len() == region.villages.len()
                             && city
                                 .contest
@@ -4653,6 +4668,25 @@ impl Game {
             }
             Action::Road(start, end) => settlement.build_road(region, start, end),
             Action::Upgrade(tile) => settlement.upgrade(region, tile),
+            Action::SeeWork => return Ok(Blueprint::on(region).title.into()),
+            Action::AcceptWork => settlement.accept_work(region),
+            Action::SupplyWork => settlement.supply_work(region),
+            Action::SummonBuilder => settlement.summon_builder(region),
+            Action::RaiseWork => settlement.raise_work(region, gifts),
+            Action::Dedicate(choice) => settlement.dedicate_work(region, gifts, choice),
+            Action::TrackWork(on) => {
+                settlement.work.pinned = on
+                    && matches!(
+                        settlement.work.stage,
+                        WorkStage::Supplies | WorkStage::Raising | WorkStage::Opening
+                    );
+                Ok(if settlement.work.pinned {
+                    "Inselwerk im Tracker"
+                } else {
+                    "Inselauftrag im Tracker"
+                }
+                .into())
+            }
             Action::Charter(tile) => settlement.charter(region, tile),
             Action::Research(tech) => {
                 research.learn(tech, settlement.city_rank())?;
@@ -4874,8 +4908,10 @@ impl Game {
         if matches!(action, Action::Invoke(_) | Action::Aid(_, true)) {
             self.campaign.sync_creature_work();
         }
-        if !matches!(action, Action::Grab(..) | Action::MoveHippo(_))
-            && !matches!(action, Action::Hand(_) if self.city().held.is_some())
+        if !matches!(
+            action,
+            Action::Grab(..) | Action::MoveHippo(_) | Action::TrackWork(_)
+        ) && !matches!(action, Action::Hand(_) if self.city().held.is_some())
         {
             self.campaign.settlements[index]
                 .as_mut()
@@ -4962,6 +4998,199 @@ mod tests {
 
     fn fresh() -> Game {
         Game::new(Region::campaign(), None)
+    }
+
+    #[test]
+    fn island_works_keep_partial_deliveries_and_validate_old_saves() {
+        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        let mut legacy = serde_json::to_value(game.saved_games()).unwrap();
+        let profile = &mut legacy["profiles"][0]["campaign"];
+        profile["settlements"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("work");
+        profile["gifts"]["creature"]
+            .as_object_mut()
+            .unwrap()
+            .remove("craft");
+        game = Game::resume(serde_json::from_value(legacy).unwrap()).unwrap();
+        assert_eq!(game.city().work.stage, WorkStage::Offered);
+        assert_eq!(game.campaign.gifts.creature.craft, 0);
+        assert!(game.act(Action::RaiseWork).is_err());
+        game.act(Action::AcceptWork).unwrap();
+        let i = Material::Wood.index();
+        game.campaign.settlements[0].as_mut().unwrap().stock[i] = 2;
+        game.act(Action::SupplyWork).unwrap();
+        assert!(game.act(Action::SupplyWork).is_err());
+        game = Game::resume(game.saved_games()).unwrap();
+        assert_eq!(
+            (
+                game.city().work.delivered,
+                game.city().stock[i],
+                game.city().work.pinned
+            ),
+            (2, 0, true)
+        );
+        game.act(Action::TrackWork(false)).unwrap();
+        stock_up(&mut game, Material::Wood, 6);
+        let before = game.city().stock[i];
+        game.act(Action::SupplyWork).unwrap();
+        assert_eq!(game.city().stock[i], before - 4);
+        assert_eq!(game.city().work.stage, WorkStage::Raising);
+        assert!(game.act(Action::SupplyWork).is_err());
+        assert!(!game.city().work.pinned);
+        let mut invalid = game.saved_games();
+        invalid.profiles[0].campaign.settlements[0]
+            .as_mut()
+            .unwrap()
+            .work
+            .delivered = u16::MAX;
+        assert!(Game::resume(invalid).is_none());
+        let mut training = Game::start(Mode::Tutorial);
+        assert!(training.act(Action::AcceptWork).is_err());
+    }
+
+    #[test]
+    fn works_follow_each_chapter_and_each_regions_economy() {
+        for kind in Biome::ALL {
+            let regions = Mode::Campaign(kind).regions(|_| WorldLayout::Islands);
+            assert_eq!(regions.len(), 3);
+            for (chapter, r) in regions.iter().enumerate() {
+                let b = Blueprint::on(r);
+                assert_eq!(b.amount, 6 + 3 * chapter as u16);
+                let mut city = Settlement::new(r);
+                city.buildings.clear();
+                let mut gifts = Gifts::default();
+                city.accept_work(r).unwrap();
+                city.stock[b.material.index()] = b.amount;
+                city.supply_work(r).unwrap();
+                city.walkers[0].position = r.depot.offset(4, 0).local().to_array();
+                assert!(city.raise_work(r, &mut gifts).is_err());
+                city.walkers[0].position = r.depot.offset(1, 0).local().to_array();
+                city.energy = 11.;
+                assert!(city.raise_work(r, &mut gifts).is_err());
+                assert_eq!(city.energy, 11.);
+                city.energy = 12.;
+                city.raise_work(r, &mut gifts).unwrap();
+                assert_eq!((city.energy, gifts.creature.craft), (0., 1));
+                assert!(city.raise_work(r, &mut gifts).is_err());
+                assert!(city.dedicate_work(r, &mut gifts, Dedication::Town).is_err());
+                let site = r
+                    .bounds
+                    .tiles()
+                    .filter(|&t| t.within(r.start, 9))
+                    .map(|tile| BuildingSite {
+                        kind: b.partner,
+                        tile,
+                        rotation: 0,
+                        crop: Crop::Dry,
+                        upgraded: false,
+                        batch_finished: false,
+                    })
+                    .find(|site| city.connected(r, site))
+                    .unwrap();
+                city.buildings.push(site);
+                assert!(city.work_partner(r));
+                city.dedicate_work(r, &mut gifts, Dedication::Town).unwrap();
+                assert!(
+                    city.dedicate_work(r, &mut gifts, Dedication::Talent)
+                        .is_err()
+                );
+                city.stock = [0; 3];
+                city.mana = 0.;
+                city.shield = 0.;
+                city.rainfall = 0.;
+                city.operate_work(r, gifts);
+                match kind {
+                    Biome::Valley => assert_eq!(city.stock[Material::Food.index()], 4),
+                    Biome::Aegean => assert_eq!(city.stock[Material::Stone.index()], 4),
+                    Biome::Fjord => assert_eq!(city.shield, 16.),
+                    Biome::Terraces => assert_eq!(city.rainfall, 12.),
+                    Biome::Lake => assert_eq!(city.mana, 8.),
+                }
+                assert!(city.work.valid(r));
+                city.buildings.clear();
+                city.operate_work(r, gifts);
+                assert_eq!(city.work.rounds, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn work_guide_connects_an_existing_field_using_a_buildable_road() {
+        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        stock_for(&mut game, Building::Field.price());
+        stock_up(&mut game, Material::Stone, 5);
+        let r = game.region();
+        let c = game.city();
+        let tile = r
+            .bounds
+            .tiles()
+            .filter(|&t| t.within(r.start, 7))
+            .find(|&t| {
+                game.building_plan(Building::Field, t).is_ok()
+                    && !Building::Field
+                        .tiles(t)
+                        .flat_map(Tile::neighbors)
+                        .any(|p| c.road_at(r, p))
+            })
+            .unwrap();
+        game.act(Action::Build(Building::Field, tile, 0)).unwrap();
+        assert!(!game.city().work_partner(game.region()));
+        let (from, to, cost) = game
+            .city()
+            .work_connection(game.region(), Building::Field)
+            .unwrap();
+        let stone = game.city().stock[Material::Stone.index()];
+        game.act(Action::Road(from, to)).unwrap();
+        assert_eq!(
+            game.city().stock[Material::Stone.index()],
+            stone - cost[Material::Stone.index()]
+        );
+        assert!(game.city().work_partner(game.region()));
+    }
+
+    #[test]
+    fn companion_walks_to_work_and_each_dedication_pays_only_once() {
+        let mut game = Game::start(Mode::Campaign(Biome::Valley));
+        game.act(Action::AcceptWork).unwrap();
+        stock_up(&mut game, Material::Wood, 6);
+        game.act(Action::SupplyWork).unwrap();
+        game.act(Action::SummonBuilder).unwrap();
+        for _ in 0..300 {
+            if game.city().builder_present(game.region()) {
+                break;
+            }
+            game.step(0.2);
+        }
+        assert!(game.city().builder_present(game.region()));
+        game.act(Action::RaiseWork).unwrap();
+        place_quest_building(&mut game, Building::Field, true);
+        for choice in [Dedication::Companion, Dedication::Talent, Dedication::Town] {
+            let mut run = Game::resume(game.saved_games()).unwrap();
+            let points = run.campaign.gifts.points;
+            let xp = run.campaign.gifts.creature.experience();
+            run.act(Action::Dedicate(choice)).unwrap();
+            assert!(!run.city().work.pinned);
+            assert!(run.act(Action::Dedicate(choice)).is_err());
+            run = Game::resume(run.saved_games()).unwrap();
+            assert_eq!(
+                run.campaign.gifts.creature.experience(),
+                xp + if choice == Dedication::Companion {
+                    4
+                } else {
+                    0
+                }
+            );
+            assert_eq!(
+                run.campaign.gifts.points,
+                points + u16::from(choice == Dedication::Talent)
+            );
+            if choice == Dedication::Talent {
+                run.act(Action::Learn(Talent::Rain)).unwrap();
+                assert_eq!(run.campaign.gifts.rank(Talent::Rain), 1);
+            }
+        }
     }
 
     #[test]

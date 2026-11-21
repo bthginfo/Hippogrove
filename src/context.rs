@@ -113,6 +113,19 @@ impl ObjectMenu {
                 UiAction::Panel(Panel::Gathering),
                 3,
             ));
+        } else if play.target(game) == Action::SeeWork {
+            menu.title = crate::game::Blueprint::on(region).title.into();
+            menu.detail = city.work_hint(region);
+            menu.choices.push(Choice::new(
+                "Werkbuch öffnen",
+                UiAction::Panel(Panel::Work),
+                12,
+            ));
+            menu.choices.push(Choice::new(
+                "Vorräte ansehen",
+                UiAction::Panel(Panel::Inventory),
+                0,
+            ));
         } else if play.target(game) == Action::Pet {
             menu.title = "Dein Nilpferd".into();
             menu.detail = format!("{} · {:.0} % Kraft", city.creature_status(), city.energy);

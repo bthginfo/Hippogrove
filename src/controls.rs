@@ -389,6 +389,17 @@ fn select(
         }
         if play.tool == Tool::Hand {
             consider(region.depot, region.depot.world() + Vec3::Y * 0.21);
+            if !region.tutorial && city.held.is_none() {
+                let height = if matches!(
+                    city.work.stage,
+                    crate::game::WorkStage::Opening | crate::game::WorkStage::Running
+                ) {
+                    1.65
+                } else {
+                    0.88
+                };
+                consider(region.depot, region.depot.world() + Vec3::Y * height);
+            }
             if let Some(farm) = city.opening_farm(region) {
                 consider(farm, farm.world() + Vec3::Y * 0.8);
             }

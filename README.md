@@ -2,9 +2,9 @@
 
 Ein mobiles Cozy-3D-Götterspiel in Rust und Bevy. Als junger Nilpferdgott hilfst du einem Dorf am Fluss, baust es aus und gewinnst Glauben. Deine Wolkenpfote greift direkt in die Welt ein. Ein aufrecht laufendes Nilpferd sammelt, trägt und lernt an deiner Seite.
 
-**[Hippogrove 1.6.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/aaafca9f5cc5ecd0dbe0685863b0c04d5a9d80e8/Hippogrove-1.6.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.6.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/aaafca9f5cc5ecd0dbe0685863b0c04d5a9d80e8/Hippogrove-1.6.0.apk.sha256)
+**[Hippogrove 1.7.0 für Android herunterladen](https://raw.githubusercontent.com/bthginfo/Hippogrove/874efc3817997f74f9627400e4563711fcc30bff/Hippogrove-1.7.0.apk)** · [Release-Notizen](https://github.com/bthginfo/Hippogrove/releases/tag/v1.7.0) · [SHA-256](https://raw.githubusercontent.com/bthginfo/Hippogrove/874efc3817997f74f9627400e4563711fcc30bff/Hippogrove-1.7.0.apk.sha256)
 
-In Version 1.6.0 konkurrierst du mit einem entfernten Rivalen um die Dörfer zwischen euren Schreinen. Dein Nilpferd kann jenseits deiner Baugrenze Familien retten und Pilger empfangen. Gläubige können zur selben Zeit ein anderes Dorf besuchen oder deine Kreatur am Dorfplatz unterstützen.
+In **1.7.0** baust du zusammen mit deinem Nilpferd ein Werk für die Insel. Im Weidental bittet Mira um eine Bachmühle. Du bringst das Holz, dein Nilpferd hebt das Rad in die Mühle und ein Feld am Dorfweg liefert den Anschluss. Bei der Einweihung entscheidest du, ob dein Nilpferd Erfahrung, deine Gottheit einen Talentpunkt oder dein Dorf die doppelte Leistung erhält.
 
 Die signierte Standalone-App braucht Android 8 oder neuer und Vulkan. Die APK unterstützt ARM64 und x86_64. Die frühere Playtest-App und die Standalone-App haben eigene Spielstände.
 
@@ -29,6 +29,29 @@ Im **Questtracker** stehen dein Inselauftrag, der nächste Schritt und die erfü
 ![Laufender Hauptauftrag und angenommene Dorfbitte im Questtracker des Weidentals](docs/tracker-mit-dorfbitte.jpg)
 
 Frei stehende Bäume und Felsblöcke auf der begehbaren Spielinsel geben Holz und Stein. Tippe auf Krone, Stamm oder Fels. Das Objektmenü zeigt Material und Restmenge. Im Einflussgebiet kann die Pfote bis zu 18 Einheiten auf einmal greifen. Außerhalb kannst du bei offenem Weg einen Sammler schicken. Das Gelände selbst und die Steine im Pflaster sind Landschaft. Abgeerntete Quellen verschwinden und erholen sich mit der Zeit.
+
+### Ein Werk für deine Insel
+
+Öffne **Menü → Inselwerk**, den Eintrag im Auftragsbuch oder den Sammelplatz mit leerer Pfote. Das Werkbuch zeigt das fertige Bauwerk, den Wunsch der Bewohner und die Wirkung auf dein Dorf. Nimm den Auftrag an, dann erscheinen die jeweils nötige Aktion und der Fortschritt im Tracker.
+
+1. **Liefere aus dem Lager.** Im ersten Themenkapitel brauchst du sechs Einheiten, im zweiten neun und im dritten zwölf. Jeder Stapel zählt. Ist das Lager leer, führt dich **Material zeigen** zu einer nutzbaren Quelle.
+2. **Baue mit deinem Nilpferd.** Rufe es zum Sammelplatz. Es legt eine getragene Ladung ab und läuft zum Bau. Sobald es angekommen ist, kannst du den Einsatz mit zwölf Kraft bestätigen. Es erhält einen Erfahrungspunkt. Auf dem Bauplatz steht jetzt das fertige Werk.
+3. **Schließe den Betrieb an.** Im Werkbuch steht, welches Gebäude einen Weg braucht. Ein vorhandenes zählt. Fehlt es, führt **Anschluss vorbereiten** zum Bauplan oder seiner Voraussetzung. Für ein abseits stehendes Gebäude zeigt die Hilfe einen bezahlbaren Straßenabschnitt, wenn einer bis zum Gebäude reicht.
+4. **Wähle die Widmung.** Vier zusätzliche Erfahrungspunkte für das Nilpferd, ein frei verteilbarer Talentpunkt oder doppelte Leistung für diese Stadt. Die Entscheidung bleibt mit der Insel gespeichert.
+
+| Landschaft | Werk | Wirkung je Versorgungsrunde mit Anschluss |
+| --- | --- | --- |
+| Weidental | Bachmühle | 2 Nahrung |
+| Nordischer Fjord | Wachtfeuer | Mindestens 8 Sekunden Schutz vor Überfällen |
+| Ostasiatische Terrassen | Wasserpavillon | Mindestens 6 Sekunden Regen für wachsende Felder |
+| See und Oase | Hebebrunnen | 4 Wunderkraft |
+| Ägäis | Hafenlicht | 2 Stein |
+
+![Die fünf eigenständigen 3D-Modelle der Inselwerke in der Reihenfolge der Tabelle](docs/inselwerke-modelle.jpg)
+
+Mit **L3** verfolgst du den nächsten Werkschritt. Über **Inselauftrag verfolgen** wechselst du zurück zum Hauptziel. Unter **Kreatur & Talente** siehst du die Erfahrung bis zum nächsten Wachstum und die Voraussetzung für die nächste Stadtstufe. In der **Zauberschule** kannst du jeden Rang ansehen. Erst **Rang lernen** gibt einen Punkt aus.
+
+![Werkbuch der Bachmühle vor der Annahme mit Gebäudeansicht, Ertrag und Miras Bitte](docs/werkbuch-bachmuehle.jpg)
 
 ### Ein Wohnviertel planen
 
@@ -145,6 +168,16 @@ Die Karten reichen bis 178 × 140 Felder. Gebirgsketten, Täler, dichte Haine, F
 Die Hafenlaterne, der Wachfarn und die Umgebungs- und Aktionstöne stammen aus Waldwinkel 1.5. Die sechs Originalstücke umfassen „Die kleine Bucht“ für Titel und Tutorial sowie je eine eigene Besetzung und Bearbeitung für die fünf Landschaften. Beim Inselwechsel blendet die Musik über. Zum Rendern nutzt `art/build_music.py` FluidSynth, NumPy, pyFluidSynth, FFmpeg und die Instrumente von GeneralUser GS 2.0.3. Musik, Umgebung und Effekte lassen sich im Spielmenü unter **Ton** einzeln schalten. [Waldwinkel 1.5](https://github.com/bthginfo/waldwinkel/tree/8a98a76a2921690b533015e3f57fadccc2c66b24) · [Instrumentenbank und Lizenz](https://github.com/mrbumpy409/GeneralUser-GS/blob/684543d5e5efaef08d02be50dcda8d552478fa60/documentation/LICENSE.txt)
 
 ## Geprüfter Stand
+
+In Version 1.7.0 bestehen 59 Rust-Tests. Die zusätzlichen Prüfungen decken die Inselwerke aller 15 Themenkapitel ab, einschließlich Teillieferungen, Ankunft des Nilpferds, Weganschluss und einmaliger Widmung. Auch die Übernahme eines Spielstands ohne Werk und ohne Bauerfahrung wird geprüft.
+
+In einem frischen Spielstand führte die Übungsinsel vom ersten Griff bis zur Pflege des Nilpferds. Bau- und Wunderrad, Abbrechen und Fortsetzen mit einem Bündel in der Pfote funktionierten am virtuellen Gamepad. In der ersten Kampagne ließ sich Joras Hof beliefern und ein Lager bauen.
+
+Im gerenderten Weidental ließ sich die Mühle mit virtuellem Gamepad vollständig vom Tagebuch bis zur ersten Versorgungsrunde spielen. Der dort verdiente Talentpunkt schaltete einen größeren Regenkreis frei. Bei 512 × 288 Pixeln führte **Material zeigen** nach einer Teillieferung zum Holz. Beim Wechsel zurück zum Inselauftrag blieb das gelieferte Holz am Bau. Für die Sichtprüfung standen zusätzlich alle fünf fertigen Werke in vorbereiteten Spielständen auf ihrer jeweiligen Insel.
+
+Die APK ist für ARM64 und x86_64 gebaut, auf 16-KiB-Ausrichtung geprüft und mit demselben Zertifikat wie 1.6.0 signiert. Ein Spieltest auf einem physischen Galaxy Tab S9 FE+ steht aus.
+
+### Frühere Spieltests
 
 Für Version 1.6.0 bestanden 55 Rust-Tests. In allen 15 Themenkapiteln wurden die Entfernung der Startsitze und die erreichbaren Wege zu jedem Nachbardorf vor dem Brückenbau geprüft. Weitere Tests spielen Rückeroberung, Inselbund, Tribut, beide Hilfswege sowie einen gespeicherten Pilgerzug mit und ohne persönlichen Empfang durch.
 

@@ -46,6 +46,7 @@ pub struct CreatureGrowth {
     #[serde(skip)]
     pub work: [u32; 3],
     pub nature: Reputation,
+    pub craft: u32,
 }
 
 impl CreatureGrowth {
@@ -55,6 +56,7 @@ impl CreatureGrowth {
         self.work[0]
             .saturating_add(self.work[1].saturating_mul(2))
             .saturating_add(self.work[2].saturating_mul(2))
+            .saturating_add(self.craft)
     }
 
     pub fn stage(self) -> usize {
